@@ -1,0 +1,3 @@
+FROM rocm/rocm-terminal:latest
+
+CMD bash
