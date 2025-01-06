@@ -21,15 +21,13 @@
         devShells.default = devShells.kokkos;
 
         devShells.kokkos = pkgs.mkShell {
-          packages = [
-            pkgs.kokkos
-          ];
+          packages = with pkgs; with pkgs.rocmPackages; [cmake kokkos clr hip-common];
         };
 
         packages.ttt-kokkos = pkgs.stdenv.mkDerivation {
           name = "kokkos";
           src = ./kokkos;
-          buildInputs = [pkgs.cmake pkgs.kokkos];
+          buildInputs = with pkgs; with pkgs.rocmPackages; [cmake kokkos clr hip-common];
         };
       };
     };

@@ -1,11 +1,4 @@
-int 
-
-        packages.ttt-kokkos = pkgs.stdenv.mkDerivation {
-                      name = "kokkos";
-                                src = ./kokkos;
-                                          buildInputs = [ pkgs.cmake pkgs.kokkos ];
-                                                  };         
-          //@HEADER
+//@HEADER
 // ************************************************************************
 //
 //                        Kokkos v. 4.0
@@ -25,8 +18,7 @@ int
 
 #include <cstdio>
 #include <iostream>
-
-extern "C" void print_fortran_();
+#include <HIP/Kokkos_HIP.hpp>
 
 struct CountFunctor {
   KOKKOS_FUNCTION void operator()(const long i, long& lcount) const {
@@ -69,8 +61,6 @@ int main(int argc, char* argv[]) {
 
   count_time = timer.seconds();
   printf("Sequential: %ld    %10.6f\n", seq_count, count_time);
-
-  print_fortran_();
 
   Kokkos::finalize();
 
