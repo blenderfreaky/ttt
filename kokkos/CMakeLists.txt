@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 3.30)
+
 project(ttt CXX)
 
 set(KOKKOS_ENABLE_HIP ON)
