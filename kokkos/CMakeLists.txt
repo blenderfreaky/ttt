@@ -5,6 +5,7 @@ project(ttt CXX)
 set(KOKKOS_ENABLE_HIP ON)
 
 find_package(Kokkos REQUIRED)
+find_package(KokkosKernels REQUIRED)
 
 add_executable(ttt-kokkos ttt.cpp)
 target_link_libraries(ttt-kokkos Kokkos::kokkos)

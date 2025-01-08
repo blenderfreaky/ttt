@@ -5,6 +5,8 @@
   gitUpdater,
   cmake,
   python3,
+  rocmPackages,
+  rocmSupport ? false,
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "kokkos";
@@ -17,14 +19,19 @@ stdenv.mkDerivation (finalAttrs: {
     hash = "sha256-vqNuLoyhsw7Hoc4Or7dm5hPvKaHjQjlkvrHEc6sdL7M=";
   };
 
-  nativeBuildInputs = [
-    cmake
-    python3
-  ];
+  nativeBuildInputs =
+    [
+      cmake
+      python3
+    ]
+    ++ lib.optionals rocmSupport [
+      rocmPackages.clr
+    ];
 
   cmakeFlags = [
+    (lib.cmakeBool "Kokkos_ENABLE_LIBDL" true)
     (lib.cmakeBool "Kokkos_ENABLE_TESTS" true)
-    (lib.cmakeBool "Kokkos_ENABLE_HIP" true)
+    (lib.cmakeBool "Kokkos_ENABLE_HIP" rocmSupport)
   ];
 
   postPatch = ''
