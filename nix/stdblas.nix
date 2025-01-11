@@ -29,7 +29,7 @@ stdenv.mkDerivation (finalAttrs: {
   passthru.updateScript = gitUpdater {};
 
   meta = with lib; {
-    description = "Kokkos C++ Performance Portability Programming Ecosystem: Profiling and Debugging Tools";
+    description = "Reference Implementation for stdBLAS";
     homepage = "https://github.com/kokkos/kokkos-tools";
     changelog = "https://github.com/kokkos/kokkos-tools/blob/${finalAttrs.src.rev}/CHANGELOG.md";
     license = with licenses; [asl20-llvm];

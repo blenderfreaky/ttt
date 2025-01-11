@@ -45,6 +45,9 @@
     devShells = forAllSysPkgs (pkgs: {
       default = pkgs.mkShell {
         packages = envPackages pkgs;
+        shellHook = ''export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath (with pkgs; [
+            vulkan-loader
+          ])}"'';
       };
     });
 
