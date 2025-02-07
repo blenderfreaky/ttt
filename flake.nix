@@ -34,6 +34,8 @@
           (rocm pkgs)
           cmake
           ninja
+          openssl
+          pkg-config
         ]
         ++ builtins.attrValues (ownPackages pkgs);
   in {
@@ -45,7 +47,11 @@
     devShells = forAllSysPkgs (pkgs: {
       default = pkgs.mkShell {
         packages = envPackages pkgs;
-        shellHook = ''export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath (with pkgs; [
+        shellHook = ''
+          # ROCm PR seems to set these to '-parallel-jobs=1' somehow, which breaks builds. I don't know why.
+          export CFLAGS=
+          export CXXFLAGS=
+          export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath (with pkgs; [
             vulkan-loader
           ])}"'';
       };
