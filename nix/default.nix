@@ -6,5 +6,4 @@
   # kokkos-with-toools = kokkos.override {
   #   env.KOKKOS_TOOLS_LIBS = kokkos-tools;
   # };
-  adaptivecpp = pkgs.callPackage ./adaptivecpp.nix {};
 }
