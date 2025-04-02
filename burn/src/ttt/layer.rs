@@ -185,7 +185,8 @@ impl<B: Backend> TTT<B> {
         let [xq, xk] = [xq, xk].map(|x| self.rot_enc.apply(x, start_idx));
 
         // [B, num_heads, seq_len, head_dim] -> [B*num_heads, seq_len, head_dim]
-        let [xq, xk, xv] = [xq, xk, xv].map(|x| x.reshape([-1, seq_len, self.config.head_dim]));
+        let [xq, xk, xv] =
+            [xq, xk, xv].map(|x| x.reshape([-1, seq_len as i64, self.config.head_dim as i64]));
 
         TTTInputs {
             qkv: QKV { xq, xk, xv },
