@@ -3,11 +3,25 @@ use burn::{
     module::{Ignored, Module},
     nn::{
         conv::{Conv1d, Conv1dConfig},
-        Linear, LinearConfig, PaddingConfig1d, RotaryEncoding, RotaryEncodingConfig,
+        LayerNorm, LayerNormConfig, Linear, LinearConfig, PaddingConfig1d, RotaryEncoding,
+        RotaryEncodingConfig,
     },
     prelude::Backend,
-    tensor::{activation::sigmoid, module::conv1d, ops::ConvOptions, Tensor},
+    tensor::{
+        activation::{gelu, sigmoid},
+        module::conv1d,
+        ops::ConvOptions,
+        Dim, NamedDim, Tensor,
+    },
 };
+
+NamedDim!(Batch);
+NamedDim!(SeqLength);
+NamedDim!(NumHeads);
+NamedDim!(DHead);
+NamedDim!(DToken);
+NamedDim!(DKey);
+NamedDim!(DValue);
 
 /// Configuration for the TTT layer.
 #[derive(Config, Debug)]
@@ -42,6 +56,7 @@ struct TTT<B: Backend> {
     k_conv: Conv1d<B>,
     learning_rate: Linear<B>,
     learnable_token_idx: Tensor<B, 1>,
+    post_norm: LayerNorm<B>,
     config: TTTTestTimeConfig,
     // config: Ignored<TTTConfig>,
     rot_enc: RotaryEncoding<B>,
@@ -83,6 +98,9 @@ impl TTTConfig {
             learnable_token_idx: Tensor::arange(1..(self.mini_batch_size as i64), device)
                 .float()
                 .recip(),
+            post_norm: LayerNormConfig::new(self.width)
+                .with_epsilon(1e-6)
+                .init(device),
             rot_enc: RotaryEncodingConfig::new(self.max_sequence_len, self.token_dim).init(device),
             config: TTTTestTimeConfig {
                 mini_batch_size: self.mini_batch_size,
@@ -137,8 +155,8 @@ impl<B: Backend> TTT<B> {
         let conv_q_weight = self.q_conv.weight.val();
         let conv_k_weight = self.k_conv.weight.val();
 
-        let conv_q_bias = self.q_conv.bias.map(|x| x.val());
-        let conv_k_bias = self.k_conv.bias.map(|x| x.val());
+        let conv_q_bias = self.q_conv.bias.as_ref().map(|x| x.val());
+        let conv_k_bias = self.k_conv.bias.as_ref().map(|x| x.val());
 
         // Since causal_conv has groups=dim, this means that conv(q concat k) == conv(q) concat conv(k)
         // So we could merge these here
@@ -161,7 +179,7 @@ impl<B: Backend> TTT<B> {
         // ]);
 
         // In source, this is token_idx + learnable_token_idx_bias, we merge the two right now.
-        let token_idx = self.learnable_token_idx.clamp_min(0.);
+        let token_idx = self.learnable_token_idx.clone().clamp_min(0.);
 
         let QKV { xq, xk, xv } = self.get_qkv_projections(x.clone());
         let gate = self.o_proj.forward(x.clone());
@@ -186,7 +204,7 @@ impl<B: Backend> TTT<B> {
 
         // [B, num_heads, seq_len, head_dim] -> [B*num_heads, seq_len, head_dim]
         let [xq, xk, xv] =
-            [xq, xk, xv].map(|x| x.reshape([-1, seq_len as i64, self.config.head_dim as i64]));
+            [xq, xk, xv].map(|x| x.reshape([-1, seq_len as i32, self.config.head_dim as i32]));
 
         TTTInputs {
             qkv: QKV { xq, xk, xv },
@@ -209,10 +227,10 @@ impl<B: Backend> TTT<B> {
     //     .permute([0, 3, 1, 2, 4])
     // }
 
-    fn forward(&self, x: Tensor<B, 3>, inner: todo!()) -> Tensor<B, 3> {
+    fn forward(&self, x: Tensor<B, 3>, inner: todo!(), start_idx: usize) -> Tensor<B, 3> {
         let [batch_size, seq_len, dim] = x.shape().dims();
 
-        let inputs = self.get_inner_loop_inputs(x, todo!());
+        let inputs = self.get_inner_loop_inputs(x, start_idx);
 
         debug_assert_eq!(
             batch_size * self.config.num_heads,
@@ -221,6 +239,17 @@ impl<B: Backend> TTT<B> {
 
         let out = inner(inputs);
         // TODO: Gate and norm
+
+        let out = out
+            .reshape([
+                batch_size,
+                self.config.num_heads,
+                seq_len,
+                self.config.head_dim,
+            ])
+            .permute([0, 2, 1, 3]);
+
+        let out = gelu(inputs.gate) * self.post_norm.forward(out);
 
         let out = self.o_proj.forward(out);
 
