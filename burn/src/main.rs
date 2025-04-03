@@ -1,9 +1,4 @@
-use burn::{
-    config::Config,
-    module::Module,
-    prelude::Backend,
-    tensor::{Device, Tensor},
-};
+use burn::{prelude::Backend, tensor::Tensor};
 use tokenizers::Tokenizer;
 
 fn compute<B: Backend>() {
