@@ -5,8 +5,6 @@ edition = "2021"
 
 [dependencies]
 burn = { version = "0.16", features = ["wgpu", "train"] }
-# Temporary workaround, see https://github.com/tracel-ai/burn/issues/2876
-bincode = "=2.0.0-rc.3"
-bincode_derive = "=2.0.0-rc.3"
+num-traits = "0.2.19"
 
 tokenizers = { version = "0.21", features = ["http"] }

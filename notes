@@ -1,0 +1,9 @@
+optimizer:
+- learn hyperparams via projection like learning rate?
+
+layernorm in inner:
+- make params part of inner model? currently trained with the outer model
+- use rmsnorm instead?
+
+mini batch:
+- use higher at start of training and gradually reduce?

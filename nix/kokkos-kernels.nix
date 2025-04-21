@@ -33,7 +33,7 @@ stdenv.mkDerivation (finalAttrs: {
     description = "Kokkos C++ Performance Portability Programming Ecosystem: Math Kernels - Provides BLAS, Sparse BLAS and Graph Kernels";
     homepage = "https://github.com/kokkos/kokkos-kernels";
     changelog = "https://github.com/kokkos/kokkos-kernels/blob/${finalAttrs.src.rev}/CHANGELOG.md";
-    license = with licenses; [asl20-llvm];
+    license = with licenses; [asl20];
     maintainers = with maintainers; [];
     platforms = platforms.unix;
     broken = stdenv.hostPlatform.isDarwin;

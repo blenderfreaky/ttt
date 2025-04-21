@@ -36,6 +36,8 @@
           ninja
           openssl
           pkg-config
+          clang
+          clang-tools
         ]
         ++ builtins.attrValues (ownPackages pkgs);
   in {

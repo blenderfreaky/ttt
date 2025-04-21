@@ -2,11 +2,11 @@
   "nodes": {
     "nixpkgs": {
       "locked": {
-        "lastModified": 1741021928,
-        "narHash": "sha256-aOTtD4DkPiviFRtKNH/oObXZujg7tcCfPR8f48HuTm8=",
+        "lastModified": 1742833557,
+        "narHash": "sha256-fnfMDdq/NgywI5vwhf0gDp5fgSE0FHESZk54Ukxr8h4=",
         "owner": "LunNova",
         "repo": "nixpkgs",
-        "rev": "497bf52674e2587cee0b8b2b22a8706f53a2b038",
+        "rev": "22f36c62ba3cb2a1a0def4fdd627f1ec604a9ecb",
         "type": "github"
       },
       "original": {
