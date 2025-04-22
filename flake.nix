@@ -1,7 +1,7 @@
 {
   inputs = {
-    #nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixpkgs.url = "github:LunNova/nixpkgs/rocm-update";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    #nixpkgs.url = "github:LunNova/nixpkgs/rocm-update";
   };
 
   outputs = {
