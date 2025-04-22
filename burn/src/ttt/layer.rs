@@ -60,11 +60,14 @@ struct TTT<B: Backend> {
 
 pub trait TTTInnerModel<B: Backend> {
     type Config: Config;
+    type State: Model;
 
     fn new(general_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device)
         -> Self;
 
-    fn forward(&self, inputs: TTTInputsInner<B>) -> Tensor<B, 3>;
+    fn init_state(&self, device: &B::Device) -> Self::State;
+
+    fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 3>;
 }
 
 impl TTTConfig {
@@ -300,6 +303,12 @@ struct TTTLinear<B: Backend> {
     config: Ignored<Arc<TTTConfig>>,
 }
 
+#[derive(Module, Debug)]
+struct TTTLinearState<B: Backend> {
+    weight: Tensor<B, 3>,
+    bias: Tensor<B, 2>,
+}
+
 #[derive(Config, Debug)]
 struct TTTLinearConfig {
     #[config(
@@ -310,6 +319,7 @@ struct TTTLinearConfig {
 
 impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
     type Config = TTTLinearConfig;
+    type Self = TTTLinearState;
 
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
         Self {
@@ -346,7 +356,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
     // x + LayerNorm(Linear(x))
     //
     // TODO: Pass current weights (don't use weight_init)
-    fn forward(&self, inputs: TTTInputsInner<B>) -> Tensor<B, 3> {
+    fn forward(&self, state: &mut TTTLinearState<B>, inputs: TTTInputsInner<B>) -> Tensor<B, 3> {
         let qkv = inputs.qkv;
 
         let [batch_times_heads, seq_len, value_size] = inputs.qkv.xv.shape().dims();
