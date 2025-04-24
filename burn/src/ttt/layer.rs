@@ -60,12 +60,12 @@ struct TTT<B: Backend> {
 
 pub trait TTTInnerModel<B: Backend> {
     type Config: Config;
-    type State: Model;
+    type State: Module<B>;
 
     fn new(general_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device)
         -> Self;
 
-    fn init_state(&self, device: &B::Device) -> Self::State;
+    fn init_state(&self, batch_size: usize) -> Self::State;
 
     fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 3>;
 }
@@ -217,13 +217,14 @@ impl<B: Backend> TTT<B> {
         }
     }
 
-    fn forward(
+    fn forward<Inner: TTTInnerModel<B>>(
         &self,
         x: Tensor<B, 3>,
-        inner: impl TTTInnerModel<B>,
+        inner: Inner,
+        state: &mut Inner::State,
         start_idx: usize,
     ) -> Tensor<B, 3> {
-        let [batch_size, seq_len, dim] = x.shape().dims();
+        let [batch_size, seq_len, token_size] = x.shape().dims();
 
         let inputs = self.get_inner_loop_inputs(x, start_idx);
 
@@ -232,7 +233,7 @@ impl<B: Backend> TTT<B> {
             inputs.inner.qkv.xq.shape().dims[0]
         );
 
-        let out = inner.forward(inputs.inner);
+        let out = inner.forward(state, inputs.inner);
         // TODO: Gate and norm
 
         let out = out
@@ -294,19 +295,23 @@ fn causal_conv1d_fn<B: Backend>(
 
 #[derive(Module, Debug)]
 struct TTTLinear<B: Backend> {
-    // layer: Linear<B>,
-    weight_init: Param<Tensor<B, 2>>,
-    bias_init: Param<Tensor<B, 1>>,
-    // layer_norm: LayerNorm<B>,
-    norm_weight: Param<Tensor<B, 4>>,
-    norm_bias: Param<Tensor<B, 4>>,
+    /// [num_heads, value_size, value_size]
+    weight_init: Param<Tensor<B, 3>>,
+    /// [num_heads, value_size]
+    bias_init: Param<Tensor<B, 2>>,
+    /// [num_heads, value_size]
+    norm_weight: Param<Tensor<B, 2>>,
+    /// [num_heads, value_size]
+    norm_bias: Param<Tensor<B, 2>>,
     config: Ignored<Arc<TTTConfig>>,
 }
 
 #[derive(Module, Debug)]
 struct TTTLinearState<B: Backend> {
-    weight: Tensor<B, 3>,
-    bias: Tensor<B, 2>,
+    /// [batch_size, num_heads, value_size, value_size]
+    weight: Tensor<B, 4>,
+    /// [batch_size, num_heads, value_size]
+    bias: Tensor<B, 3>,
 }
 
 #[derive(Config, Debug)]
@@ -319,7 +324,7 @@ struct TTTLinearConfig {
 
 impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
     type Config = TTTLinearConfig;
-    type Self = TTTLinearState;
+    type State = TTTLinearState<B>;
 
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
         Self {
@@ -328,28 +333,32 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
             //     .init(device),
             weight_init: config.initializer.init(
                 [
-                    1,
-                    global_config.num_heads * global_config.value_size,
-                    global_config.num_heads * global_config.value_size,
+                    global_config.num_heads,
+                    global_config.value_size,
+                    global_config.value_size,
                 ],
                 device,
             ),
-            bias_init: config.initializer.init(
-                [1, global_config.num_heads * global_config.value_size],
-                device,
-            ),
+            bias_init: config
+                .initializer
+                .init([global_config.num_heads, global_config.value_size], device),
             // layer_norm: LayerNormConfig::new(global_config.num_heads * global_config.value_size)
             //     .with_epsilon(global_config.epsilon)
             //     .init(device),
-            norm_weight: config.initializer.init(
-                [1, global_config.num_heads, 1, global_config.value_size],
-                device,
-            ),
-            norm_bias: config.initializer.init(
-                [1, global_config.num_heads, 1, global_config.value_size],
-                device,
-            ),
+            norm_weight: config
+                .initializer
+                .init([global_config.num_heads, global_config.value_size], device),
+            norm_bias: config
+                .initializer
+                .init([global_config.num_heads, global_config.value_size], device),
             config: Ignored(global_config.clone()),
+        }
+    }
+
+    fn init_state(&self, batch_size: usize) -> Self::State {
+        TTTLinearState {
+            weight: self.weight_init.val().unsqueeze().repeat_dim(0, batch_size),
+            bias: self.bias_init.val().unsqueeze().repeat_dim(0, batch_size),
         }
     }
 
@@ -365,16 +374,16 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
 
         let batch_size = batch_times_heads / self.config.num_heads;
 
-        let z =
-            qkv.xq.matmul(self.weight_init.val().unsqueeze()) + self.bias_init.val().unsqueeze();
+        let z = qkv.xq.matmul(state.weight.unsqueeze()) + state.bias.unsqueeze();
 
         let (var, mean) = z.var_mean_bias(2);
         let std = (var + self.config.epsilon).sqrt();
 
         let norm = (z - mean) / std;
-        let out = self.norm_weight.val()
+
+        let out = self.norm_weight.val().unsqueeze_dims(&[0, 1])
             * norm.reshape([batch_size, self.config.num_heads, seq_len, value_size])
-            + self.norm_bias.val();
+            + self.norm_bias.val().unsqueeze_dims(&[0, 1]);
 
         // Since we're using a residual connection, our target is the residual
         let target = qkv.xv - qkv.xk;
@@ -382,8 +391,11 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         let dl_dout =
             out - target.reshape([batch_size, self.config.num_heads, seq_len, value_size]);
 
-        let dl_dnorm =
-            (dl_dout * self.norm_weight.val()).reshape([batch_times_heads, seq_len, value_size]);
+        let dl_dnorm = (dl_dout * self.norm_weight.val().unsqueeze_dims(&[0, 1])).reshape([
+            batch_times_heads,
+            seq_len,
+            value_size,
+        ]);
 
         let dl_dz_term1 = dl_dnorm * (value_size as f32);
         let dl_dz_term2 = dl_dnorm.sum_dim(2).unsqueeze_dim(2);
@@ -396,11 +408,11 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         let weight_grad = qkv.xk.swap_dims(2, 3).matmul(step);
         let bias_grad = step;
 
-        let weight_new = self.weight_init.val() - inputs.token_idx.unsqueeze() * weight_grad;
-        let bias_new = self.bias_init.val() - inputs.token_idx.unsqueeze() * bias_grad;
+        let weight_new = state.weight - inputs.token_idx.unsqueeze() * weight_grad;
+        let bias_new = state.bias - inputs.token_idx.unsqueeze() * bias_grad;
 
         // Recalculate after the backprop step
-        let z_new = weight_new.matmul(qkv.xq) + bias_new;
+        let z_new = weight_new + bias_new;
 
         // No layernorm after in reference!?
 
