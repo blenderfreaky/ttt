@@ -29,6 +29,10 @@ pub struct TTTLinearState<B: Backend> {
     weight: Tensor<B, 4>,
     /// [batch_size, num_heads, value_size]
     bias: Tensor<B, 3>,
+    /// [batch_size, num_heads, value_size, value_size]
+    weight_grad: Tensor<B, 4>,
+    /// [batch_size, num_heads, value_size]
+    bias_grad: Tensor<B, 3>,
 }
 
 #[derive(Config, Debug)]
@@ -73,15 +77,20 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
     }
 
     fn init_state(&self, batch_size: usize) -> Self::State {
+        let weight = self.weight_init.val().unsqueeze().repeat_dim(0, batch_size);
+        let bias = self.bias_init.val().unsqueeze().repeat_dim(0, batch_size);
+
         TTTLinearState {
-            weight: self.weight_init.val().unsqueeze().repeat_dim(0, batch_size),
-            bias: self.bias_init.val().unsqueeze().repeat_dim(0, batch_size),
+            weight_grad: weight.zeros_like(),
+            bias_grad: bias.zeros_like(),
+            weight,
+            bias,
         }
     }
 
     // x + LayerNorm(Linear(x))
     //
-    // TODO: Pass current weights (don't use weight_init)
+    // TODO:
     fn forward(&self, state: &mut TTTLinearState<B>, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
         let qkv = inputs.qkv;
 
@@ -119,7 +128,11 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         let step = inputs.lr.unsqueeze_dim(3) * dl_dz;
 
         let weight_grad = qkv.xk.swap_dims(2, 3).matmul(step.clone());
-        let bias_grad = step;
+        let bias_grad = step.squeeze(2);
+
+        // It seems we only accumulate gradients, and don't update the weights per-step, even outside of prefill
+        state.weight_grad.inplace(|x| x.add(weight_grad.clone()));
+        state.bias_grad.inplace(|x| x.add(bias_grad.clone()));
 
         let weight_new = state.weight.clone() - inputs.token_idx.clone().unsqueeze() * weight_grad;
         let bias_new =
