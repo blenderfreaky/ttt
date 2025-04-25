@@ -412,7 +412,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         let bias_new = state.bias - inputs.token_idx.unsqueeze() * bias_grad;
 
         // Recalculate after the backprop step
-        let z_new = weight_new + bias_new;
+        let z_new = qkv.xq.matmul(weight_new.unsqueeze()) + bias_new.unsqueeze();
 
         // No layernorm after in reference!?
 
