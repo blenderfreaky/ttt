@@ -15,7 +15,9 @@ fn compute<B: Backend>() {
 fn main() {
     compute::<burn::backend::Wgpu>();
 
-    let tok = Tokenizer::from_pretrained("meta-llama/Llama-2-7b-hf", None).unwrap();
+    let tokenizer = Tokenizer::from_pretrained("meta-llama/Llama-2-7b-hf", None).unwrap();
+
+    let _tokens = tokenizer.encode("Hello, world!", true).unwrap();
 }
 
 mod ttt;

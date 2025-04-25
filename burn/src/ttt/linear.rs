@@ -82,56 +82,53 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
     // x + LayerNorm(Linear(x))
     //
     // TODO: Pass current weights (don't use weight_init)
-    fn forward(&self, state: &mut TTTLinearState<B>, inputs: TTTInputsInner<B>) -> Tensor<B, 3> {
+    fn forward(&self, state: &mut TTTLinearState<B>, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
         let qkv = inputs.qkv;
 
-        let [batch_times_heads, seq_len, value_size] = inputs.qkv.xv.shape().dims();
+        let [_batch_size, num_heads, seq_len, value_size] = qkv.xv.shape().dims();
         debug_assert_eq!(value_size, self.config.value_size);
-        debug_assert_eq!(batch_times_heads % self.config.num_heads, 0);
+        debug_assert_eq!(num_heads, self.config.num_heads);
 
-        let batch_size = batch_times_heads / self.config.num_heads;
+        // No prefill for now
+        debug_assert_eq!(seq_len, 1);
 
-        let z = qkv.xq.matmul(state.weight.unsqueeze()) + state.bias.unsqueeze();
+        let z = qkv.xq.clone().matmul(state.weight.clone().unsqueeze())
+            + state.bias.clone().unsqueeze();
 
-        let (var, mean) = z.var_mean_bias(2);
+        let (var, mean) = z.clone().var_mean_bias(2);
         let std = (var + self.config.epsilon).sqrt();
 
-        let norm = (z - mean) / std;
+        let norm = (z - mean) / std.clone();
 
-        let out = self.norm_weight.val().unsqueeze_dims(&[0, 1])
-            * norm.reshape([batch_size, self.config.num_heads, seq_len, value_size])
+        let out = self.norm_weight.val().unsqueeze_dims(&[0, 1]) * norm.clone()
             + self.norm_bias.val().unsqueeze_dims(&[0, 1]);
 
         // Since we're using a residual connection, our target is the residual
-        let target = qkv.xv - qkv.xk;
+        let target = qkv.xv - qkv.xk.clone();
 
-        let dl_dout =
-            out - target.reshape([batch_size, self.config.num_heads, seq_len, value_size]);
+        let dl_dout = out - target;
 
-        let dl_dnorm = (dl_dout * self.norm_weight.val().unsqueeze_dims(&[0, 1])).reshape([
-            batch_times_heads,
-            seq_len,
-            value_size,
-        ]);
+        let dl_dnorm = dl_dout * self.norm_weight.val().unsqueeze_dims(&[0, 1]);
 
-        let dl_dz_term1 = dl_dnorm * (value_size as f32);
-        let dl_dz_term2 = dl_dnorm.sum_dim(2).unsqueeze_dim(2);
-        let dl_dz_term3 = norm * (dl_dnorm * norm).sum_dim(2).unsqueeze_dim(2);
+        let dl_dz_term1 = dl_dnorm.clone() * (value_size as f32);
+        let dl_dz_term2 = dl_dnorm.clone().sum_dim(3).unsqueeze_dim(3);
+        let dl_dz_term3 = norm.clone() * (dl_dnorm * norm.clone()).sum_dim(3).unsqueeze_dim(3);
 
         let dl_dz = (dl_dz_term1 - dl_dz_term2 - dl_dz_term3) / (std * (value_size as f32));
 
-        let step = inputs.lr * dl_dz;
+        let step = inputs.lr.unsqueeze_dim(3) * dl_dz;
 
-        let weight_grad = qkv.xk.swap_dims(2, 3).matmul(step);
+        let weight_grad = qkv.xk.swap_dims(2, 3).matmul(step.clone());
         let bias_grad = step;
 
-        let weight_new = state.weight - inputs.token_idx.unsqueeze() * weight_grad;
-        let bias_new = state.bias - inputs.token_idx.unsqueeze() * bias_grad;
+        let weight_new = state.weight.clone() - inputs.token_idx.clone().unsqueeze() * weight_grad;
+        let bias_new =
+            state.bias.clone() - (inputs.token_idx.clone().unsqueeze() * bias_grad).squeeze(2);
 
         // Recalculate after the backprop step
         let z_new = qkv.xq.matmul(weight_new.unsqueeze()) + bias_new.unsqueeze();
 
-        // No layernorm after in reference!?
+        // TODO: Reference implementation does layernorm outside, I think we should do in here rather
 
         z_new
     }
