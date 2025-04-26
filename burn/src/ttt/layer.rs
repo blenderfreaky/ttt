@@ -110,11 +110,11 @@ impl TTTConfig {
 }
 
 pub struct QKV<B: Backend> {
-    /// [batch_size, num_heads, seq_len, head_dim]
+    /// [batch_size, num_heads, seq_len, value_size]
     pub xq: Tensor<B, 4>,
-    /// [batch_size, num_heads, seq_len, head_dim]
+    /// [batch_size, num_heads, seq_len, value_size]
     pub xk: Tensor<B, 4>,
-    /// [batch_size, num_heads, seq_len, head_dim]
+    /// [batch_size, num_heads, seq_len, value_size]
     pub xv: Tensor<B, 4>,
 }
 
@@ -171,8 +171,7 @@ impl<B: Backend> TTT<B> {
         // [B, seq_len, token_dim] -> [B, seq_len, num_heads]
         let lr = self.learning_rate.forward(x);
         // [B, seq_len, num_heads] -> [B, num_heads, seq_len]
-        let lr = sigmoid(lr.permute([0, 2, 1])).add_scalar(self.config.base_lr);
-        lr
+        sigmoid(lr.permute([0, 2, 1])).add_scalar(self.config.base_lr)
     }
 
     fn conv_qk(&self, xqk: Tensor<B, 3>) -> (Tensor<B, 3>, Tensor<B, 3>) {
@@ -243,8 +242,6 @@ impl<B: Backend> TTT<B> {
         // [..] -> [unchanged]
         let out = gelu(inputs.gate) * self.post_norm.forward(out);
         // [.., num_heads*value_size] -> [.., num_heads*token_size] (equal if using reference impls config)
-        let out = self.o_proj.forward(out);
-
-        return out;
+        self.o_proj.forward(out)
     }
 }

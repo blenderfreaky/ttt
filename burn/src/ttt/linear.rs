@@ -8,7 +8,10 @@ use burn::{
     tensor::Tensor,
 };
 
-use super::layer::{TTTConfig, TTTInnerModel, TTTInputsInner};
+use super::{
+    layer::{TTTConfig, TTTInnerModel, TTTInputsInner},
+    util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
+};
 
 #[derive(Module, Debug)]
 pub struct TTTLinear<B: Backend> {
@@ -16,10 +19,7 @@ pub struct TTTLinear<B: Backend> {
     weight_init: Param<Tensor<B, 3>>,
     /// [num_heads, value_size]
     bias_init: Param<Tensor<B, 2>>,
-    /// [num_heads, value_size]
-    norm_weight: Param<Tensor<B, 2>>,
-    /// [num_heads, value_size]
-    norm_bias: Param<Tensor<B, 2>>,
+    layer_norm: MultiHeadLayerNorm<B>,
     config: Ignored<Arc<TTTConfig>>,
 }
 
@@ -49,9 +49,6 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
 
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
         Self {
-            // layer: LinearConfig::new(global_config.value_size, global_config.value_size)
-            //     .with_bias(true)
-            //     .init(device),
             weight_init: config.initializer.init(
                 [
                     global_config.num_heads,
@@ -63,15 +60,13 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
             bias_init: config
                 .initializer
                 .init([global_config.num_heads, global_config.value_size], device),
-            // layer_norm: LayerNormConfig::new(global_config.num_heads * global_config.value_size)
-            //     .with_epsilon(global_config.epsilon)
-            //     .init(device),
-            norm_weight: config
-                .initializer
-                .init([global_config.num_heads, global_config.value_size], device),
-            norm_bias: config
-                .initializer
-                .init([global_config.num_heads, global_config.value_size], device),
+            layer_norm: MultiHeadLayerNormConfig::new(
+                global_config.num_heads,
+                global_config.value_size,
+            )
+            .with_initializer(config.initializer.clone())
+            .with_epsilon(global_config.epsilon)
+            .init(device),
             config: Ignored(global_config.clone()),
         }
     }
@@ -104,26 +99,10 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         let z = qkv.xq.clone().matmul(state.weight.clone().unsqueeze())
             + state.bias.clone().unsqueeze();
 
-        let (var, mean) = z.clone().var_mean_bias(2);
-        let std = (var + self.config.epsilon).sqrt();
-
-        let norm = (z - mean) / std.clone();
-
-        let out = self.norm_weight.val().unsqueeze_dims(&[0, 1]) * norm.clone()
-            + self.norm_bias.val().unsqueeze_dims(&[0, 1]);
-
         // Since we're using a residual connection, our target is the residual
         let target = qkv.xv - qkv.xk.clone();
 
-        let dl_dout = out - target;
-
-        let dl_dnorm = dl_dout * self.norm_weight.val().unsqueeze_dims(&[0, 1]);
-
-        let dl_dz_term1 = dl_dnorm.clone() * (value_size as f32);
-        let dl_dz_term2 = dl_dnorm.clone().sum_dim(3).unsqueeze_dim(3);
-        let dl_dz_term3 = norm.clone() * (dl_dnorm * norm.clone()).sum_dim(3).unsqueeze_dim(3);
-
-        let dl_dz = (dl_dz_term1 - dl_dz_term2 - dl_dz_term3) / (std * (value_size as f32));
+        let (_ln_out, dl_dz) = self.layer_norm.forward_and_grad(z, target);
 
         let step = inputs.lr.unsqueeze_dim(3) * dl_dz;
 
