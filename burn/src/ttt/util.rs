@@ -1,19 +1,21 @@
 use burn::{
     config::Config,
     module::{Module, Param},
-    nn::Initializer,
+    nn::{Initializer, Linear, LinearConfig, SwiGlu, SwiGluConfig},
     prelude::Backend,
-    tensor::{module::conv1d, ops::ConvOptions, Tensor},
+    tensor::{activation::silu, module::conv1d, ops::ConvOptions, Tensor},
 };
 
 /// Applies causal convolution with no initial states
-// Returns (batch_size, dim, seq_len)
+// Returns [batch_size, dim, seq_len]
 pub fn causal_conv1d_fn<B: Backend>(
     // [batch_size, dim, seq_len]
     x: Tensor<B, 3>,
-    // [dim, 1, width]
+    //// [dim, 1, width]
+    // [channels_out, channels_in/dim, kernel_size]
     weight: Tensor<B, 3>,
-    // [dim,]
+    //// [dim,]
+    // [channels_out]
     bias: Option<Tensor<B, 1>>,
     // // (batch, dim, width - 1)
     // initial_states: Option<Tensor<B, 3>>,
@@ -21,9 +23,9 @@ pub fn causal_conv1d_fn<B: Backend>(
     // final_states_out: Tensor<B, 3>,
 ) -> Tensor<B, 3> {
     let [_batch_size, dim, seq_len] = x.shape().dims();
-    let [channels_out, channels_in_per_group, width] = weight.shape().dims();
-    debug_assert_eq!(channels_out, dim);
-    debug_assert_eq!(channels_in_per_group, 1);
+    let [_channels_out, _channels_in_per_group, kernel_size] = weight.shape().dims();
+    // debug_assert_eq!(channels_out, dim);
+    // debug_assert_eq!(channels_in_per_group, 1);
 
     // if let Some(initial_states) = initial_states {
     //     x = Tensor::cat(vec![initial_states, x], 2);
@@ -33,10 +35,48 @@ pub fn causal_conv1d_fn<B: Backend>(
         weight.unsqueeze_dim(1),
         bias,
         // Why is groups = dim? This seems inefficient. (Taken from the original implementation)
-        ConvOptions::new([1], [width - 1], [1], dim),
+        ConvOptions::new([1], [kernel_size - 1], [1], dim),
     );
 
     out.slice([0..dim, 0..seq_len])
+}
+
+#[derive(Config, Debug)]
+pub struct CausalConvConfig {
+    // Used for cache indexing in src
+    // layer_idx: usize,
+    hidden_size: usize,
+    kernel_size: usize,
+    #[config(
+        default = "Initializer::KaimingUniform{gain:1.0/num_traits::Float::sqrt(3.0), fan_out_only:false}"
+    )]
+    pub initializer: Initializer,
+}
+
+#[derive(Module, Debug)]
+pub struct CausalConv<B: Backend> {
+    weight: Param<Tensor<B, 3>>,
+    bias: Param<Tensor<B, 1>>,
+}
+
+impl CausalConvConfig {
+    pub fn init<B: Backend>(self, device: &B::Device) -> CausalConv<B> {
+        let weight = self
+            .initializer
+            .init([self.hidden_size, 1, self.kernel_size], device);
+        let bias = self.initializer.init([self.hidden_size], device);
+        CausalConv { weight, bias }
+    }
+}
+
+impl<B: Backend> CausalConv<B> {
+    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+        let [channels_out, channels_in_per_group, kernel_size] = self.weight.shape().dims();
+        debug_assert_eq!(channels_out, kernel_size);
+        debug_assert_eq!(channels_in_per_group, 1);
+
+        causal_conv1d_fn(x, self.weight.val(), Some(self.bias.val()))
+    }
 }
 
 #[derive(Config, Debug)]
@@ -118,5 +158,53 @@ impl<B: Backend> MultiHeadLayerNorm<B> {
         let dl_dx = (dl_dx_term1 - dl_dx_term2 - dl_dx_term3) / (std * (value_size as f32));
 
         (out, dl_dx)
+    }
+}
+
+// burn-rs's SwiGlu is not quite the same,
+// theirs does
+//  silu(linear(input)) * linear(input)
+// this one does wraps the entire expression with another linear layer,
+// and merges the other two linear layers into one projection that gets split
+
+#[derive(Module, Debug)]
+pub struct SwiGluMlp<B: Backend> {
+    up_gate_proj: Linear<B>,
+    down_proj: Linear<B>,
+    intermediate_size: usize,
+}
+
+#[derive(Config, Debug)]
+pub struct SwiGluMlpConfig {
+    hidden_size: usize,
+    intermediate_size: usize,
+}
+
+impl SwiGluMlpConfig {
+    pub fn init<B: Backend>(self, device: &B::Device) -> SwiGluMlp<B> {
+        SwiGluMlp {
+            up_gate_proj: LinearConfig::new(self.hidden_size, 2 * self.intermediate_size)
+                .with_bias(false)
+                .init(device),
+            down_proj: LinearConfig::new(self.intermediate_size, self.hidden_size)
+                .with_bias(false)
+                .init(device),
+            intermediate_size: self.intermediate_size,
+        }
+    }
+}
+
+impl<B: Backend> SwiGluMlp<B> {
+    pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
+        let [gate, up] = self
+            .up_gate_proj
+            .forward(x)
+            .split(self.intermediate_size, 2)
+            .try_into()
+            .unwrap();
+
+        let down_proj = self.down_proj.forward(silu(gate) * up);
+
+        down_proj
     }
 }

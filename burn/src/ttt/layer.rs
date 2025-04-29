@@ -206,10 +206,11 @@ impl<B: Backend> TTT<B> {
         }
     }
 
-    fn forward<Inner: TTTInnerModel<B>>(
+    pub fn forward<Inner: TTTInnerModel<B>>(
         &self,
+        // [batch_size, seq_len, token_size]
         x: Tensor<B, 3>,
-        inner: Inner,
+        inner: &Inner,
         state: &mut Inner::State,
         start_idx: usize,
     ) -> Tensor<B, 3> {
