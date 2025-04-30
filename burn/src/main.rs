@@ -1,8 +1,14 @@
 use std::sync::Arc;
 
-use burn::{prelude::Backend, tensor::Tensor};
+use burn::{
+    prelude::Backend,
+    tensor::{Int, Tensor},
+};
 use tokenizers::Tokenizer;
-use ttt::{linear::TTTLinearConfig, TTTConfig};
+use ttt::{
+    linear::{TTTLinear, TTTLinearConfig},
+    TTTConfig,
+};
 
 fn compute<B: Backend>() {
     let device = Default::default();
@@ -18,14 +24,15 @@ fn compute<B: Backend>() {
 
     let inner_config = Arc::new(TTTLinearConfig::new());
 
-    let model = config.init_with_inner_model(&inner_config, device);
+    let model = config.init_with_inner_model::<_, TTTLinear<_>>(&inner_config, &device);
 
     let tokenizer = Tokenizer::from_pretrained("meta-llama/Llama-2-7b-hf", None).unwrap();
 
     let tokens = tokenizer.encode("Hello, world!", true).unwrap();
-    let token_ids = tokens.get_ids();
+    let token_ids = Tensor::<B, 1, Int>::from_ints(tokens.get_ids(), &device);
+    let token_ids = token_ids.unsqueeze();
 
-    let logits = model.forward(tokens, 0);
+    let logits = model.forward(token_ids, 0);
 
     dbg!(logits);
 }

@@ -2,7 +2,7 @@
 
 use burn::data::dataset::{source::huggingface::HuggingfaceDatasetLoader, Dataset, SqliteDataset};
 
-#[derive(new, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct TextGenerationItem {
     pub text: String,
 }
@@ -20,7 +20,7 @@ impl Dataset<TextGenerationItem> for DbPediaDataset {
     fn get(&self, index: usize) -> Option<TextGenerationItem> {
         self.dataset
             .get(index)
-            .map(|item| TextGenerationItem::new(item.content))
+            .map(|item| TextGenerationItem { text: item.content })
     }
 
     fn len(&self) -> usize {
