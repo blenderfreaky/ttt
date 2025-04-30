@@ -3,21 +3,44 @@ use std::sync::Arc;
 use burn::{
     config::Config,
     module::{Ignored, Module},
-    nn::RmsNorm,
+    nn::{RmsNorm, RmsNormConfig},
     prelude::Backend,
     tensor::Tensor,
 };
 
 use super::{
     layer::{TTTConfig, TTTInnerModel, TTT},
-    util::{CausalConv, SwiGluMlp},
+    util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
 };
 
 // We can't write the trait bound due to a limitation of the Module derive macro
 // but impls enforce it
 //   Inner: TTTInnerModel<B>
 #[derive(Module, Debug)]
-pub struct Block<B: Backend, Inner> {
+pub struct TTTBlockWithSeq<B: Backend, Inner> {
+    block: TTTBlock<B>,
+    inner: Inner,
+}
+
+impl<B: Backend, Inner: TTTInnerModel<B>> TTTBlockWithSeq<B, Inner> {
+    pub fn forward(
+        &self,
+        input: Tensor<B, 3>,
+        residual: Option<Tensor<B, 3>>,
+        state: &mut Inner::State,
+        start_idx: usize,
+    ) -> (Tensor<B, 3>, Tensor<B, 3>) {
+        self.block
+            .forward(input, residual, state, &self.inner, start_idx)
+    }
+
+    pub fn init_state(&self, batch_size: usize) -> Inner::State {
+        self.inner.init_state(batch_size)
+    }
+}
+
+#[derive(Module, Debug)]
+pub struct TTTBlock<B: Backend> {
     layer_idx: usize,
     conv: Option<(CausalConv<B>, RmsNorm<B>)>,
     // conv_norm: Option<RmsNorm<B>>,
@@ -25,12 +48,52 @@ pub struct Block<B: Backend, Inner> {
     seq_norm: RmsNorm<B>,
     ffn_norm: RmsNorm<B>,
     ttt: TTT<B>,
-    inner: Inner,
     swi_glu_mlp: SwiGluMlp<B>,
 }
 
 #[derive(Config, Debug)]
-pub struct BlockConfig {}
+pub struct TTTBlockConfig {
+    ttt_config: Arc<TTTConfig>,
+    layer_idx: usize,
+}
+
+impl TTTBlockConfig {
+    pub fn init<B: Backend>(self, device: &B::Device) -> TTTBlock<B> {
+        TTTBlock {
+            layer_idx: self.layer_idx,
+            conv: if self.ttt_config.conv_before_ttt {
+                Some((
+                    CausalConvConfig::new(
+                        self.ttt_config.value_size,
+                        self.ttt_config.conv_kernel_size,
+                    )
+                    .init(device),
+                    RmsNormConfig::new(self.ttt_config.value_size).init(device),
+                ))
+            } else {
+                None
+            },
+            seq_norm: RmsNormConfig::new(self.ttt_config.value_size).init(device),
+            ffn_norm: RmsNormConfig::new(self.ttt_config.value_size).init(device),
+            ttt: self.ttt_config.init(device),
+            swi_glu_mlp: SwiGluMlpConfig::new(
+                self.ttt_config.value_size,
+                self.ttt_config.swi_glu_mlp_intermediate_size,
+            )
+            .init(device),
+            config: Ignored(self.ttt_config),
+        }
+    }
+
+    pub fn init_with_inner<B: Backend, Inner: TTTInnerModel<B>>(
+        self,
+        inner: Inner,
+        device: &B::Device,
+    ) -> TTTBlockWithSeq<B, Inner> {
+        let block = self.init(device);
+        TTTBlockWithSeq { block, inner }
+    }
+}
 
 // fn add_opt<B: Backend>(x: Tensor<B, 3>, opt: Option<Tensor<B, 3>>) -> Tensor<B, 3> {
 //     match opt {
@@ -39,12 +102,13 @@ pub struct BlockConfig {}
 //     }
 // }
 
-impl<B: Backend, Inner: TTTInnerModel<B>> Block<B, Inner> {
-    pub fn forward(
+impl<B: Backend> TTTBlock<B> {
+    pub fn forward<Inner: TTTInnerModel<B>>(
         &self,
         input: Tensor<B, 3>,
         residual: Option<Tensor<B, 3>>,
         state: &mut Inner::State,
+        inner: &Inner,
         start_idx: usize,
     ) -> (Tensor<B, 3>, Tensor<B, 3>) {
         // This is not optimal for perf but I'm lazy rn
@@ -64,9 +128,7 @@ impl<B: Backend, Inner: TTTInnerModel<B>> Block<B, Inner> {
 
         residual = hidden_state + residual;
         hidden_state = self.seq_norm.forward(residual.clone());
-        hidden_state = self
-            .ttt
-            .forward(hidden_state, &self.inner, state, start_idx);
+        hidden_state = self.ttt.forward(hidden_state, inner, state, start_idx);
 
         residual = hidden_state + residual;
         hidden_state = self.ffn_norm.forward(residual.clone());

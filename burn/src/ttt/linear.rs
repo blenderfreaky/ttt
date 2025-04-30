@@ -117,6 +117,14 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         let bias_new =
             state.bias.clone() - (inputs.token_idx.clone().unsqueeze() * bias_grad).squeeze(2);
 
+        if (inputs.start_idx + 1) % self.config.mini_batch_size == 0 {
+            state.weight = weight_new.clone();
+            state.bias = bias_new.clone();
+            // TODO: This is rather hacky
+            state.weight_grad = state.weight_grad.zeros_like();
+            state.bias_grad = state.bias_grad.zeros_like();
+        }
+
         // Recalculate after the backprop step
         let z_new = qkv.xq.matmul(weight_new.unsqueeze()) + bias_new.unsqueeze();
 

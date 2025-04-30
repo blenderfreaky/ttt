@@ -41,6 +41,8 @@ pub struct TTTConfig {
     /// The base learning rate for the TTT module.
     pub base_lr: f32,
     pub epsilon: f64,
+    pub conv_before_ttt: bool,
+    pub swi_glu_mlp_intermediate_size: usize,
 }
 
 pub trait TTTInnerModel<B: Backend> {
@@ -127,6 +129,8 @@ pub struct TTTInputsInner<B: Backend> {
     /// Learning rate for each head of each token
     /// `[batch_size, num_heads, seq_len]`
     pub lr: Tensor<B, 3>,
+    /// Index of the first token in the sequence
+    pub start_idx: usize,
 }
 
 // TODO: Better name
@@ -201,7 +205,12 @@ impl<B: Backend> TTT<B> {
         let lr = self.get_lr(x);
 
         TTTInputs {
-            inner: TTTInputsInner { qkv, token_idx, lr },
+            inner: TTTInputsInner {
+                qkv,
+                token_idx,
+                lr,
+                start_idx,
+            },
             gate,
         }
     }
