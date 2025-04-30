@@ -38,6 +38,9 @@
           pkg-config
           clang
           clang-tools
+          clang
+          libclang
+          libclang.lib
         ]
         ++ builtins.attrValues (ownPackages pkgs);
   in {

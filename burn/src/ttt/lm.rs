@@ -1,17 +1,46 @@
+use std::sync::Arc;
+
 use burn::{
     module::Module,
-    nn::{Embedding, RmsNorm},
+    nn::{Embedding, EmbeddingConfig, RmsNorm, RmsNormConfig},
     prelude::Backend,
     tensor::{Int, Tensor},
 };
 
-use super::{block::TTTBlockWithSeq, layer::TTTInnerModel};
+use super::{
+    block::{TTTBlockConfig, TTTBlockWithSeq},
+    layer::TTTInnerModel,
+    TTTConfig,
+};
 
 #[derive(Module, Debug)]
 pub struct TTTModel<B: Backend, Inner> {
     embedding: Embedding<B>,
     layers: Vec<TTTBlockWithSeq<B, Inner>>,
     norm: RmsNorm<B>,
+}
+
+impl TTTConfig {
+    pub fn init_with_inner_model<B: Backend, Inner: TTTInnerModel<B>>(
+        self: &Arc<Self>,
+        inner_config: &Arc<Inner::Config>,
+        device: &B::Device,
+    ) -> TTTModel<B, Inner> {
+        let embedding = EmbeddingConfig::new(self.vocab_size, self.value_size).init(device);
+        let layers = (0..self.num_hidden_layers)
+            .map(|idx| {
+                TTTBlockConfig::new(self.clone(), idx)
+                    .init_with_inner(Inner::new(self, inner_config, device), device)
+            })
+            .collect();
+        let norm = RmsNormConfig::new(self.value_size).init(device);
+
+        TTTModel {
+            embedding,
+            layers,
+            norm,
+        }
+    }
 }
 
 impl<B: Backend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {

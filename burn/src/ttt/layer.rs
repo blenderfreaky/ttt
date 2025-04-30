@@ -14,37 +14,7 @@ use burn::{
     },
 };
 
-use super::util::causal_conv1d_fn;
-
-/// Configuration for the TTT layer.
-#[derive(Config, Debug)]
-pub struct TTTConfig {
-    /// The size of token vectors.
-    pub token_size: usize,
-    // /// The size of key and query vectors.
-    // /// In source it seems to be token_size/2
-    // key_size: usize,
-    /// The size of value vectors.
-    /// In source it seems to be token_size
-    pub value_size: usize,
-    /// The number of TTT heads.
-    pub num_heads: usize,
-    /// The kernel size for the convolutional layers.
-    pub conv_kernel_size: usize,
-    /// The mini batch size.
-    pub mini_batch_size: usize,
-    // TODO: Make positional encoding generic/exchangable for different types of positional encodings
-    /// The maximum sequence length (only used for rotary encoding).
-    pub max_sequence_len: usize,
-    /// The theta value for the rotary encoding.
-    pub rope_theta: f32,
-    /// The base learning rate for the TTT module.
-    pub base_lr: f32,
-    #[config(default = 1e-6)]
-    pub epsilon: f64,
-    pub conv_before_ttt: bool,
-    pub swi_glu_mlp_intermediate_size: usize,
-}
+use super::{util::causal_conv1d_fn, TTTConfig};
 
 pub trait TTTInnerModel<B: Backend> {
     type Config: Config;
@@ -73,7 +43,7 @@ pub struct TTT<B: Backend> {
 }
 
 impl TTTConfig {
-    pub fn init<B: Backend>(self: &Arc<Self>, device: &B::Device) -> TTT<B> {
+    pub fn init_ttt_seq<B: Backend>(self: &Arc<Self>, device: &B::Device) -> TTT<B> {
         let linear = |in_size, out_size, bias| {
             LinearConfig::new(in_size, out_size)
                 .with_bias(bias)

@@ -9,8 +9,9 @@ use burn::{
 };
 
 use super::{
-    layer::{TTTConfig, TTTInnerModel, TTT},
+    layer::{TTTInnerModel, TTT},
     util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
+    TTTConfig,
 };
 
 // We can't write the trait bound due to a limitation of the Module derive macro
@@ -75,7 +76,7 @@ impl TTTBlockConfig {
             },
             seq_norm: RmsNormConfig::new(self.ttt_config.value_size).init(device),
             ffn_norm: RmsNormConfig::new(self.ttt_config.value_size).init(device),
-            ttt: self.ttt_config.init(device),
+            ttt: self.ttt_config.init_ttt_seq(device),
             swi_glu_mlp: SwiGluMlpConfig::new(
                 self.ttt_config.value_size,
                 self.ttt_config.swi_glu_mlp_intermediate_size,

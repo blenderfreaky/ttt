@@ -9,8 +9,9 @@ use burn::{
 };
 
 use super::{
-    layer::{TTTConfig, TTTInnerModel, TTTInputsInner},
+    layer::{TTTInnerModel, TTTInputsInner},
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
+    TTTConfig,
 };
 
 #[derive(Module, Debug)]
