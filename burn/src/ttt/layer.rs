@@ -61,7 +61,7 @@ impl TTTConfig {
         };
 
         TTT {
-            qkvg_proj: linear(self.token_size, self.value_size * 3 + self.num_heads, false),
+            qkvg_proj: linear(self.token_size, self.value_size * 3, false),
             o_proj: linear(self.value_size, self.token_size, false),
             q_conv: conv(self.value_size),
             k_conv: conv(self.value_size),
@@ -118,6 +118,7 @@ impl<B: Backend> TTT<B> {
         let [_batch_size, _seq_len, _token_dim] = x.shape().dims();
 
         let proj = self.qkvg_proj.forward(x);
+        dbg!(proj.shape());
         let [xqk, gate, xv] = proj.split(self.config.value_size, 2).try_into().unwrap();
 
         let (xq, xk) = self.conv_qk(xqk);
@@ -127,6 +128,10 @@ impl<B: Backend> TTT<B> {
             x.reshape([0, 0, self.config.num_heads as i32, -1])
                 .permute([0, 2, 1, 3])
         });
+
+        dbg!(xq.shape());
+        dbg!(xk.shape());
+        dbg!(xv.shape());
 
         // // TODO: The source uses position_ids%mini_batch_size
         // //       We just use start_idx for now
@@ -146,7 +151,7 @@ impl<B: Backend> TTT<B> {
         // [B, seq_len, token_dim] -> [B, seq_len, num_heads]
         let lr = self.learning_rate.forward(x);
         // [B, seq_len, num_heads] -> [B, num_heads, seq_len]
-        sigmoid(lr.permute([0, 2, 1])).add_scalar(self.config.base_lr)
+        (sigmoid(lr.permute([0, 2, 1])) + self.config.base_lr) / (self.config.value_size as f32)
     }
 
     fn conv_qk(&self, xqk: Tensor<B, 3>) -> (Tensor<B, 3>, Tensor<B, 3>) {

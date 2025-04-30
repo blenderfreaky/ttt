@@ -32,13 +32,13 @@ pub fn causal_conv1d_fn<B: Backend>(
 
     let out = conv1d(
         x,
-        weight.unsqueeze_dim(1),
+        weight,
         bias,
         // Why is groups = dim? This seems inefficient. (Taken from the original implementation)
         ConvOptions::new([1], [kernel_size - 1], [1], dim),
     );
 
-    out.slice([0..dim, 0..seq_len])
+    out.slice([0..dim, 0..dim, 0..seq_len])
 }
 
 #[derive(Config, Debug)]
@@ -61,10 +61,15 @@ pub struct CausalConv<B: Backend> {
 
 impl CausalConvConfig {
     pub fn init<B: Backend>(self, device: &B::Device) -> CausalConv<B> {
-        let weight = self
-            .initializer
-            .init([self.hidden_size, 1, self.kernel_size], device);
-        let bias = self.initializer.init([self.hidden_size], device);
+        let weight = self.initializer.init_with(
+            [self.hidden_size, 1, self.kernel_size],
+            Some(self.kernel_size),
+            None,
+            device,
+        );
+        let bias =
+            self.initializer
+                .init_with([self.hidden_size], Some(self.kernel_size), None, device);
         CausalConv { weight, bias }
     }
 }
@@ -72,7 +77,7 @@ impl CausalConvConfig {
 impl<B: Backend> CausalConv<B> {
     pub fn forward(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
         let [channels_out, channels_in_per_group, kernel_size] = self.weight.shape().dims();
-        debug_assert_eq!(channels_out, kernel_size);
+        // debug_assert_eq!(channels_out, kernel_size);
         debug_assert_eq!(channels_in_per_group, 1);
 
         causal_conv1d_fn(x, self.weight.val(), Some(self.bias.val()))
@@ -102,12 +107,19 @@ pub struct MultiHeadLayerNorm<B: Backend> {
 
 impl MultiHeadLayerNormConfig {
     pub fn init<B: Backend>(self, device: &B::Device) -> MultiHeadLayerNorm<B> {
-        let norm_weight = self
-            .initializer
-            .init([self.num_heads, self.value_size], device);
-        let norm_bias = self
-            .initializer
-            .init([self.num_heads, self.value_size], device);
+        let len = self.num_heads * self.value_size;
+        let norm_weight = self.initializer.init_with(
+            [self.num_heads, self.value_size],
+            Some(len),
+            Some(len),
+            device,
+        );
+        let norm_bias = self.initializer.init_with(
+            [self.num_heads, self.value_size],
+            Some(len),
+            Some(len),
+            device,
+        );
         MultiHeadLayerNorm {
             norm_weight,
             norm_bias,

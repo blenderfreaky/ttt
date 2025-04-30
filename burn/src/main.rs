@@ -17,8 +17,10 @@ fn compute<B: Backend>() {
         .with_token_size(2048)
         .with_value_size(2048)
         .with_swi_glu_mlp_intermediate_size(5504)
-        .with_num_hidden_layers(24)
-        .with_num_heads(32)
+        // .with_num_hidden_layers(24)
+        // .with_num_heads(32)
+        .with_num_hidden_layers(2)
+        .with_num_heads(2)
         .with_conv_before_ttt(true);
     let config = Arc::new(config);
 

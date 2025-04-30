@@ -49,18 +49,24 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
     type State = TTTLinearState<B>;
 
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
+        let len = global_config.num_heads * global_config.value_size;
         Self {
-            weight_init: config.initializer.init(
+            weight_init: config.initializer.init_with(
                 [
                     global_config.num_heads,
                     global_config.value_size,
                     global_config.value_size,
                 ],
+                Some(len),
+                Some(len),
                 device,
             ),
-            bias_init: config
-                .initializer
-                .init([global_config.num_heads, global_config.value_size], device),
+            bias_init: config.initializer.init_with(
+                [global_config.num_heads, global_config.value_size],
+                Some(len),
+                Some(len),
+                device,
+            ),
             layer_norm: MultiHeadLayerNormConfig::new(
                 global_config.num_heads,
                 global_config.value_size,
