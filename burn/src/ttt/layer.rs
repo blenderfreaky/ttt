@@ -40,6 +40,7 @@ pub struct TTTConfig {
     pub rope_theta: f32,
     /// The base learning rate for the TTT module.
     pub base_lr: f32,
+    #[config(default = 1e-6)]
     pub epsilon: f64,
     pub conv_before_ttt: bool,
     pub swi_glu_mlp_intermediate_size: usize,
@@ -111,7 +112,7 @@ impl TTTConfig {
     }
 }
 
-pub struct QKV<B: Backend> {
+pub struct Qkv<B: Backend> {
     /// [batch_size, num_heads, seq_len, value_size]
     pub xq: Tensor<B, 4>,
     /// [batch_size, num_heads, seq_len, value_size]
@@ -122,7 +123,7 @@ pub struct QKV<B: Backend> {
 
 pub struct TTTInputsInner<B: Backend> {
     /// The key, query and value vectors
-    pub qkv: QKV<B>,
+    pub qkv: Qkv<B>,
     /// Offset token index for each token
     /// `[seq_len]`
     pub token_idx: Tensor<B, 1>,
@@ -143,7 +144,7 @@ pub struct TTTInputs<B: Backend> {
 impl<B: Backend> TTT<B> {
     /// Parameters:
     /// - `x`: The input tensor of shape `[batch_size, seq_len, token_dim]`
-    fn get_qkvg(&self, x: Tensor<B, 3>, start_idx: usize) -> (QKV<B>, Tensor<B, 3>) {
+    fn get_qkvg(&self, x: Tensor<B, 3>, start_idx: usize) -> (Qkv<B>, Tensor<B, 3>) {
         let [_batch_size, _seq_len, _token_dim] = x.shape().dims();
 
         let proj = self.qkvg_proj.forward(x);
@@ -162,7 +163,7 @@ impl<B: Backend> TTT<B> {
         // // let (xq, xk) = self.apply_rotary_emb(xq, xk, position_ids);
         let [xq, xk] = [xq, xk].map(|x| self.rot_enc.apply(x, start_idx));
 
-        (QKV { xq, xk, xv }, gate)
+        (Qkv { xq, xk, xv }, gate)
     }
 
     /// Gets the learning rate for each head of each token

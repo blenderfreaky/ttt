@@ -1,7 +1,7 @@
 use burn::{
     config::Config,
     module::{Module, Param},
-    nn::{Initializer, Linear, LinearConfig, SwiGlu, SwiGluConfig},
+    nn::{Initializer, Linear, LinearConfig},
     prelude::Backend,
     tensor::{activation::silu, module::conv1d, ops::ConvOptions, Tensor},
 };
@@ -203,8 +203,6 @@ impl<B: Backend> SwiGluMlp<B> {
             .try_into()
             .unwrap();
 
-        let down_proj = self.down_proj.forward(silu(gate) * up);
-
-        down_proj
+        self.down_proj.forward(silu(gate) * up)
     }
 }

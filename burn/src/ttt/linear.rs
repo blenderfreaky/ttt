@@ -126,10 +126,9 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         }
 
         // Recalculate after the backprop step
-        let z_new = qkv.xq.matmul(weight_new.unsqueeze()) + bias_new.unsqueeze();
 
         // TODO: Reference implementation does layernorm outside, I think we should do in here rather
 
-        z_new
+        qkv.xq.matmul(weight_new.unsqueeze()) + bias_new.unsqueeze()
     }
 }
