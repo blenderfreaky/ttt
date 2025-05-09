@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use burn::{
     config::Config,
@@ -25,7 +25,30 @@ pub trait TTTInnerModel<B: Backend> {
 
     fn init_state(&self, batch_size: usize) -> Self::State;
 
-    fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4>;
+    fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
+        let mut output = inputs.qkv.xv.zeros_like();
+
+        let [batch_size, num_heads, seq_len, head_dim] = inputs.qkv.xv.shape().dims();
+
+        for i in 0..seq_len {
+            // We're changing state on each iteration
+            let z = self.forward_one(state, inputs.slice_seq(i..i + 1));
+            output = output.slice_assign(
+                [0..batch_size, 0..num_heads, i..i + 1, 0..head_dim],
+                z,
+            );
+        }
+
+        output
+    }
+
+    fn forward_one(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4>;
+
+    fn forward_mini_batch(
+        &self,
+        state: &mut Self::State,
+        inputs: TTTInputsInner<B>,
+    ) -> Tensor<B, 4>;
 }
 
 #[derive(Module, Debug)]
@@ -61,10 +84,10 @@ impl TTTConfig {
         };
 
         TTT {
-            qkvg_proj: linear(self.token_size, self.value_size * 3, false),
-            o_proj: linear(self.value_size, self.token_size, false),
-            q_conv: conv(self.value_size),
-            k_conv: conv(self.value_size),
+            qkvg_proj: linear(self.token_size, self.hidden_size * 3, false),
+            o_proj: linear(self.hidden_size, self.token_size, false),
+            q_conv: conv(self.hidden_size),
+            k_conv: conv(self.hidden_size),
             // One output per head
             learning_rate: linear(self.token_size, self.num_heads, true),
             // We store token_idx + bias as one, their impl splits it
@@ -74,7 +97,7 @@ impl TTTConfig {
             post_norm: LayerNormConfig::new(self.token_size)
                 .with_epsilon(1e-6)
                 .init(device),
-            rot_enc: RotaryEncodingConfig::new(self.max_sequence_len, self.token_size)
+            rot_enc: RotaryEncodingConfig::new(self.max_sequence_len, self.head_dim())
                 .with_theta(self.rope_theta)
                 .init(device),
             config: Ignored(self.clone()),
@@ -82,19 +105,42 @@ impl TTTConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct Qkv<B: Backend> {
-    /// [batch_size, num_heads, seq_len, value_size]
+    /// [batch_size, num_heads, seq_len, head_dim]
     pub xq: Tensor<B, 4>,
-    /// [batch_size, num_heads, seq_len, value_size]
+    /// [batch_size, num_heads, seq_len, head_dim]
     pub xk: Tensor<B, 4>,
-    /// [batch_size, num_heads, seq_len, value_size]
+    /// [batch_size, num_heads, seq_len, head_dim]
     pub xv: Tensor<B, 4>,
 }
 
+impl<B: Backend> Qkv<B> {
+    pub fn slice_seq(&self, range: Range<usize>) -> Self {
+        let [batch_size, num_heads, _, head_dim] = self.xq.shape().dims();
+        Self {
+            xq: self
+                .xq
+                .clone()
+                .slice([0..batch_size, 0..num_heads, range.clone(), 0..head_dim]),
+            xk: self
+                .xk
+                .clone()
+                .slice([0..batch_size, 0..num_heads, range.clone(), 0..head_dim]),
+            xv: self
+                .xv
+                .clone()
+                .slice([0..batch_size, 0..num_heads, range, 0..head_dim]),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct TTTInputsInner<B: Backend> {
     /// The key, query and value vectors
     pub qkv: Qkv<B>,
     /// Offset token index for each token
+    /// TODO: Not really offset, describe better
     /// `[seq_len]`
     pub token_idx: Tensor<B, 1>,
     /// Learning rate for each head of each token
@@ -102,6 +148,18 @@ pub struct TTTInputsInner<B: Backend> {
     pub lr: Tensor<B, 3>,
     /// Index of the first token in the sequence
     pub start_idx: usize,
+}
+
+impl<B: Backend> TTTInputsInner<B> {
+    pub fn slice_seq(&self, range: Range<usize>) -> Self {
+        let [batch_size, num_heads, _, _] = self.qkv.xq.shape().dims();
+        Self {
+            qkv: self.qkv.slice_seq(range.clone()),
+            token_idx: self.token_idx.clone().slice([range.clone()]),
+            lr: self.lr.clone().slice([0..batch_size, 0..num_heads, range]),
+            start_idx: self.start_idx,
+        }
+    }
 }
 
 // TODO: Better name
@@ -115,23 +173,24 @@ impl<B: Backend> TTT<B> {
     /// Parameters:
     /// - `x`: The input tensor of shape `[batch_size, seq_len, token_dim]`
     fn get_qkvg(&self, x: Tensor<B, 3>, start_idx: usize) -> (Qkv<B>, Tensor<B, 3>) {
-        let [_batch_size, _seq_len, _token_dim] = x.shape().dims();
+        let [batch_size, seq_len, _token_dim] = x.shape().dims();
 
         let proj = self.qkvg_proj.forward(x);
-        dbg!(proj.shape());
-        let [xqk, gate, xv] = proj.split(self.config.value_size, 2).try_into().unwrap();
+
+        let [xqk, gate, xv] = proj.split(self.config.hidden_size, 2).try_into().unwrap();
 
         let (xq, xk) = self.conv_qk(xqk);
 
         // [B, seq_len, num_heads*dim] -> [B, num_heads, seq_len, dim]
         let [xq, xk, xv] = [xq, xk, xv].map(|x| {
-            x.reshape([0, 0, self.config.num_heads as i32, -1])
-                .permute([0, 2, 1, 3])
+            x.reshape([
+                batch_size,
+                seq_len,
+                self.config.num_heads,
+                self.config.head_dim(),
+            ])
+            .permute([0, 2, 1, 3])
         });
-
-        dbg!(xq.shape());
-        dbg!(xk.shape());
-        dbg!(xv.shape());
 
         // // TODO: The source uses position_ids%mini_batch_size
         // //       We just use start_idx for now
@@ -151,7 +210,7 @@ impl<B: Backend> TTT<B> {
         // [B, seq_len, token_dim] -> [B, seq_len, num_heads]
         let lr = self.learning_rate.forward(x);
         // [B, seq_len, num_heads] -> [B, num_heads, seq_len]
-        (sigmoid(lr.permute([0, 2, 1])) + self.config.base_lr) / (self.config.value_size as f32)
+        (sigmoid(lr.permute([0, 2, 1])) + self.config.base_lr) / (self.config.hidden_size as f32)
     }
 
     fn conv_qk(&self, xqk: Tensor<B, 3>) -> (Tensor<B, 3>, Tensor<B, 3>) {
@@ -203,10 +262,7 @@ impl<B: Backend> TTT<B> {
 
         let inputs = self.get_inner_loop_inputs(x, start_idx);
 
-        debug_assert_eq!(
-            batch_size * self.config.num_heads,
-            inputs.inner.qkv.xq.shape().dims[0]
-        );
+        debug_assert_eq!(batch_size, inputs.inner.qkv.xq.shape().dims[0]);
 
         let out = inner.forward(state, inputs.inner);
         // TODO: Gate and norm
@@ -219,15 +275,11 @@ impl<B: Backend> TTT<B> {
             //     self.config.value_size,
             // ])
             .permute([0, 2, 1, 3])
-            .reshape([
-                batch_size,
-                seq_len,
-                self.config.num_heads * self.config.value_size,
-            ]);
+            .reshape([batch_size, seq_len, self.config.hidden_size]);
 
         // [..] -> [unchanged]
         let out = gelu(inputs.gate) * self.post_norm.forward(out);
-        // [.., num_heads*value_size] -> [.., num_heads*token_size] (equal if using reference impls config)
+        // [.., num_heads*head_dim] -> [.., num_heads*token_size] (equal if using reference impls config)
         self.o_proj.forward(out)
     }
 }

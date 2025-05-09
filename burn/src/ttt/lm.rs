@@ -26,14 +26,14 @@ impl TTTConfig {
         inner_config: &Arc<Inner::Config>,
         device: &B::Device,
     ) -> TTTModel<B, Inner> {
-        let embedding = EmbeddingConfig::new(self.vocab_size, self.value_size).init(device);
+        let embedding = EmbeddingConfig::new(self.vocab_size, self.hidden_size).init(device);
         let layers = (0..self.num_hidden_layers)
             .map(|idx| {
                 TTTBlockConfig::new(self.clone(), idx)
                     .init_with_inner(Inner::new(self, inner_config, device), device)
             })
             .collect();
-        let norm = RmsNormConfig::new(self.value_size).init(device);
+        let norm = RmsNormConfig::new(self.hidden_size).init(device);
 
         TTTModel {
             embedding,
@@ -74,13 +74,20 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
         hidden_states = self.norm.forward(residual);
 
         // TODO: This is suspect
-        hidden_states = self
+        // hidden_states = self
+        //     .embedding
+        //     .weight
+        //     .val()
+        //     .transpose()
+        //     .unsqueeze()
+        //     .matmul(hidden_states);
+        hidden_states = hidden_states.matmul(self
             .embedding
             .weight
             .val()
             .transpose()
             .unsqueeze()
-            .matmul(hidden_states);
+            );
 
         hidden_states
     }

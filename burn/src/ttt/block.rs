@@ -65,20 +65,20 @@ impl TTTBlockConfig {
             conv: if self.ttt_config.conv_before_ttt {
                 Some((
                     CausalConvConfig::new(
-                        self.ttt_config.value_size,
+                        self.ttt_config.hidden_size,
                         self.ttt_config.conv_kernel_size,
                     )
                     .init(device),
-                    RmsNormConfig::new(self.ttt_config.value_size).init(device),
+                    RmsNormConfig::new(self.ttt_config.hidden_size).init(device),
                 ))
             } else {
                 None
             },
-            seq_norm: RmsNormConfig::new(self.ttt_config.value_size).init(device),
-            ffn_norm: RmsNormConfig::new(self.ttt_config.value_size).init(device),
+            seq_norm: RmsNormConfig::new(self.ttt_config.hidden_size).init(device),
+            ffn_norm: RmsNormConfig::new(self.ttt_config.hidden_size).init(device),
             ttt: self.ttt_config.init_ttt_seq(device),
             swi_glu_mlp: SwiGluMlpConfig::new(
-                self.ttt_config.value_size,
+                self.ttt_config.hidden_size,
                 self.ttt_config.swi_glu_mlp_intermediate_size,
             )
             .init(device),

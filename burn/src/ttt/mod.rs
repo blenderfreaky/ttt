@@ -12,13 +12,10 @@ pub struct TTTConfig {
     /// The size of token vectors.
     #[config(default = 4096)]
     pub token_size: usize,
-    // /// The size of key and query vectors.
-    // /// In source it seems to be token_size/2
-    // key_size: usize,
-    /// The size of value vectors.
+    /// The size of key, value, etc. across all heads.
     /// In source it seems to be token_size
     #[config(default = 4096)]
-    pub value_size: usize,
+    pub hidden_size: usize,
     /// The number of TTT heads.
     #[config(default = 32)]
     pub num_heads: usize,
@@ -48,4 +45,10 @@ pub struct TTTConfig {
     pub num_hidden_layers: usize,
     #[config(default = 50277)]
     pub vocab_size: usize,
+}
+
+impl TTTConfig {
+    pub fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_heads
+    }
 }
