@@ -1,5 +1,4 @@
 use burn::{
-    backend::Wgpu,
     config::Config,
     module::{Module, Param},
     nn::{Initializer, Linear, LinearConfig},
@@ -157,7 +156,7 @@ impl<B: Backend> MultiHeadLayerNorm<B> {
     /// # Parameters
     /// - `x`: Input tensor of shape `[batch_size, num_heads, seq_len, value_size]`.
     /// - `target`: Target tensor of shape `[batch_size, num_heads, seq_len, value_size]`.
-    pub fn forward_and_grad(
+    pub fn forward_and_l2_grad(
         &self,
         x: Tensor<B, 4>,
         target: Tensor<B, 4>,

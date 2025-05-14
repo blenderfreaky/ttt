@@ -5,7 +5,7 @@ use burn::{
     module::{Ignored, Module, Param},
     nn::Initializer,
     prelude::Backend,
-    tensor::Tensor,
+    tensor::{s, Tensor},
 };
 
 use super::{
@@ -78,6 +78,10 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         }
     }
 
+    fn get_config(&self) -> &Arc<TTTConfig> {
+        &self.config.0
+    }
+
     fn init_state(&self, batch_size: usize) -> Self::State {
         let weight = self.weight_init.val().unsqueeze().repeat_dim(0, batch_size);
         let bias = self.bias_init.val().unsqueeze().repeat_dim(0, batch_size);
@@ -90,9 +94,6 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         }
     }
 
-    // x + LayerNorm(Linear(x))
-    //
-    // TODO:
     fn forward_one(
         &self,
         state: &mut TTTLinearState<B>,
@@ -111,43 +112,33 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         // Since we're using a residual connection, our target is the difference
         let target = qkv.xv - qkv.xk.clone();
 
-        dbg!(z.shape());
-        dbg!(target.shape());
-        let (_ln_out, dl_dz) = self.layer_norm.forward_and_grad(z, target);
+        let (_ln_out, dl_dz) = self.layer_norm.forward_and_l2_grad(z, target);
 
         let step = inputs.lr.unsqueeze_dim(3) * dl_dz;
 
-        dbg!(step.shape());
-        dbg!(qkv.xk.shape());
-
-        let weight_grad = qkv.xk.swap_dims(2, 3).matmul(step.clone());
+        let weight_grad = qkv.xk.transpose().matmul(step.clone());
         let bias_grad = step.squeeze(2);
 
         // It seems we only accumulate gradients, and don't update the weights per-step, even outside of prefill
-        state.weight_grad.inplace(|x| x.add(weight_grad.clone()));
-        state.bias_grad.inplace(|x| x.add(bias_grad.clone()));
+        state.weight_grad = state.weight_grad.clone() + weight_grad;
+        state.bias_grad = state.bias_grad.clone() + bias_grad;
 
-        let weight_new = state.weight.clone() - inputs.token_idx.clone().unsqueeze() * weight_grad;
+        let weight_new =
+            state.weight.clone() - inputs.token_idx.clone().unsqueeze() * state.weight_grad.clone();
         let bias_new =
-            state.bias.clone() - (inputs.token_idx.clone().unsqueeze() * bias_grad);
-
-        dbg!(state.weight.shape());
-        dbg!(state.bias.shape());
-        dbg!(weight_new.shape());
-        dbg!(bias_new.shape());
+            state.bias.clone() - (inputs.token_idx.clone().unsqueeze() * state.bias_grad.clone());
 
         if (inputs.start_idx + 1) % self.config.mini_batch_size == 0 {
             state.weight = weight_new.clone();
             state.bias = bias_new.clone();
+
             // TODO: This is rather hacky
             state.weight_grad = state.weight_grad.zeros_like();
             state.bias_grad = state.bias_grad.zeros_like();
         }
 
         // Recalculate after the backprop step
-
         // TODO: Reference implementation does layernorm outside, I think we should do in here rather
-
         qkv.xq.matmul(weight_new) + bias_new.unsqueeze_dim(2)
     }
 
@@ -165,10 +156,26 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         let z = qkv.xk.clone().matmul(state.weight.clone().unsqueeze())
             + state.bias.clone().unsqueeze();
 
-        let l2_target = qkv.xv.clone() - qkv.xk.clone();
+        let target = qkv.xv.clone() - qkv.xk.clone();
 
-        let dl_dz = todo!();
+        let (_ln_out, dl_dz) = self.layer_norm.forward_and_l2_grad(z, target);
 
-        todo!();
+        // [batch_size, num_heads, mini_batch_size, mini_batch_size]
+        let eta = inputs.token_idx.reshape([1i32, 1, -1, 1]) * inputs.lr.unsqueeze_dim(2);
+        dbg!(eta.shape());
+        let eta_last = eta.clone().slice(s![.., .., -1.., ..]);
+
+        let bias_new =
+            state.bias.clone().unsqueeze_dim(2) - eta.clone().tril(0).matmul(dl_dz.clone());
+
+        let attn = qkv.xq.clone().matmul(qkv.xk.clone().transpose()).tril(0);
+
+        let z = qkv.xq.matmul(state.weight.clone()) - (eta.clone() * attn).matmul(dl_dz.clone())
+            + bias_new.clone();
+
+        state.weight = state.weight.clone() - eta_last * qkv.xk.matmul(dl_dz);
+        state.bias = bias_new.squeeze(2);
+
+        z
     }
 }

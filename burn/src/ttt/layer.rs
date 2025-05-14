@@ -25,18 +25,39 @@ pub trait TTTInnerModel<B: Backend> {
 
     fn init_state(&self, batch_size: usize) -> Self::State;
 
+    fn get_config(&self) -> &Arc<TTTConfig>;
+
     fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
         let mut output = inputs.qkv.xv.zeros_like();
 
         let [batch_size, num_heads, seq_len, head_dim] = inputs.qkv.xv.shape().dims();
 
-        for i in 0..seq_len {
+        let mini_batch_size = self.get_config().mini_batch_size;
+        let num_mini_batch = seq_len / mini_batch_size;
+
+        for i in 0..num_mini_batch {
+            let start_idx = i * mini_batch_size;
             // We're changing state on each iteration
-            let z = self.forward_one(state, inputs.slice_seq(i..i + 1));
+            let z = self.forward_mini_batch(
+                state,
+                inputs.slice_seq(start_idx..start_idx + mini_batch_size),
+            );
             output = output.slice_assign(
-                [0..batch_size, 0..num_heads, i..i + 1, 0..head_dim],
+                [
+                    0..batch_size,
+                    0..num_heads,
+                    start_idx..start_idx + mini_batch_size,
+                    0..head_dim,
+                ],
                 z,
             );
+        }
+
+        let last_mini_batch_end = num_mini_batch * mini_batch_size;
+
+        for i in last_mini_batch_end..seq_len {
+            let z = self.forward_one(state, inputs.slice_seq(i..i + 1));
+            output = output.slice_assign([0..batch_size, 0..num_heads, i..i + 1, 0..head_dim], z);
         }
 
         output
@@ -141,11 +162,14 @@ pub struct TTTInputsInner<B: Backend> {
     pub qkv: Qkv<B>,
     /// Offset token index for each token
     /// TODO: Not really offset, describe better
-    /// `[seq_len]`
+    /// `[mini_batch_size]`
     pub token_idx: Tensor<B, 1>,
     /// Learning rate for each head of each token
     /// `[batch_size, num_heads, seq_len]`
     pub lr: Tensor<B, 3>,
+    // /// TODO: Describe
+    // /// `[batch_size, num_heads, mini_batch_size]`
+    // pub eta: Tensor<B, 3>,
     /// Index of the first token in the sequence
     pub start_idx: usize,
 }
@@ -156,8 +180,8 @@ impl<B: Backend> TTTInputsInner<B> {
         Self {
             qkv: self.qkv.slice_seq(range.clone()),
             token_idx: self.token_idx.clone().slice([range.clone()]),
+            start_idx: range.start,
             lr: self.lr.clone().slice([0..batch_size, 0..num_heads, range]),
-            start_idx: self.start_idx,
         }
     }
 }
