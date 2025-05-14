@@ -5,9 +5,11 @@ edition = "2021"
 
 [dependencies]
 burn = { version = "0.17", features = ["wgpu", "train"] }
-num-traits = "0.2.19"
+burn-import = "0.17"
 
 tokenizers = { version = "0.21", features = ["http"] }
 
 # Explicitly enable the rc feature of serde
 serde = { version = "1.0", features = ["rc"] }
+
+num-traits = "0.2"
