@@ -20,6 +20,7 @@
           rocm-core
           rocm-device-libs
           rocm-runtime
+          hip-common
         ];
         buildInputs = [pkgs.makeWrapper];
         postBuild = ''
@@ -41,6 +42,7 @@
           clang
           libclang
           libclang.lib
+          just
         ]
         ++ builtins.attrValues (ownPackages pkgs);
   in {
@@ -54,11 +56,14 @@
         packages = envPackages pkgs;
         shellHook = ''
           # ROCm PR seems to set these to '-parallel-jobs=1' somehow, which breaks builds. I don't know why.
-          export CFLAGS=
-          export CXXFLAGS=
+          # export CFLAGS=$CFLAGS -D__HIP_PLATFORM_AMD__
+          # export CXXFLAGS=$CXXFLAGS -D__HIP_PLATFORM_AMD__
           export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath (with pkgs; [
             vulkan-loader
-          ])}"'';
+            (rocm pkgs)
+          ])}
+          echo AMONGUS
+          "'';
       };
     });
 

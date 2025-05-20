@@ -8,13 +8,13 @@
 }:
 stdenv.mkDerivation (finalAttrs: {
   pname = "kokkos-kernels";
-  version = "4.5.01";
+  version = "4.6.01";
 
   src = fetchFromGitHub {
     owner = "kokkos";
     repo = "kokkos-kernels";
     rev = finalAttrs.version;
-    hash = "sha256-GPcRLURL8SnuXXAAj2m4a2rb6O0Unze4xk1oZxrT+Zw=";
+    hash = "sha256-CPdLYRVUlkTIsEvU0Ry5KDKesx7UGAuxLciqngrnIbw=";
   };
 
   nativeBuildInputs = [
