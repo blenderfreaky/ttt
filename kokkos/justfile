@@ -3,7 +3,7 @@ default: build
 
 # Configure the project with CMake and Kokkos HIP support
 configure:
-    cmake -B build -S . -DKokkos_ENABLE_HIP=ON
+    cmake -B build -S .
 
 # Build the project
 build: configure

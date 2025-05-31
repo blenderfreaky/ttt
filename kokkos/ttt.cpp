@@ -18,7 +18,8 @@
 
 #include <cstdio>
 #include <iostream>
-#include <HIP/Kokkos_HIP.hpp>
+#include <cstdlib>
+#include <cstring>
 
 struct CountFunctor {
   KOKKOS_FUNCTION void operator()(const long i, long& lcount) const {

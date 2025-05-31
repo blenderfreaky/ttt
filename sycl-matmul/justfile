@@ -1,0 +1,36 @@
+# Build commands for SYCL matmul project
+
+# Build directory
+build_dir := "build"
+
+# Default recipe
+default: build-release run
+
+# Setup build directory
+setup:
+    rm -rf {{build_dir}}
+    cmake -B {{build_dir}} -DCMAKE_BUILD_TYPE=Release .
+
+# Build the project
+build: setup
+    cmake --build {{build_dir}} -j
+
+# Run the executable
+run: build
+    ./{{build_dir}}/matmul
+
+# Clean build artifacts
+clean:
+    rm -rf {{build_dir}}
+
+# Build and run with debug
+build-debug:
+    rm -rf {{build_dir}}
+    cmake -B {{build_dir}} -DCMAKE_BUILD_TYPE=Debug .
+    cmake --build {{build_dir}} -j
+
+# Build and run with release
+build-release:
+    rm -rf {{build_dir}}
+    cmake -B {{build_dir}} -DCMAKE_BUILD_TYPE=Release .
+    cmake --build {{build_dir}} -j
