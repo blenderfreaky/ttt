@@ -9,28 +9,12 @@
   outputs = { self, nixpkgs, utils }:
     utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs {
+          inherit system;
+          config.allowUnfree = true;
+        };
       in
       {
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [
-            cmake
-            ninja
-            gcc12
-            just
-          ];
-          buildInputs = with pkgs; [
-            (kokkos.override {
-              rocmSupport = true;
-              openmpSupport = true;
-              enableShared = true;
-            })
-          ];
-          shellHook = ''
-            echo "Kokkos MatMul Development Shell"
-          '';
-        };
-
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "kokkos-matmul";
           version = "0.1.0";
@@ -39,31 +23,62 @@
           nativeBuildInputs = with pkgs; [
             cmake
             ninja
-            gcc12
+            rocmPackages.hipcc
+            rocmPackages.rocm-cmake
           ];
 
           buildInputs = with pkgs; [
-            (kokkos.override {
-              rocmSupport = true;
-              openmpSupport = true;
-              enableShared = true;
-            })
+            kokkos
+            rocmPackages.clr
+            rocmPackages.rocthrust
+            rocmPackages.rocm-runtime
           ];
 
-          configurePhase = ''
-            cmake -B build -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DKokkos_ENABLE_HIP=ON \
-              -DKokkos_ARCH_VEGA90A=ON
-          '';
+          cmakeFlags = [
+            "-DCMAKE_BUILD_TYPE=Release"
+            "-DCMAKE_CXX_COMPILER=${pkgs.rocmPackages.hipcc}/bin/hipcc"
+            "-DKokkos_ENABLE_HIP=ON"
+            "-DKokkos_ENABLE_OPENMP=ON"
+            "-DKokkos_ARCH_VEGA906=ON"
+            "-DCMAKE_PREFIX_PATH=${pkgs.rocmPackages.rocthrust}/include"
+          ];
 
-          buildPhase = ''
-            cmake --build build -v
+          preConfigure = ''
+            export ROCM_PATH=${pkgs.rocmPackages.clr}
+            export HIP_PLATFORM=amd
+            export ROCTHRUST_PATH=${pkgs.rocmPackages.rocthrust}
           '';
 
           installPhase = ''
             mkdir -p $out/bin
-            cp build/matmul $out/bin/
+            cp matmul $out/bin/
+          '';
+        };
+
+        devShells.default = pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [
+            cmake
+            ninja
+            gcc12
+            rocmPackages.clr
+            rocmPackages.hipcc
+            rocmPackages.rocm-cmake
+            rocmPackages.rocthrust
+            just
+            stdenv
+          ];
+
+          buildInputs = with pkgs; [
+            kokkos
+            rocmPackages.rocm-runtime
+          ];
+
+          shellHook = ''
+            export CXX=${pkgs.rocmPackages.hipcc}/bin/hipcc
+            export ROCM_PATH=${pkgs.rocmPackages.clr}
+            export HIP_PLATFORM=amd
+            export ROCTHRUST_PATH=${pkgs.rocmPackages.rocthrust}
+            echo "Kokkos MatMul Development Shell"
           '';
         };
       });

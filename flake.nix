@@ -1,7 +1,6 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    #nixpkgs.url = "github:LunNova/nixpkgs/rocm-update";
   };
 
   outputs = {
@@ -43,6 +42,9 @@
           libclang
           libclang.lib
           just
+          llvmPackages.openmp
+          gcc
+          (adaptivecpp.override { llvmPackages_18 = llvmPackages; })
         ]
         ++ builtins.attrValues (ownPackages pkgs);
   in {
