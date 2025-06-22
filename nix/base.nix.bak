@@ -1,0 +1,152 @@
+{
+  lib,
+  fetchurl,
+  stdenv,
+  bash,
+  ncurses,
+  patchelf,
+  autoPatchelfHook,
+  qt6Packages,
+  strace,
+  fakeroot,
+  shadow,
+  buildFHSEnv,
+}: let
+  _major_ver = "2025";
+  _minor_ver = "0";
+  _patch_ver = "1";
+  pkgver = "${_major_ver}.${_minor_ver}.${_patch_ver}";
+  pkgver_base = "${pkgver}.46";
+  _urlver_base = "dfc4a434-838c-4450-a6fe-2fa903b75aa7";
+    fhs = (buildFHSEnv {
+      name = "intel-installer-fake-env";
+      targetPkgs = pkgs:
+        with pkgs; [
+          bash
+          ncurses
+          patchelf
+          autoPatchelfHook
+          qt6Packages.qtbase
+          qt6Packages.qt5compat
+          stdenv.cc.cc.lib
+          strace
+          fakeroot
+          shadow
+          buildFHSEnv
+        ];
+
+      runScript = "bash";
+    }).env;
+in
+  stdenv.mkDerivation rec {
+    pname = "intel-oneapi-basekit";
+    version = pkgver;
+
+    src = fetchurl {
+      url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/${_urlver_base}/intel-oneapi-base-toolkit-${pkgver_base}_offline.sh";
+      hash = "sha256-CUp4crvbHB4dDmXaVTSX3oGRMrKYsN32JLRQA82oKEQ=";
+    };
+
+    # nativeBuildInputs: Tools and libraries needed ONLY during the build.
+    # - patchelf: To patch the installer.
+    # - autoPatchelfHook: To patch the final output files.
+    # - qtPackages: Libraries needed by the installer's 'bootstrapper' binary.
+    nativeBuildInputs = [
+      bash
+      ncurses
+      patchelf
+      autoPatchelfHook
+      qt6Packages.qtbase
+      qt6Packages.qt5compat
+      stdenv.cc.cc.lib
+      strace
+      fakeroot
+      shadow
+      buildFHSEnv
+    ];
+
+    dontWrapQtApps = true;
+
+    # buildInputs: Libraries needed by the FINAL package at runtime.
+    # The OneAPI tools will need the standard C/C++ libraries. autoPatchelfHook
+    # is smart enough to add these automatically from stdenv, so we can
+    # often leave this empty. If you find a missing library in the final
+    # package, you would add it here.
+    # buildInputs = [ ];
+
+    unpackPhase = ''
+      sh $src \
+        --extract-only --extract-folder . \
+        --remove-extracted-files no --log ./extract.log
+    '';
+
+    # Set sourceRoot for convenience, so we don't have to use hardcoded paths.
+    sourceRoot = "intel-oneapi-base-toolkit-${pkgver_base}_offline";
+
+
+    installPhase = ''
+      runHook preInstall
+      echo $src
+
+      mkdir -p $out/opt/intel/oneapi
+      mkdir -p ./opt/intel/oneapi
+
+      echo ======
+      ls
+      echo ======
+
+      # We need to patch the interpreter of the pre-built installer binary.
+      patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" \
+        ./bootstrapper
+
+      echo $out
+      users
+      whoami
+
+
+      #set -o xtrace
+
+      #echo "testuser:x:1000:1000::/tmp:/bin/sh" > passwd
+      #echo "testgroup:x:1000:" > group
+
+       # groupadd -g 1000 myuser
+      #  useradd -u 1000 -g 1000 myuser
+      #useradd myuser
+
+      # Run a command as the "testuser"
+      # fakeroot -u 1000 -g 1000 --
+
+      mkdir ./download
+      mkdir ./log
+      mkdir ./cache
+
+      # Now, run the installer. We use LD_LIBRARY_PATH to tell 'bootstrapper'
+      # where to find the Qt libraries from our nativeBuildInputs. This is cleaner
+      # than patching an RPATH into a temporary installer.
+      LD_LIBRARY_PATH="${lib.makeLibraryPath nativeBuildInputs}" ./install.sh \
+        --silent --eula accept \
+        --components all \
+        --download-cache ./cache \
+        --download-dir ./download \
+        --log-dir ./log \
+        --install-dir "$out/opt/intel/oneapi" \
+        --ignore-errors
+        #--install-dir "./opt/intel/oneapi"
+
+      popd
+
+      runHook postInstall
+    '';
+
+    # After installPhase, autoPatchelfHook will run. It will scan everything
+    # in $out/opt/intel/oneapi, find all the ELF binaries and libraries,
+    # and automatically patch them to use the correct Nix-provided glibc,
+    # libstdc++, etc.
+
+    meta = {
+      description = "Intel oneAPI Base Toolkit";
+      homepage = "https://software.intel.com/content/www/us/en/develop/tools/oneapi.html";
+      license = lib.licenses.unfree;
+      platforms = ["x86_64-linux"];
+    };
+  }
