@@ -44,7 +44,7 @@
           just
           llvmPackages.openmp
           gcc
-          (adaptivecpp.override { llvmPackages_18 = llvmPackages; })
+          (adaptivecpp.override {llvmPackages_18 = llvmPackages;})
         ]
         ++ builtins.attrValues (ownPackages pkgs);
   in {

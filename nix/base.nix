@@ -5,6 +5,49 @@
   lib,
   fetchurl,
   writeShellScript,
+  alsa-lib,
+  atk,
+  at-spi2-atk,
+  at-spi2-core,
+  bzip2,
+  cairo,
+  libxcrypt,
+  cudaPackages,
+  cups,
+  dbus,
+  libdrm,
+  libepoxy,
+  elfutils,
+  expat,
+  libffi_3_2_1,
+  fontconfig,
+  freetype,
+  mesa,
+  gdbm,
+  gdk-pixbuf,
+  gtk2,
+  glib,
+  gtk3,
+  hwloc,
+  rdma-core,
+  ncurses5,
+  nspr,
+  nss,
+  numactl,
+  opencl-clang,
+  pango,
+  libpsm2,
+  sqlite,
+  intel-compute-runtime,
+  ucx,
+  systemd,
+  libuuid,
+  xorg,
+  libxkbcommon,
+  level-zero,
+  zlib,
+  libxcrypt-legacy,
+  autoAddDriverRunpath,
 }: let
   version = "2025.1.3.7";
 in
@@ -24,7 +67,59 @@ in
     '';
     #dontUnpack = true;
 
-    nativeBuildInputs = [autoPatchelfHook];
+    nativeBuildInputs = [autoPatchelfHook autoAddDriverRunpath];
+
+    buildInputs = [
+      alsa-lib
+      atk
+      at-spi2-atk
+      at-spi2-core
+      bzip2
+      cairo
+      libxcrypt
+      cudaPackages.cudatoolkit
+      cups
+      dbus
+      libdrm
+      libepoxy
+      elfutils
+      expat
+      libffi_3_2_1
+      fontconfig
+      freetype
+      mesa
+      gdbm
+      gdk-pixbuf
+      gtk2
+      glib
+      gtk3
+      hwloc.lib
+      rdma-core
+      ncurses5
+      nspr
+      nss
+      numactl
+      opencl-clang
+      pango
+      libpsm2
+      sqlite
+      intel-compute-runtime
+      ucx
+      systemd
+      libuuid
+      xorg.libX11
+      xorg.libxcb
+      xorg.libXcomposite
+      xorg.libXdamage
+      xorg.libXext
+      xorg.libXfixes
+      libxkbcommon
+      libxcrypt-legacy
+      xorg.libXrandr
+      xorg.libXxf86vm
+      level-zero
+      zlib
+    ];
 
     installPhase = let
       fhs = buildFHSEnv rec {
@@ -68,9 +163,6 @@ in
 
         mkdir log
 
-        touch $OUT/bye
-        echo i am going to touches you
-
         exec sh ./install.sh \
           --silent \
           --eula accept \
@@ -82,19 +174,9 @@ in
     in ''
       runHook preInstall
 
-      #mkdir -p ./out
-      #oneapi-installer-fhs-env --install-dir ./out
-
       export OUT=$out/opt/intel/oneapi
       mkdir -p $OUT
-      touch $OUT/hi
       ${fhs}/bin/oneapi-installer-fhs-env -- ${install}
-
-      #export DIR=$(mktemp -d)
-      #oneapi-installer-fhs-env --install-dir $DIR
-
-      #mkdir -p $out/opt/intel/oneapi
-      #cp -r $OUT_DIR/* $out/opt/intel/oneapi
 
       runHook postInstall
     '';
