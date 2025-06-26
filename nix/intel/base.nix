@@ -21,7 +21,7 @@
   fontconfig,
   freetype,
   mesa,
-  libgdbm_legacy
+  libgdbm-legacy,
   gdk-pixbuf,
   gtk2,
   glib,
@@ -84,7 +84,7 @@ in
         fontconfig
         freetype
         mesa
-        libgdbm_legacy
+        libgdbm-legacy
         gdk-pixbuf
         gtk2
         glib
