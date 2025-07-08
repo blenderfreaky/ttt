@@ -53,8 +53,8 @@
   gcc,
 }:
 let
-  version = "2025.1.3.10";
-  uuid = "0ed71121-bd80-4ba7-ab54-805138bf06a7";
+  version = "2025.2.0.575";
+  uuid = "e974de81-57b7-4ac1-b039-0512f8df974e";
 in
 (callPackage ./intel-installer-common.nix { }).overrideAttrs {
   pname = "intel-oneapi-hpckit";
@@ -62,7 +62,7 @@ in
 
   src = fetchurl {
     url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/${uuid}/intel-oneapi-hpc-toolkit-${version}_offline.sh";
-    hash = "sha256-k4FiJqAKkUgy2mhkXu7pE/ojiRU3Lrw5hG6oymom8jg=";
+    hash = "sha256-xu00FBbRgyVE7kWOI29Kt2l58ZTs7E90vYMTV9d7LX4=";
   };
 
   buildInputs =

@@ -1,5 +1,5 @@
 #!/usr/bin/env nix-shell
-#!nix-shell -i bash -p ripgrep
+#!nix-shell -i bash -p ripgrep sd
 set -euo pipefail
 
 echo "Updating Intel OneAPI Toolkit..."
@@ -40,22 +40,22 @@ echo "HPCKIT_UUID=$HPCKIT_UUID"
 echo "HPCKIT_VERSION=$HPCKIT_VERSION"
 
 BASEKIT_SHA=$(nix-prefetch-url --type sha256 "$BASEKIT_URL")
-BASEKIT_SRI_SHA=$(nix hash-to-sri "$BASEKIT_SHA")
+BASEKIT_SRI_SHA=$(nix hash convert --hash-algo sha256 "$BASEKIT_SHA")
 
 HPCKIT_SHA=$(nix-prefetch-url --type sha256 "$HPCKIT_URL")
-HPCKIT_SRI_SHA=$(nix hash-to-sri "$HPCKIT_SHA")
+HPCKIT_SRI_SHA=$(nix hash convert --hash-algo sha256 "$HPCKIT_SHA")
 
 echo "BASEKIT_SHA=$BASEKIT_SRI_SHA"
 echo "HPCKIT_SHA=$HPCKIT_SRI_SHA"
 
 TARGET_FILE="./base.nix"
 
-sd '(?<=^\s*version\s*=\s*)".*?"' "\"$BASEKIT_VERSION\"" $TARGET_FILE
-sd '(?<=^\s*uuid\s*=\s*)".*?"' "\"$BASEKIT_UUID\"" $TARGET_FILE
-sd '(?<=^\s*hash\s*=\s*)".*?"' "\"$BASEKIT_SRI_SHA\"" $TARGET_FILE
+sd '(^\s*version\s*=\s*)".*?"' "\$1\"$BASEKIT_VERSION\"" $TARGET_FILE
+sd '(^\s*uuid\s*=\s*)".*?"' "\$1\"$BASEKIT_UUID\"" $TARGET_FILE
+sd '(^\s*hash\s*=\s*)".*?"' "\$1\"$BASEKIT_SRI_SHA\"" $TARGET_FILE
 
 TARGET_FILE="./hpc.nix"
 
-sd '(?<=^\s*version\s*=\s*)".*?"' "\"$HPCKIT_VERSION\"" $TARGET_FILE
-sd '(?<=^\s*uuid\s*=\s*)".*?"' "\"$HPCKIT_UUID\"" $TARGET_FILE
-sd '(?<=^\s*hash\s*=\s*)".*?"' "\"$HPCKIT_SRI_SHA\"" $TARGET_FILE
+sd '(^\s*version\s*=\s*)".*?"' "\$1\"$HPCKIT_VERSION\"" $TARGET_FILE
+sd '(^\s*uuid\s*=\s*)".*?"' "\$1\"$HPCKIT_UUID\"" $TARGET_FILE
+sd '(^\s*hash\s*=\s*)".*?"' "\$1\"$HPCKIT_SRI_SHA\"" $TARGET_FILE
