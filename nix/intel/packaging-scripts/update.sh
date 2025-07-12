@@ -48,13 +48,14 @@ HPCKIT_SRI_SHA=$(nix hash convert --hash-algo sha256 "$HPCKIT_SHA")
 echo "BASEKIT_SHA=$BASEKIT_SRI_SHA"
 echo "HPCKIT_SHA=$HPCKIT_SRI_SHA"
 
-TARGET_FILE="./base.nix"
+# TODO: Change for nixpkgs packaging
+TARGET_FILE="../base.nix"
 
 sd '(^\s*version\s*=\s*)".*?"' "\$1\"$BASEKIT_VERSION\"" $TARGET_FILE
 sd '(^\s*uuid\s*=\s*)".*?"' "\$1\"$BASEKIT_UUID\"" $TARGET_FILE
 sd '(^\s*hash\s*=\s*)".*?"' "\$1\"$BASEKIT_SRI_SHA\"" $TARGET_FILE
 
-TARGET_FILE="./hpc.nix"
+TARGET_FILE="../hpc.nix"
 
 sd '(^\s*version\s*=\s*)".*?"' "\$1\"$HPCKIT_VERSION\"" $TARGET_FILE
 sd '(^\s*uuid\s*=\s*)".*?"' "\$1\"$HPCKIT_UUID\"" $TARGET_FILE

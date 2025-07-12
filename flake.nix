@@ -62,6 +62,8 @@
         ++ [
           # Additional packages for SYCL development
           pkgs.gdb
+          pkgs.stdenv
+          pkgs.boost
           pkgs.valgrind
           pkgs.opencl-headers
           pkgs.clinfo
@@ -100,7 +102,6 @@
           in
           pkgs.mkShell {
             packages = syclEnvPackages pkgs ++ [
-              intelPkgs.intel-oneapi-basekit
               intelPkgs.intel-oneapi-hpckit
             ];
             shellHook = ''
@@ -115,15 +116,10 @@
               }"
 
               # Intel OneAPI setup
-              if [ -f "${intelPkgs.intel-oneapi-basekit}/opt/intel/oneapi/setvars.sh" ]; then
-                source ${intelPkgs.intel-oneapi-basekit}/opt/intel/oneapi/setvars.sh --force
-              else
-                echo "Intel OneAPI basekit not found"
-              fi
               if [ -f "${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh" ]; then
                 source ${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh --force
               else
-                echo "Intel OneAPI hpckit not found"
+                echo "Intel OneAPI not found"
               fi
 
               echo "SYCL Intel OneAPI Development Environment"
@@ -172,7 +168,6 @@
           in
           pkgs.mkShell {
             packages = syclEnvPackages pkgs ++ [
-              intelPkgs.intel-oneapi-basekit
               intelPkgs.intel-oneapi-hpckit
             ];
             shellHook = ''
@@ -187,11 +182,10 @@
               }"
 
               # Intel OneAPI setup
-              if [ -f "${intelPkgs.intel-oneapi-basekit}/setvars.sh" ]; then
-                source ${intelPkgs.intel-oneapi-basekit}/setvars.sh --force
-              fi
-              if [ -f "${intelPkgs.intel-oneapi-hpckit}/setvars.sh" ]; then
-                source ${intelPkgs.intel-oneapi-hpckit}/setvars.sh --force
+              if [ -f "${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh" ]; then
+                source ${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh --force
+              else
+                echo "Intel OneAPI not found"
               fi
 
               # AdaptiveCpp setup
