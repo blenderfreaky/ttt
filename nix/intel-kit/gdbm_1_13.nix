@@ -4,10 +4,12 @@
   buildPlatform,
   fetchurl,
 }:
-
-stdenv.mkDerivation rec {
+let
   pname = "gdbm";
   version = "1.13";
+in
+stdenv.mkDerivation {
+  inherit pname version;
 
   src = fetchurl {
     url = "mirror://gnu/gdbm/${pname}-${version}.tar.gz";

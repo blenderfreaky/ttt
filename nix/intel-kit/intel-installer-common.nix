@@ -1,8 +1,15 @@
 {
+  buildFHSEnv,
   stdenv,
   lib,
+  writeShellScript,
   fetchurl,
-  callPackage,
+  autoPatchelfHook,
+
+  config,
+  cudaSupport ? config.cudaSupport,
+  cudaPackages,
+  autoAddDriverRunpath,
 
   # The components to install
   # Note that because the offline installer is used, all components will still
@@ -45,22 +52,27 @@
   xorg, # .libX11, .libxcb, .libXcomposite, .libXdamage, .libXext, .libXfixes, .libXrandr
   libxkbcommon,
 
-  # VTune-only dependencies
-  elfutils,
-  gtk3,
-  opencl-clang_14,
-  xdg-utils,
-
   # Advisor-only dependencies
   fontconfig,
   freetype,
   gdk-pixbuf,
   gtk2,
-# xorg.libXxf86vm
+  # xorg.libXxf86vm
+
+  # VTune-only dependencies
+  elfutils,
+  gtk3,
+  opencl-clang_14,
+  xdg-utils,
+}:
+{
+  # "base" or "hpc"
+  kit,
+  version,
+  uuid,
+  sha256,
 }:
 let
-  version = "2025.2.0.592";
-  uuid = "bd1d0273-a931-4f7e-ab76-6a2a67d646c7";
   components_all = components == "all";
   components_default =
     components == "default" || (lib.isList components && lib.elem "default" components);
@@ -91,17 +103,33 @@ let
     ui = components_used.vtune || components_used.advisor;
   };
 in
-(callPackage ./intel-installer-common.nix { }).overrideAttrs {
-  pname = "intel-oneapi-basekit";
+stdenv.mkDerivation (finalAttrs: {
+  pname = "intel-oneapi-${kit}kit";
   inherit version;
 
   src = fetchurl {
     url = "https://registrationcenter-download.intel.com/akdlm/IRC_NAS/${uuid}/intel-oneapi-base-toolkit-${version}_offline.sh";
-    hash = "sha256-XPYLFTjtt02/ihxvDziGmCY52rcJu3V2PxelrO+6xTA=";
+    inherit sha256;
   };
 
-  # This is read in the build phase in the FHSEnv
-  COMPONENTS = "${components_string}";
+  unpackPhase = ''
+    runHook preUnpack
+
+    sh $src \
+      --extract-only --extract-folder . \
+      --remove-extracted-files no --log ./extract.log
+
+    runHook postUnpack
+  '';
+
+  #nativeBuildInputs = [autoPatchelfHook autoAddDriverRunpath];
+  nativeBuildInputs =
+    [ autoPatchelfHook ]
+    ++ lib.optionals cudaSupport [
+      autoAddDriverRunpath
+      cudaPackages.cuda_nvcc
+      (lib.getDev cudaPackages.cuda_cudart)
+    ];
 
   buildInputs =
     [
@@ -153,11 +181,101 @@ in
       xorg.libXxf86vm
     ];
 
+  installPhase =
+    let
+      # The installer will try to act as root if we don't wrap it like this.
+      # fakeroot did not work for me.
+      fhs = buildFHSEnv {
+        name = "oneapi-installer-fhs-env";
+
+        targetPkgs =
+          pkgs:
+          (with pkgs; [
+            patchelf
+            stdenv.cc.cc.lib
+          ]);
+
+        nativeBuildInputs = [
+          autoPatchelfHook
+        ];
+
+        # The installer also links to qt6 and other libraries,
+        # but these are only used for the GUI.
+        # Notably, these are vendored in $src/lib.
+        # The installer runs fine with just the C++ library however.
+        buildInputs = [
+          stdenv.cc.cc.lib
+        ];
+
+        # This allows the installer to actually write to the $out directory.
+        # Otherwise you'd get permission denied errors.
+        extraBwrapArgs = [
+          "--bind"
+          "$out"
+          "$out"
+        ];
+      };
+      install = writeShellScript "intel-oneapi-basekit-installer" ''
+        cd intel*
+
+        patchelf --set-interpreter "$(cat $NIX_CC/nix-support/dynamic-linker)" \
+          ./bootstrapper
+
+        mkdir log
+
+        echo "Installing the following components: $COMPONENTS"
+
+        exec sh ./install.sh \
+          --silent \
+          --eula accept \
+          --components "$COMPONENTS" \
+          --log-dir ./log \
+          --ignore-errors \
+          --install-dir $OUT \
+      '';
+    in
+    ''
+      runHook preInstall
+
+      export OUT=$out/opt/intel/oneapi
+      export COMPONENTS=${components_string}
+      mkdir -p $OUT
+      ${fhs}/bin/oneapi-installer-fhs-env -- ${install}
+
+      runHook postInstall
+    '';
+
+  passthru = {
+    updateScript = ./packaging-scripts/update.sh;
+    withComponents =
+      components:
+      finalAttrs.finalPackage.override {
+        inherit components;
+      };
+  };
+
   autoPatchelfIgnoreMissingDeps = [
     "libcuda.so.1"
   ];
-  meta = {
-    description = "Intel oneAPI HPC Toolkit";
-    homepage = "https://www.intel.com/content/www/us/en/developer/tools/oneapi/hpc-toolkit.html";
-  };
-}
+
+  meta =
+    {
+      license = lib.licenses.unfree;
+      platforms = lib.platforms.linux;
+      maintainers = [ lib.maintainers.blenderfreaky ];
+    }
+    // (
+      if kit == "base" then
+        {
+          description = "Intel OneAPI BaseKit";
+          homepage = "https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html";
+        }
+      else if kit == "hpc" then
+        {
+          description = "Intel oneAPI HPC Toolkit";
+          homepage = "https://www.intel.com/content/www/us/en/developer/tools/oneapi/hpc-toolkit.html";
+        }
+      else
+        throw "kit must be either 'base' or 'hpc'"
+    );
+})
