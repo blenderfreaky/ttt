@@ -11,7 +11,7 @@
   unified-memory-framework = fetchFromGitHub {
     owner = "oneapi-src";
     repo = "unified-memory-framework";
-    tag = "v0.10.0";
+    tag = "v1.0.0-rc2";
     sha256 = "sha256-8X08hlLulq132drznb4QQcv2qXWwCc6LRMFDDRcU3bk=";
   };
 
@@ -26,7 +26,7 @@
   compute-runtime = fetchFromGitHub {
     owner = "intel";
     repo = "compute-runtime";
-    tag = "24.39.31294.12";
+    tag = "25.05.32567.17";
     sha256 = "sha256-7GNtAo20DgxAxYSPt6Nh92nuuaS9tzsQGH+sLnsvBKU=";
   };
 
@@ -51,31 +51,24 @@
   #   sha256 = "";
   # };
 
-  # hdr_histogram_c_src = fetchFromGitHub {
-  #   owner = "HdrHistogram";
-  #   repo = "HdrHistogram_c";
-  #   tag = "0.11.8";
-  #   sha256 = "";
-  # };
+  hdr-histogram-c = fetchFromGitHub {
+    owner = "HdrHistogram";
+    repo = "HdrHistogram_c";
+    tag = "0.11.8";
+    sha256 = "";
+  };
 
-  # opencl_headers_src = fetchFromGitHub {
+  # opencl-headers = fetchFromGitHub {
   #   owner = "KhronosGroup";
   #   repo = "OpenCL-Headers";
-  #   tag = "542d7a8f65ecfd88b38de35d8b10aa67b36b33b2";
+  #   rev = "6eabe90aa7b6cff9c67800a2fe25a0cd88d8b749";
   #   sha256 = "";
   # };
 
-  # opencl_icd_loader_main_src = fetchFromGitHub {
+  # opencl-icd-loader = fetchFromGitHub {
   #   owner = "KhronosGroup";
   #   repo = "OpenCL-ICD-Loader";
   #   tag = "main";
-  #   sha256 = "";
-  # };
-
-  # opencl_icd_loader_hash_src = fetchFromGitHub {
-  #   owner = "KhronosGroup";
-  #   repo = "OpenCL-ICD-Loader";
-  #   tag = "804b6f040503c47148bee535230070da6b857ae4";
   #   sha256 = "";
   # };
 
@@ -156,12 +149,12 @@
   #   sha256 = "";
   # };
 
-  # emhash_src = fetchFromGitHub {
-  #   owner = "ktprime";
-  #   repo = "emhash";
-  #   tag = "96dcae6fac2f5f90ce97c9efee61a1d702ddd634";
-  #   sha256 = "";
-  # };
+  emhash = fetchFromGitHub {
+    owner = "ktprime";
+    repo = "emhash";
+    rev = "3ba9abdfdc2e0430fcc2fd8993cad31945b6a02b";
+    sha256 = "sha256-w/iW5n9BzdiieZfxnVBF5MJTpHtZoWCUomjZ0h4OGH8=";
+  };
 
   # parallel_hashmap_src = fetchFromGitHub {
   #   owner = "greg7mdp";

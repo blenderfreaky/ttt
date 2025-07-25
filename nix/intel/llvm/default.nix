@@ -37,11 +37,13 @@
   sphinx,
   level-zero,
   libcxx,
+  opencl-headers,
+  ocl-icd,
   callPackage,
 }:
 
 let
-  version = "6.1.0";
+  version = "nightly-2025-07-18";
   deps = callPackage ./deps.nix { };
 in
 stdenv.mkDerivation rec {
@@ -51,8 +53,8 @@ stdenv.mkDerivation rec {
   src = fetchFromGitHub {
     owner = "intel";
     repo = "llvm";
-    tag = "v${version}";
-    sha256 = "sha256-yyvbG8GwBPA+Nv6xd4ifeInAtfCggLZIcNe8FHp9k9M=";
+    tag = "nightly-2025-07-18";
+    sha256 = "sha256-xpL3M24T+e3hDrdSLRGBTRxC+IzBec5rP1V5wbRmJxs=";
   };
 
   nativeBuildInputs = [
@@ -77,6 +79,48 @@ stdenv.mkDerivation rec {
   #   done
   # '';
 
+  cmakeFlags = [
+    (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
+    (lib.cmakeBool "FETCHCONTENT_QUIET" false)
+
+    (lib.cmakeBool "SYCL_UR_USE_FETCH_CONTENT" false)
+    (lib.cmakeFeature "SYCL_UR_SOURCE_DIR" "${deps.unified-runtime}")
+    (lib.cmakeFeature "LLVMGenXIntrinsics_SOURCE_DIR" "${deps.vc-intrinsics}")
+
+    (lib.cmakeBool "UR_COMPUTE_RUNTIME_FETCH_REPO" false)
+    (lib.cmakeFeature "UR_COMPUTE_RUNTIME_REPO" "${deps.compute-runtime}")
+    (lib.cmakeFeature "UR_OPENCL_INCLUDE_DIR" "${opencl-headers}/include/CL")
+    (lib.cmakeFeature "UR_OPENCL_ICD_LOADER_LIBRARY" "${ocl-icd}/lib/libOpenCL.so")
+
+    (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_EMHASH" "${deps.emhash}")
+    (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_UNIFIED_MEMORY_FRAMEWORK" "${deps.unified-memory-framework
+    }")
+    # (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_OPENCL_HEADERS" "${deps.opencl-headers}")
+    # (lib.cmakeFeature )
+    # -DFETCHCONTENT_UNIFIED_MEMORY_FRAMEWORK_SOURCE_DIR=${deps.unified-memory-framework} \
+    # -DOpenCL_HEADERS={deps.ocl-headers} \
+    # -DOpenCL_LIBRARY_SRC={deps.ocl-loader} \
+    # -DOpenCL-ICD=${ocl-icd}/lib/libOpenCL.so \
+    # -DUR_LEVEL_ZERO_INCLUDE=${lib.getInclude level-zero}/include \
+    # -DUR_LEVEL_ZERO_LOADER_LIBRARY=${lib.getLib level-zero}/lib \
+
+    # "-DUR_USE_EXTERNAL_UMF=ON"
+    # "-DUR_OPENCL_INCLUDE_DIR=${opencl-headers}/include/CL"
+    # "-DUR_LEVEL_ZERO_LOADER_LIBRARY=${level-zero}/lib/libze_loader.so"
+    # "-DUR_LEVEL_ZERO_INCLUDE_DIR=${level-zero}/include"
+    # "-DUR_COMPUTE_RUNTIME_LEVEL_ZERO_INCLUDE_DIR=${deps.compute-runtime}"
+
+    # "-DLEVEL_ZERO_INCLUDE_DIR=${level-zero}/include/level_zero"
+    # "-DLEVEL_ZERO_LIBRARY=${level-zero}/lib/libze_loader.so"
+
+    # "-DBOOST_MP11_SOURCE_DIR={pins.mp11}"
+    # "-DBOOST_MODULE_SRC_DIR={boost.dev}"
+
+    # "-DXPTIFW_EMHASH_HEADERS={pins.emhash}"
+    # "-DXPTIFW_PARALLEL_HASHMAP_HEADERS={pins.parallel-hashmap}"
+
+  ];
+
   configurePhase = ''
     runHook preConfigure
 
@@ -91,49 +135,17 @@ stdenv.mkDerivation rec {
     ln -s ${deps.compute-runtime} /build/source/build/content-exp-headers
     ls /build/source/build/content-exp-headers/
 
+    substituteInPlace buildbot/configure.py --replace-fail "abs_obj_dir = " "print('abs_src_dir = ', abs_src_dir); abs_obj_dir = "
+
     python buildbot/configure.py \
-    --l0-headers ${lib.getInclude level-zero}/include \
-    -DUR_LEVEL_ZERO_INCLUDE=${lib.getInclude level-zero}/include \
-    --l0-loader ${lib.getLib level-zero}/lib \
-    -DUR_LEVEL_ZERO_LOADER_LIBRARY=${lib.getLib level-zero}/lib \
     -t Release \
     --enable-all-llvm-targets \
     --docs \
     --shared-libs \
     --cmake-gen Ninja \
-    -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
-    -DFETCHCONTENT_UPDATES_DISCONNECTED=ON \
-    -DSYCL_UR_USE_FETCH_CONTENT=OFF \
-    -DSYCL_UR_SOURCE_DIR=${deps.unified-runtime} \
-    -DLLVMGenXIntrinsics_SOURCE_DIR=${deps.vc-intrinsics} \
-    -DFETCHCONTENT_UNIFIED_MEMORY_FRAMEWORK_SOURCE_DIR=${deps.unified-memory-framework} \
-    # -DFETCHCONTENT_LEVEL-ZERO-LOADER_SOURCE_DIR=${deps.level_zero_loader_src} \
-    # -DFETCHCONTENT_EXP-HEADERS_SOURCE_DIR=${deps.compute_runtime_src} \
-    # -DFETCHCONTENT_UNIFIED-MEMORY-FRAMEWORK_SOURCE_DIR=${deps.unified_memory_framework_src} \
-    # -DFETCHCONTENT_HDR_HISTOGRAM_SOURCE_DIR=${deps.hdr_histogram_c_src} \
-    # -DFETCHCONTENT_OPENCL-HEADERS_SOURCE_DIR=${deps.opencl_headers_src} \
-    # -DFETCHCONTENT_OPENCL-ICD-LOADER_SOURCE_DIR=${deps.opencl_icd_loader_main_src} \
-    # -DFETCHCONTENT_OCL-HEADERS_SOURCE_DIR=${deps.opencl_headers_src} \
-    # -DFETCHCONTENT_OCL-ICD_SOURCE_DIR=${deps.opencl_icd_loader_hash_src} \
-    # -DFETCHCONTENT_UNIFIED-RUNTIME_SOURCE_DIR=${deps.unified-runtime} \
-    # -DFETCHCONTENT_BOOST_MP11_SOURCE_DIR=${deps.boost_mp11_src} \
-    # -DFETCHCONTENT_BOOST_UNORDERED_SOURCE_DIR=${deps.boost_unordered_src} \
-    # -DFETCHCONTENT_BOOST_ASSERT_SOURCE_DIR=${deps.boost_assert_src} \
-    # -DFETCHCONTENT_BOOST_CONFIG_SOURCE_DIR=${deps.boost_config_src} \
-    # -DFETCHCONTENT_BOOST_CONTAINER_HASH_SOURCE_DIR=${deps.boost_container_hash_src} \
-    # -DFETCHCONTENT_BOOST_CORE_SOURCE_DIR=${deps.boost_core_src} \
-    # -DFETCHCONTENT_BOOST_DESCRIBE_SOURCE_DIR=${deps.boost_describe_src} \
-    # -DFETCHCONTENT_BOOST_PREDEF_SOURCE_DIR=${deps.boost_predef_src} \
-    # -DFETCHCONTENT_BOOST_STATIC_ASSERT_SOURCE_DIR=${deps.boost_static_assert_src} \
-    # -DFETCHCONTENT_BOOST_THROW_EXCEPTION_SOURCE_DIR=${deps.boost_throw_exception_src} \
-    # -DFETCHCONTENT_SPIRV-HEADERS_SOURCE_DIR=${deps.spirv_headers_src} \
-    # -DFETCHCONTENT_EMHASH-HEADERS_SOURCE_DIR=${deps.emhash_src} \
-    # -DFETCHCONTENT_PARALLEL-HASHMAP_SOURCE_DIR=${deps.parallel_hashmap_src} \
-    # -DFETCHCONTENT_EXP_HEADERS_SOURCE_DIR=${deps.compute-runtime}/level_zero/include \
-    # -DFETCHCONTENT_EXP_HEADERS_POPULATE_SOURCE_DIR=${deps.compute-runtime} \
-    # -DFETCHCONTENT_SOURCE_DIR_EXP_HEADERS=${deps.compute-runtime} \
-    # -DFETCHCONTENT_SOURCE_DIR_EXP_HEADERS_POPULATE=${deps.compute-runtime} \
-
+    --l0-headers ${lib.getInclude level-zero}/include \
+    --l0-loader ${lib.getLib level-zero}/lib \
+    $cmakeFlags
     # It seems like on newest branch this is vendored
     # -DSYCL_UR_SOURCE_DIR=${deps.unified-runtime} \
     # -DSYCL_UR_SOURCE_DIR=/build/source/llvm/unified-runtime \
