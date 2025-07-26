@@ -82,6 +82,9 @@ stdenv.mkDerivation (finalAttrs: {
     # Since we're not in a clone, git describe won't work.
     substituteInPlace cmake/helpers.cmake \
       --replace-fail "git describe --always" "echo ${tag}"
+
+    #substituteInPlace \
+    #  --replace-fail ";$<LINK_ONLY:>" ""
   '';
 
   cmakeFlags = [

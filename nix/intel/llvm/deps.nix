@@ -22,13 +22,21 @@
     sha256 = "sha256-7coQegLcgIKiqnonZmgrKlw6FCB3ltSh6oMMvdopeQc=";
   };
 
-  # TODO: Sparse fetch just "level_zero/include"
-  compute-runtime = fetchFromGitHub {
-    owner = "intel";
-    repo = "compute-runtime";
-    tag = "25.05.32567.17";
-    sha256 = "sha256-7GNtAo20DgxAxYSPt6Nh92nuuaS9tzsQGH+sLnsvBKU=";
+  spirv-headers = fetchFromGitHub {
+    owner = "KhronosGroup";
+    repo = "SPIRV-Headers";
+    # See llvm-spirv/spirv-headers-tag.conf
+    rev = "c9aad99f9276817f18f72a4696239237c83cb775";
+    sha256 = "sha256-/KfUxWDczLQ/0DOiFC4Z66o+gtoF/7vgvAvKyv9Z9OA=";
   };
+
+  # # TODO: Sparse fetch just "level_zero/include"
+  # compute-runtime = fetchFromGitHub {
+  #   owner = "intel";
+  #   repo = "compute-runtime";
+  #   tag = "25.05.32567.17";
+  #   sha256 = "sha256-7GNtAo20DgxAxYSPt6Nh92nuuaS9tzsQGH+sLnsvBKU=";
+  # };
 
   # level_zero_loader_src = fetchFromGitHub {
   #   owner = "oneapi-src";
@@ -51,26 +59,28 @@
   #   sha256 = "";
   # };
 
-  hdr-histogram-c = fetchFromGitHub {
-    owner = "HdrHistogram";
-    repo = "HdrHistogram_c";
-    tag = "0.11.8";
-    sha256 = "";
+  # hdr-histogram-c = fetchFromGitHub {
+  #   owner = "HdrHistogram";
+  #   repo = "HdrHistogram_c";
+  #   tag = "0.11.8";
+  #   sha256 = "";
+  # };
+
+  opencl-headers = fetchFromGitHub {
+    owner = "KhronosGroup";
+    repo = "OpenCL-Headers";
+    # See opencl/CMakeLists.txt:23
+    rev = "6eabe90aa7b6cff9c67800a2fe25a0cd88d8b749";
+    sha256 = "sha256-6S9z6d09deODp5U62Ob8GOBGIV0cGpyG2jSYlv3uINw=";
   };
 
-  # opencl-headers = fetchFromGitHub {
-  #   owner = "KhronosGroup";
-  #   repo = "OpenCL-Headers";
-  #   rev = "6eabe90aa7b6cff9c67800a2fe25a0cd88d8b749";
-  #   sha256 = "";
-  # };
-
-  # opencl-icd-loader = fetchFromGitHub {
-  #   owner = "KhronosGroup";
-  #   repo = "OpenCL-ICD-Loader";
-  #   tag = "main";
-  #   sha256 = "";
-  # };
+  opencl-icd-loader = fetchFromGitHub {
+    owner = "KhronosGroup";
+    repo = "OpenCL-ICD-Loader";
+    # See opencl/CMakeLists.txt:24
+    rev = "ddf6c70230a79cdb8fcccfd3c775b09e6820f42e";
+    sha256 = "sha256-ixZU5Tln4qeJGUb5qcc/+HHpMTWtc17CQYrmVirlLoc=";
+  };
 
   # boost_mp11_src = fetchFromGitHub {
   #   owner = "boostorg";
@@ -156,10 +166,11 @@
     sha256 = "sha256-w/iW5n9BzdiieZfxnVBF5MJTpHtZoWCUomjZ0h4OGH8=";
   };
 
-  # parallel_hashmap_src = fetchFromGitHub {
-  #   owner = "greg7mdp";
-  #   repo = "parallel-hashmap";
-  #   tag = "8a889d3699b3c09ade435641fb034427f3fd12b6";
-  #   sha256 = "";
-  # };
+  parallel-hashmap = fetchFromGitHub {
+    owner = "greg7mdp";
+    repo = "parallel-hashmap";
+    # See xptifw/src/CMakeLists.txt:15
+    rev = "8a889d3699b3c09ade435641fb034427f3fd12b6";
+    sha256 = "sha256-hcA5sjL0LHuddEJdJdFGRbaEXOAhh78wRa6csmxi4Rk=";
+  };
 }

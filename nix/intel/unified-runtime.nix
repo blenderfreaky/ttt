@@ -13,37 +13,26 @@
   cudaPackages ? { },
   autoAddDriverRunpath,
   level-zero,
-  # intel-compute-runtime,
   opencl-headers,
   ocl-icd,
-  # khronos-ocl-icd-loader,
   levelZeroSupport ? true,
   openclSupport ? true,
   # Broken
   cudaSupport ? false,
   rocmSupport ? true,
 
+  buildTests ? false,
   lit,
   filecheck,
-  buildTests ? false,
 }:
 let
-  version = "0.11.10";
+  version = "0.12.0";
   gtest = fetchFromGitHub {
     owner = "google";
     repo = "googletest";
     tag = "v1.15.2";
     sha256 = "sha256-1OJ2SeSscRBNr7zZ/a8bJGIqAnhkg45re0j3DtPfcXM=";
   };
-  # rocmLibs = [
-  #   rocmPackages.clr
-  #   rocmPackages.rocm-device-libs
-  #   rocmPackages.rocm-smi
-  # ];
-  # rocmPath = buildEnv {
-  #   name = "rocm-path";
-  #   paths = rocmLibs;
-  # };
   compute-runtime = fetchFromGitHub {
     owner = "intel";
     repo = "compute-runtime";
@@ -72,16 +61,13 @@ stdenv.mkDerivation {
   ++ lib.optionals openclSupport [
     opencl-headers
     ocl-icd
-    # khronos-ocl-icd-loader
   ]
   ++ lib.optionals cudaSupport [
     cudaPackages.cuda_cudart
-    # cudaPackages.markForCudatoolkitRootHook
     autoAddDriverRunpath
   ]
   ++ lib.optionals levelZeroSupport [
     level-zero
-    # intel-compute-runtime
   ]
   ++ lib.optionals buildTests [
     lit
@@ -92,32 +78,31 @@ stdenv.mkDerivation {
     owner = "oneapi-src";
     repo = "unified-runtime";
     # tag = "v${version}";
-    # TODO
+    # TODO: Update to a tag once a new release is available
+    #       On current latest tag there's build issues that are resolved in later commits,
+    #       so we use a newer commit for now.
     rev = "a6437589c67c3acdeffa80a0d544a6612e63a29b";
     sha256 = "sha256-zMZc0sy+waqcGyGVu+T0/+ZSpH8oHcQzNp1B3MNUopI=";
   };
 
-  # postPatch = ''
-  #   # This is removed in newer versions, but we're on the latest tag and it's still here.
-  #   # umf::disjoint_pool seems to have been removed in newer versions of Unified Memory Framework.
-  #   substituteInPlace source/common/CMakeLists.txt \
-  #     --replace-fail "umf::disjoint_pool" ""
-  # '';
+  postPatch = ''
+    # The latter is used everywhere except this one file. For some reason,
+    # the former is not set, at least when building with Nix, so we replace it.
+    substituteInPlace cmake/helpers.cmake \
+      --replace-fail "PYTHON_EXECUTABLE" "Python3_EXECUTABLE"
+      ls -laht /build/source/
+  '';
 
   preConfigure = ''
-    # mkdir -p /build/source/build/content-exp-headers/level_zero/
-    # ln -s ${compute-runtime}/level_zero/include /build/source/build/content-exp-headers/level_zero/include
-    # ls -l /build/source/build/content-exp-headers
-    # ls -l /build/source/build/content-exp-headers/level_zero/include
-    # ls -l /build/source/build/content-exp-headers/level_zero/include/
-    # ls -l /build/source/build/content-exp-headers/level_zero/include/*
+    # For some reason, it doesn't create this on its own,
+    # causing a cryptic Permission denied error.
+    mkdir -p /build/source/build/source/common/level_zero_loader/level_zero
   '';
 
   cmakeFlags = [
     (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
     (lib.cmakeBool "FETCHCONTENT_QUIET" false)
 
-    # (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_CONTENT_EXP_HEADERS" "${compute-runtime}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_HDR_HISTOGRAM" "${hdr-histogram}")
 
     # Their CMake code will print that it's fetching from/will download from github anyways.
@@ -134,8 +119,8 @@ stdenv.mkDerivation {
     (lib.cmakeBool "UR_BUILD_TESTS" buildTests)
 
     (lib.cmakeBool "UR_BUILD_ADAPTER_L0" levelZeroSupport)
+    # Currently broken
     (lib.cmakeBool "UR_BUILD_ADAPTER_L0_V2" false)
-    # (lib.cmakeBool "UR_BUILD_ADAPTER_L0_V2" levelZeroSupport)
     (lib.cmakeBool "UR_BUILD_ADAPTER_OPENCL" openclSupport)
     (lib.cmakeBool "UR_BUILD_ADAPTER_CUDA" cudaSupport)
     (lib.cmakeBool "UR_BUILD_ADAPTER_HIP" rocmSupport)
@@ -145,18 +130,17 @@ stdenv.mkDerivation {
   ++ lib.optionals cudaSupport [
     (lib.cmakeFeature "CUDA_TOOLKIT_ROOT_DIR" "${cudaPackages.cudatoolkit}")
     (lib.cmakeFeature "CUDAToolkit_ROOT" "${cudaPackages.cudatoolkit}")
-    (lib.cmakeFeature "CUDA_INCLUDE_DIRS" "${cudaPackages.cudatoolkit}/include/")
-    (lib.cmakeFeature "CUDA_CUDA_LIBRARY" "${cudaPackages.cudatoolkit}/lib/")
+    (lib.cmakeFeature "CUDAToolkit_INCLUDE_DIRS" "${cudaPackages.cudatoolkit}/include/")
+    (lib.cmakeFeature "CUDA_cuda_driver_LIBRARY" "${cudaPackages.cudatoolkit}/lib/")
   ]
   ++ lib.optionals rocmSupport [
     (lib.cmakeFeature "UR_HIP_ROCM_DIR" "${rocmPackages.clr}")
   ]
   ++ lib.optionals levelZeroSupport [
-    (lib.cmakeFeature "UR_LEVEL_ZERO_INCLUDE_DIR" "${lib.getInclude level-zero}/include")
-    (lib.cmakeFeature "UR_LEVEL_ZERO_LOADER_LIBRARY" "${lib.getLib level-zero}/lib")
+    (lib.cmakeFeature "UR_LEVEL_ZERO_INCLUDE_DIR" "${lib.getInclude level-zero}/include/level_zero")
+    (lib.cmakeFeature "UR_LEVEL_ZERO_LOADER_LIBRARY" "${lib.getLib level-zero}/lib/libze_loader.so")
   ]
   ++ lib.optionals buildTests [
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_GOOGLETEST" "${gtest}")
   ];
-
 }
