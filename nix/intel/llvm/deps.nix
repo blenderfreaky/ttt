@@ -1,25 +1,11 @@
 { fetchFromGitHub }:
 {
-
-  unified-runtime = fetchFromGitHub {
-    owner = "oneapi-src";
-    repo = "unified-runtime";
-    tag = "v0.11.10";
-    sha256 = "sha256-tVnTAPWkIJafj/kEZczx/XmCShxLNSec6NxvURRPVSg=";
-  };
-
-  unified-memory-framework = fetchFromGitHub {
-    owner = "oneapi-src";
-    repo = "unified-memory-framework";
-    tag = "v1.0.0-rc2";
-    sha256 = "sha256-8X08hlLulq132drznb4QQcv2qXWwCc6LRMFDDRcU3bk=";
-  };
-
   vc-intrinsics = fetchFromGitHub {
     owner = "intel";
     repo = "vc-intrinsics";
-    tag = "v0.23.1";
-    sha256 = "sha256-7coQegLcgIKiqnonZmgrKlw6FCB3ltSh6oMMvdopeQc=";
+    # See llvm/lib/SYCLLowerIR/CMakeLists.txt:17
+    rev = "60cea7590bd022d95f5cf336ee765033bd114d69";
+    sha256 = "sha256-1K16UEa6DHoP2ukSx58OXJdtDWyUyHkq5Gd2DUj1644=";
   };
 
   spirv-headers = fetchFromGitHub {
@@ -30,41 +16,13 @@
     sha256 = "sha256-/KfUxWDczLQ/0DOiFC4Z66o+gtoF/7vgvAvKyv9Z9OA=";
   };
 
-  # # TODO: Sparse fetch just "level_zero/include"
-  # compute-runtime = fetchFromGitHub {
-  #   owner = "intel";
-  #   repo = "compute-runtime";
-  #   tag = "25.05.32567.17";
-  #   sha256 = "sha256-7GNtAo20DgxAxYSPt6Nh92nuuaS9tzsQGH+sLnsvBKU=";
-  # };
-
-  # level_zero_loader_src = fetchFromGitHub {
-  #   owner = "oneapi-src";
-  #   repo = "level-zero";
-  #   tag = "v1.19.2";
-  #   sha256 = "sha256-MnTPu7jsjHR+PDHzj/zJiBKi9Ou/cjJvrf87yMdSnz0=";
-  # };
-
-  # compute_runtime_src = fetchFromGitHub {
-  #   owner = "intel";
-  #   repo = "compute-runtime";
-  #   tag = "24.39.31294.12";
-  #   sha256 = "";
-  # };
-
-  # unified_memory_framework_src = fetchFromGitHub {
-  #   owner = "oneapi-src";
-  #   repo = "unified-memory-framework";
-  #   tag = "v0.10.0";
-  #   sha256 = "";
-  # };
-
-  # hdr-histogram-c = fetchFromGitHub {
-  #   owner = "HdrHistogram";
-  #   repo = "HdrHistogram_c";
-  #   tag = "0.11.8";
-  #   sha256 = "";
-  # };
+  oneapi-ck = fetchFromGitHub {
+    owner = "uxlfoundation";
+    repo = "oneapi-construction-kit";
+    # See llvm/lib/SYCLNativeCPUUtils/CMakeLists.txt:44
+    rev = "d0a32d701e34b3285de7ce776ea36abfec673df7";
+    sha256 = "sha256-d0uwd5bF+qhTjX/chrjew91QHuGANekpEdHSjQUOYUA=";
+  };
 
   opencl-headers = fetchFromGitHub {
     owner = "KhronosGroup";
@@ -80,6 +38,22 @@
     # See opencl/CMakeLists.txt:24
     rev = "ddf6c70230a79cdb8fcccfd3c775b09e6820f42e";
     sha256 = "sha256-ixZU5Tln4qeJGUb5qcc/+HHpMTWtc17CQYrmVirlLoc=";
+  };
+
+  emhash = fetchFromGitHub {
+    owner = "ktprime";
+    repo = "emhash";
+    # See sycl/cmake/modules/FetchEmhash.cmake:12
+    rev = "3ba9abdfdc2e0430fcc2fd8993cad31945b6a02b";
+    sha256 = "sha256-w/iW5n9BzdiieZfxnVBF5MJTpHtZoWCUomjZ0h4OGH8=";
+  };
+
+  parallel-hashmap = fetchFromGitHub {
+    owner = "greg7mdp";
+    repo = "parallel-hashmap";
+    # See xptifw/src/CMakeLists.txt:15
+    rev = "8a889d3699b3c09ade435641fb034427f3fd12b6";
+    sha256 = "sha256-hcA5sjL0LHuddEJdJdFGRbaEXOAhh78wRa6csmxi4Rk=";
   };
 
   # boost_mp11_src = fetchFromGitHub {
@@ -151,26 +125,4 @@
   #   tag = "7c8ec2114bc1f9ab2a8afbd629b96fbdd5901294";
   #   sha256 = "";
   # };
-
-  # spirv_headers_src = fetchFromGitHub {
-  #   owner = "KhronosGroup";
-  #   repo = "SPIRV-Headers";
-  #   tag = "SPIRV_HEADERS_TAG_FROM_FILE"; # Tag read from spirv-headers-tag.conf
-  #   sha256 = "";
-  # };
-
-  emhash = fetchFromGitHub {
-    owner = "ktprime";
-    repo = "emhash";
-    rev = "3ba9abdfdc2e0430fcc2fd8993cad31945b6a02b";
-    sha256 = "sha256-w/iW5n9BzdiieZfxnVBF5MJTpHtZoWCUomjZ0h4OGH8=";
-  };
-
-  parallel-hashmap = fetchFromGitHub {
-    owner = "greg7mdp";
-    repo = "parallel-hashmap";
-    # See xptifw/src/CMakeLists.txt:15
-    rev = "8a889d3699b3c09ade435641fb034427f3fd12b6";
-    sha256 = "sha256-hcA5sjL0LHuddEJdJdFGRbaEXOAhh78wRa6csmxi4Rk=";
-  };
 }

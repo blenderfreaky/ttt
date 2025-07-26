@@ -43,8 +43,7 @@
   level-zero,
   libcxx,
   libxml2,
-  # opencl-headers,
-  # ocl-icd,
+  lld,
   callPackage,
   spirv-tools,
 
@@ -53,6 +52,11 @@
   # Broken
   cudaSupport ? false,
   rocmSupport ? true,
+  nativeCpuSupport ? true,
+  vulkanSupport ? true,
+
+  useLibcxx ? true,
+  useLdd ? true,
 
   buildTests ? false,
 }:
@@ -66,6 +70,8 @@ let
       openclSupport
       cudaSupport
       rocmSupport
+      nativeCpuSupport
+      vulkanSupport
       buildTests
       ;
   };
@@ -93,6 +99,9 @@ stdenv.mkDerivation rec {
     libxml2
     valgrind.dev
   ]
+  ++ lib.optionals useLdd [
+    lld
+  ]
   ++ unified-runtime'.nativeBuildInputs;
 
   postPatch = ''
@@ -112,51 +121,14 @@ stdenv.mkDerivation rec {
     (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
     (lib.cmakeBool "FETCHCONTENT_QUIET" false)
 
-    # (lib.cmakeBool "SYCL_UR_USE_FETCH_CONTENT" false)
-    # (lib.cmakeFeature "SYCL_UR_SOURCE_DIR" "${deps.unified-runtime}")
     (lib.cmakeFeature "LLVMGenXIntrinsics_SOURCE_DIR" "${deps.vc-intrinsics}")
-
-    # (lib.cmakeBool "UR_COMPUTE_RUNTIME_FETCH_REPO" false)
-    # (lib.cmakeFeature "UR_COMPUTE_RUNTIME_REPO" "${deps.compute-runtime}")
-    # (lib.cmakeFeature "UR_OPENCL_INCLUDE_DIR" "${opencl-headers}/include/CL")
-    # (lib.cmakeFeature "UR_OPENCL_ICD_LOADER_LIBRARY" "${ocl-icd}/lib/libOpenCL.so")
-    #
-    # (lib.cmakeFeature "OpenCL_HEADERS" "${opencl-headers}")
-    # (lib.cmakeFeature "OPENCL_INCLUDE_DIR" "${lib.getInclude opencl-headers}/include")
-    # (lib.cmakeFeature "OPENCL_ICD_LOADER_HEADERS_DIR" "${lib.getLib opencl-headers}/lib/libOpenCL.so")
 
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_EMHASH" "${deps.emhash}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_SPIRV-HEADERS" "${deps.spirv-headers}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_PARALLEL-HASHMAP" "${deps.parallel-hashmap}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_OCL-HEADERS" "${deps.opencl-headers}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_OCL-ICD" "${deps.opencl-icd-loader}")
-
-    # (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_UNIFIED_MEMORY_FRAMEWORK" "${deps.unified-memory-framework
-    # }")
-    # (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_OPENCL_HEADERS" "${deps.opencl-headers}")
-    # (lib.cmakeFeature )
-    # -DFETCHCONTENT_UNIFIED_MEMORY_FRAMEWORK_SOURCE_DIR=${deps.unified-memory-framework} \
-    # -DOpenCL_HEADERS={deps.ocl-headers} \
-    # -DOpenCL_LIBRARY_SRC={deps.ocl-loader} \
-    # -DOpenCL-ICD=${ocl-icd}/lib/libOpenCL.so \
-    # -DUR_LEVEL_ZERO_INCLUDE=${lib.getInclude level-zero}/include \
-    # -DUR_LEVEL_ZERO_LOADER_LIBRARY=${lib.getLib level-zero}/lib \
-
-    # "-DUR_USE_EXTERNAL_UMF=ON"
-    # "-DUR_OPENCL_INCLUDE_DIR=${opencl-headers}/include/CL"
-    # "-DUR_LEVEL_ZERO_LOADER_LIBRARY=${level-zero}/lib/libze_loader.so"
-    # "-DUR_LEVEL_ZERO_INCLUDE_DIR=${level-zero}/include"
-    # "-DUR_COMPUTE_RUNTIME_LEVEL_ZERO_INCLUDE_DIR=${deps.compute-runtime}"
-
-    # "-DLEVEL_ZERO_INCLUDE_DIR=${level-zero}/include/level_zero"
-    # "-DLEVEL_ZERO_LIBRARY=${level-zero}/lib/libze_loader.so"
-
-    # "-DBOOST_MP11_SOURCE_DIR={pins.mp11}"
-    # "-DBOOST_MODULE_SRC_DIR={boost.dev}"
-
-    # "-DXPTIFW_EMHASH_HEADERS={pins.emhash}"
-    # "-DXPTIFW_PARALLEL_HASHMAP_HEADERS={pins.parallel-hashmap}"
-
+    (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_ONEAPI-CK" "${deps.oneapi-ck}")
   ]
   ++ unified-runtime'.cmakeFlags;
 
@@ -171,11 +143,14 @@ stdenv.mkDerivation rec {
     --cmake-gen Ninja \
     --l0-headers ${lib.getInclude level-zero}/include/level_zero \
     --l0-loader ${lib.getLib level-zero}/lib/libze_loader.so \
+    ${lib.optionalString cudaSupport "--cuda"} \
+    ${lib.optionalString rocmSupport "--hip"} \
+    ${lib.optionalString nativeCpuSupport "--native_cpu"} \
+    ${lib.optionalString useLibcxx "--use-libcxx"} \
+    ${lib.optionalString useLibcxx "--libcxx-include ${lib.getInclude libcxx}/include"} \
+    ${lib.optionalString useLibcxx "--libcxx-library ${lib.getLib libcxx}/lib"} \
+    ${lib.optionalString useLdd "--use-lld"} \
     $cmakeFlags
-    # --native_cpu \
-    # --enable-backends \
-    # --libcxx-include ${lib.getInclude libcxx}/include \
-    # --libcxx-library ${lib.getLib libcxx}/lib \
 
     runHook postConfigure
   '';
