@@ -2,39 +2,15 @@
   lib,
   stdenv,
   fetchFromGitHub,
-  # fetchpatch,
   cmake,
   ninja,
   python3,
-  # zlib,
-  # libffi,
-  # libedit,
-  # libxml2,
-  # ncurses,
-  # elfutils,
-  # libunwind,
   pkg-config,
-  hwloc,
   zstd,
+  hwloc,
+  ocaml,
+  perl,
   valgrind,
-  # git,
-  # spirv-llvm-translator,
-  # opencl-headers,
-  # ocl-icd,
-  # level-zero,
-  # tbb,
-  # boost,
-  # enableSharedLibraries ? true,
-  # enableRTTI ? true,
-  # enableAssertions ? false,
-  # enableDebugInfo ? false,
-  # enableSYCL ? true,
-  # targets ? [
-  #   "X86"
-  #   "AMDGPU"
-  #   "NVPTX"
-  #   "SPIRV"
-  # ],
   # We use the in-tree unified-runtime, but we need all the same flags as the out-of-tree version.
   # Rather than duplicating the flags, we can simply use the existing flags.
   # We can also use this to debug unified-runtime without building the entire LLVM project.
@@ -43,19 +19,24 @@
   level-zero,
   libcxx,
   libxml2,
+  libedit,
   lld,
   callPackage,
   spirv-tools,
+  zlib,
+
+  rocmPackages ? { },
 
   levelZeroSupport ? true,
   openclSupport ? true,
   # Broken
   cudaSupport ? false,
   rocmSupport ? true,
+  rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   nativeCpuSupport ? true,
   vulkanSupport ? true,
 
-  useLibcxx ? true,
+  useLibcxx ? false,
   useLdd ? true,
 
   buildTests ? false,
@@ -70,6 +51,7 @@ let
       openclSupport
       cudaSupport
       rocmSupport
+      rocmGpuTargets
       nativeCpuSupport
       vulkanSupport
       buildTests
@@ -87,35 +69,57 @@ stdenv.mkDerivation rec {
     sha256 = "sha256-xpL3M24T+e3hDrdSLRGBTRxC+IzBec5rP1V5wbRmJxs=";
   };
 
+  # # Otherwise llvm-min-tblgen fails for some reason
+  # NIX_CFLAGS_COMPILE = "-static-libstdc++";
+
   nativeBuildInputs = [
     cmake
     ninja
     python3
     pkg-config
-    hwloc
+  ]
+  ++ lib.optionals useLdd [
+    lld
+  ];
+
+  buildInputs = [
     zstd
     sphinx
     spirv-tools
     libxml2
     valgrind.dev
+    zlib
+    libedit
+    # stdenv.cc.libc
+    # stdenv.cc.cc.lib
+    # libgcc.lib
+    zlib
   ]
-  ++ lib.optionals useLdd [
-    lld
+  ++ lib.optionals useLibcxx [
+    libcxx
+    libcxx.dev
   ]
-  ++ unified-runtime'.nativeBuildInputs;
+  ++ unified-runtime'.buildInputs;
 
   postPatch = ''
     # The latter is used everywhere except this one file. For some reason,
     # the former is not set, at least when building with Nix, so we replace it.
     substituteInPlace unified-runtime/cmake/helpers.cmake \
       --replace-fail "PYTHON_EXECUTABLE" "Python3_EXECUTABLE"
+
+    sed -i '/file(COPY / { /NO_SOURCE_PERMISSIONS/! s/)\s*$/ NO_SOURCE_PERMISSIONS)/ }' \
+        unified-runtime/cmake/FetchLevelZero.cmake \
+        sycl/CMakeLists.txt \
+        sycl/cmake/modules/FetchEmhash.cmake
   '';
 
-  preConfigure = ''
-    # For some reason, it doesn't create this on its own,
-    # causing a cryptic Permission denied error.
-    mkdir -p /build/source/build/unified-runtime/source/common/level_zero_loader/level_zero/
-  '';
+  # preConfigure = ''
+  #   # For some reason, it doesn't create this on its own,
+  #   # causing a cryptic Permission denied error.
+  #   mkdir -p /build/source/build/unified-runtime/source/common/level_zero_loader/level_zero/
+
+  #   mkdir -p /build/source/build/include/{sycl,CL,std,syclcompat}
+  # '';
 
   cmakeFlags = [
     (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
@@ -129,6 +133,21 @@ stdenv.mkDerivation rec {
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_OCL-HEADERS" "${deps.opencl-headers}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_OCL-ICD" "${deps.opencl-icd-loader}")
     (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_ONEAPI-CK" "${deps.oneapi-ck}")
+
+    # This is for llvm-min-tblgen, which is built and then immediately ran by CMake.
+    # (lib.cmakeBool "CMAKE_BUILD_WITH_INSTALL_RPATH" true)
+    # (lib.cmakeFeature "CMAKE_INSTALL_RPATH" "${
+    #   lib.makeLibraryPath [
+    #     stdenv.cc.cc.lib
+    #     zlib
+    #   ]
+    # }:/build/source/build/lib")
+    # (lib.cmakeFeature "CMAKE_EXE_LINKER_FLAGS" "-Wl,-rpath,${
+    #   lib.makeLibraryPath [
+    #     stdenv.cc.cc.lib
+    #     zlib
+    #   ]
+    # }:/build/source/build/lib")
   ]
   ++ unified-runtime'.cmakeFlags;
 
@@ -137,7 +156,6 @@ stdenv.mkDerivation rec {
 
     python buildbot/configure.py \
     -t Release \
-    --enable-all-llvm-targets \
     --docs \
     --shared-libs \
     --cmake-gen Ninja \
@@ -152,12 +170,25 @@ stdenv.mkDerivation rec {
     ${lib.optionalString useLdd "--use-lld"} \
     $cmakeFlags
 
+    # --enable-all-llvm-targets \
+    #
+
+
     runHook postConfigure
   '';
 
   buildPhase = ''
     runHook preBuild
+
+    export LD_LIBRARY_PATH="${
+      lib.makeLibraryPath [
+        stdenv.cc.cc.lib
+        zlib
+      ]
+    }:/build/source/build/lib"
+
     python buildbot/compile.py --verbose
+
     runHook postBuild
   '';
 

@@ -16,8 +16,6 @@
   levelZeroSupport ? true,
 
   ctestCheckHook,
-  lit,
-  filecheck,
   buildTests ? false,
 
   python3,
@@ -64,6 +62,10 @@ stdenv.mkDerivation (finalAttrs: {
     python3
     doxygen
     sphinx
+  ];
+
+  buildInputs = [
+    hwloc
   ];
 
   nativeCheckInputs = lib.optionals buildTests [

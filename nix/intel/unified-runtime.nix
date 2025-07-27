@@ -7,7 +7,9 @@
   unified-memory-framework,
   zlib,
   libbacktrace,
+  hwloc,
   python3,
+  symlinkJoin,
 
   rocmPackages ? { },
   cudaPackages ? { },
@@ -22,12 +24,14 @@
   # Broken
   cudaSupport ? false,
   rocmSupport ? true,
+  rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   vulkanSupport ? true,
   nativeCpuSupport ? true,
 
   buildTests ? false,
   lit,
   filecheck,
+  ctestCheckHook,
 }:
 let
   version = "0.12.0";
@@ -49,26 +53,17 @@ let
     tag = "0.11.8";
     sha256 = "sha256-TFlrC4bgK8o5KRZcLMlYU5EO9Oqaqe08PjJgmsUl51M=";
   };
-  # rocmtoolkit_joined = symlinkJoin {
-  #   name = "rocm-merged";
+  rocmtoolkit_joined = symlinkJoin {
+    name = "rocm-merged";
 
-  #   # The packages in here were chosen pretty arbitrarily.
-  #   # clr and comgr are definitely needed though.
-  #   paths = with rocmPackages; [
-  #     rocm-core
-  #     clr
-  #     # rccl
-  #     miopen
-  #     rocminfo
-  #     rocm-comgr
-  #     rocm-device-libs
-  #     rocm-runtime
-  #     clr.icd
-  #     hipify
-  #     hsakmt
-  #     # rocmPath
-  #   ];
-  # };
+    # The packages in here were chosen pretty arbitrarily.
+    # clr and comgr are definitely needed though.
+    paths = with rocmPackages; [
+      rocmPath
+      rocm-comgr
+      hsakmt
+    ];
+  };
 
   make =
     buildTests:
@@ -80,18 +75,22 @@ let
         cmake
         ninja
         python3
+      ];
+
+      buildInputs = [
         unified-memory-framework
         zlib
         libbacktrace
+        hwloc
       ]
       ++ lib.optionals openclSupport [
         opencl-headers
         ocl-icd
       ]
       ++ lib.optionals rocmSupport [
-        # rocmtoolkit_joined
-        rocmPackages.rocmPath
-        rocmPackages.hsakmt
+        rocmtoolkit_joined
+        # rocmPackages.rocmPath
+        # rocmPackages.hsakmt
       ]
       ++ lib.optionals cudaSupport [
         cudaPackages.cuda_cudart
@@ -120,18 +119,28 @@ let
         sha256 = "sha256-zMZc0sy+waqcGyGVu+T0/+ZSpH8oHcQzNp1B3MNUopI=";
       };
 
+      nativeCheckInputs = lib.optionals buildTests [
+        ctestCheckHook
+      ];
+
       postPatch = ''
         # The latter is used everywhere except this one file. For some reason,
         # the former is not set, at least when building with Nix, so we replace it.
         substituteInPlace cmake/helpers.cmake \
           --replace-fail "PYTHON_EXECUTABLE" "Python3_EXECUTABLE"
+
+        # If we let it copy with default settings, it'll copy the permissions of the source files.
+        # As the source files of level zero point to the nix store, those permissions will make it non-writable.
+        # The build will try to write new files into directories that are now read-only.
+        # To avoid this, we set NO_SOURCE_PERMISSIONS.
+        sed -i '/file(COPY / { /NO_SOURCE_PERMISSIONS/! s/)\s*$/ NO_SOURCE_PERMISSIONS)/ }' cmake/FetchLevelZero.cmake
       '';
 
-      preConfigure = ''
-        # For some reason, it doesn't create this on its own,
-        # causing a cryptic Permission denied error.
-        mkdir -p /build/source/build/source/common/level_zero_loader/level_zero
-      '';
+      # preConfigure = ''
+      #   # For some reason, it doesn't create this on its own,
+      #   # causing a cryptic Permission denied error.
+      #   mkdir -p /build/source/build/source/common/level_zero_loader/level_zero
+      # '';
 
       cmakeFlags = [
         (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
@@ -168,7 +177,9 @@ let
         (lib.cmakeFeature "CUDA_cuda_driver_LIBRARY" "${cudaPackages.cudatoolkit}/lib/")
       ]
       ++ lib.optionals rocmSupport [
-        (lib.cmakeFeature "UR_HIP_ROCM_DIR" "${rocmPackages.rocmPath}")
+        (lib.cmakeFeature "UR_HIP_ROCM_DIR" "${rocmtoolkit_joined}")
+        # (lib.cmakeFeature "UR_HIP_ROCM_DIR" "${rocmPackages.rocmPath}")
+        (lib.cmakeFeature "AMDGPU_TARGETS" rocmGpuTargets)
       ]
       ++ lib.optionals levelZeroSupport [
         (lib.cmakeFeature "UR_LEVEL_ZERO_INCLUDE_DIR" "${lib.getInclude level-zero}/include/level_zero")
