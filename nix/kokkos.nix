@@ -19,13 +19,14 @@ stdenv.mkDerivation (finalAttrs: {
     hash = "sha256-gpnaxQ3X+bqKiP9203I1DELDGXocRwMPN9nHFk5r6pM=";
   };
 
-  nativeBuildInputs = [
-    cmake
-    python3
-  ]
-  ++ lib.optionals rocmSupport [
-    rocmPackages.clr
-  ];
+  nativeBuildInputs =
+    [
+      cmake
+      python3
+    ]
+    ++ lib.optionals rocmSupport [
+      rocmPackages.clr
+    ];
 
   cmakeFlags = [
     (lib.cmakeBool "Kokkos_ENABLE_LIBDL" true)
@@ -38,14 +39,14 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   doCheck = true;
-  passthru.updateScript = gitUpdater { };
+  passthru.updateScript = gitUpdater {};
 
   meta = with lib; {
     description = "C++ Performance Portability Programming EcoSystem";
     homepage = "https://github.com/kokkos/kokkos";
     changelog = "https://github.com/kokkos/kokkos/blob/${finalAttrs.src.rev}/CHANGELOG.md";
-    license = with licenses; [ asl20 ];
-    maintainers = with maintainers; [ Madouura ];
+    license = with licenses; [asl20];
+    maintainers = with maintainers; [Madouura];
     platforms = platforms.unix;
     broken = stdenv.hostPlatform.isDarwin;
   };

@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-burn = { version = "0.17", features = ["wgpu", "train"] }
-burn-import = "0.17"
+burn = { version = "0.18", features = ["wgpu", "train"] }
+burn-import = "0.18"
 
 tokenizers = { version = "0.21", features = ["http"] }
 

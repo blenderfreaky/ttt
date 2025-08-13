@@ -7,6 +7,8 @@ rec {
   # Expose the Intel LLVM package directly
   intel-llvm = llvm.intel-llvm;
 
+  oneapi-construction-kit = pkgs.callPackage ./oneapi-construction-kit.nix { };
+
   # Convenience aliases
   dpcpp = intel-llvm;
   intel-clang = intel-llvm;

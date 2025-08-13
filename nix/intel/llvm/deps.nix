@@ -1,5 +1,4 @@
-{ fetchFromGitHub }:
-{
+{fetchFromGitHub}: {
   vc-intrinsics = fetchFromGitHub {
     owner = "intel";
     repo = "vc-intrinsics";
@@ -55,74 +54,4 @@
     rev = "8a889d3699b3c09ade435641fb034427f3fd12b6";
     sha256 = "sha256-hcA5sjL0LHuddEJdJdFGRbaEXOAhh78wRa6csmxi4Rk=";
   };
-
-  # boost_mp11_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "mp11";
-  #   tag = "863d8b8d2b20f2acd0b5870f23e553df9ce90e6c";
-  #   sha256 = "";
-  # };
-
-  # boost_unordered_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "unordered";
-  #   tag = "5e6b9291deb55567d41416af1e77c2516dc1250f";
-  #   sha256 = "";
-  # };
-
-  # boost_assert_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "assert";
-  #   tag = "447e0b3a331930f8708ade0e42683d12de9dfbc3";
-  #   sha256 = "";
-  # };
-
-  # boost_config_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "config";
-  #   tag = "11385ec21012926e15a612e3bf9f9a71403c1e5b";
-  #   sha256 = "";
-  # };
-
-  # boost_container_hash_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "container_hash";
-  #   tag = "6d214eb776456bf17fbee20780a034a23438084f";
-  #   sha256 = "";
-  # };
-
-  # boost_core_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "core";
-  #   tag = "083b41c17e34f1fc9b43ab796b40d0d8bece685c";
-  #   sha256 = "";
-  # };
-
-  # boost_describe_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "describe";
-  #   tag = "50719b212349f3d1268285c586331584d3dbfeb5";
-  #   sha256 = "";
-  # };
-
-  # boost_predef_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "predef";
-  #   tag = "0fdfb49c3a6789e50169a44e88a07cc889001106";
-  #   sha256 = "";
-  # };
-
-  # boost_static_assert_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "static_assert";
-  #   tag = "ba72d3340f3dc6e773868107f35902292f84b07e";
-  #   sha256 = "";
-  # };
-
-  # boost_throw_exception_src = fetchFromGitHub {
-  #   owner = "boostorg";
-  #   repo = "throw_exception";
-  #   tag = "7c8ec2114bc1f9ab2a8afbd629b96fbdd5901294";
-  #   sha256 = "";
-  # };
 }

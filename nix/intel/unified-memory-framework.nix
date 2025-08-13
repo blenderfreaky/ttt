@@ -6,7 +6,7 @@
   ninja,
   level-zero,
   hwloc,
-  # jemalloc,
+  jemalloc,
   tbb,
   numactl,
   pkg-config,
@@ -14,16 +14,13 @@
   # cudaSupport ? config.cudaSupport
   cudaSupport ? false,
   levelZeroSupport ? true,
-
   ctestCheckHook,
   buildTests ? false,
-
   python3,
   doxygen,
   sphinx,
   buildDocs ? false,
-}:
-let
+}: let
   version = "1.0.0";
   tag = "v${version}";
   gtest = fetchFromGitHub {
@@ -39,75 +36,74 @@ let
     sha256 = "sha256-5cl1PIjhXaL58kSyWZXRWLq6BITS2BwEovPhwvk2e18=";
   };
 in
-stdenv.mkDerivation (finalAttrs: {
-  name = "unified-memory-framework";
-  inherit version;
+  stdenv.mkDerivation (finalAttrs: {
+    name = "unified-memory-framework";
+    inherit version;
 
-  nativeBuildInputs = [
-    cmake
-    ninja
-    level-zero
-    hwloc
-    # jemalloc
-    tbb
-    pkg-config
-  ]
-  ++ lib.optionals cudaSupport [
-    cudaPackages.cuda_cudart
-  ]
-  ++ lib.optionals buildTests [
-    numactl
-  ]
-  ++ lib.optionals buildDocs [
-    python3
-    doxygen
-    sphinx
-  ];
+    nativeBuildInputs =
+      [
+        cmake
+        ninja
+        level-zero
+        tbb
+        pkg-config
+      ]
+      ++ lib.optionals buildDocs [
+        python3
+        doxygen
+        sphinx
+      ];
 
-  buildInputs = [
-    hwloc
-  ];
+    buildInputs =
+      [
+        hwloc
+        jemalloc
+      ]
+      ++ lib.optionals cudaSupport [
+        cudaPackages.cuda_cudart
+      ]
+      ++ lib.optionals buildTests [
+        numactl
+      ];
 
-  nativeCheckInputs = lib.optionals buildTests [
-    ctestCheckHook
-  ];
+    nativeCheckInputs = lib.optionals buildTests [
+      ctestCheckHook
+    ];
 
-  src = fetchFromGitHub {
-    owner = "oneapi-src";
-    repo = "unified-memory-framework";
-    inherit tag;
-    sha256 = "sha256-nolnyxnupHDzz92/uFpIJsmEkcvD9MgI0oMX0V8aM1s=";
-  };
+    src = fetchFromGitHub {
+      owner = "oneapi-src";
+      repo = "unified-memory-framework";
+      inherit tag;
+      sha256 = "sha256-nolnyxnupHDzz92/uFpIJsmEkcvD9MgI0oMX0V8aM1s=";
+    };
 
-  postPatch = ''
-    # The CMake tries to find out the version via git.
-    # Since we're not in a clone, git describe won't work.
-    substituteInPlace cmake/helpers.cmake \
-      --replace-fail "git describe --always" "echo ${tag}"
+    postPatch = ''
+      # The CMake tries to find out the version via git.
+      # Since we're not in a clone, git describe won't work.
+      substituteInPlace cmake/helpers.cmake \
+        --replace-fail "git describe --always" "echo ${tag}"
+    '';
 
-    #substituteInPlace \
-    #  --replace-fail ";$<LINK_ONLY:>" ""
-  '';
+    cmakeFlags =
+      [
+        (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
+        (lib.cmakeBool "FETCHCONTENT_QUIET" false)
 
-  cmakeFlags = [
-    (lib.cmakeBool "FETCHCONTENT_FULLY_DISCONNECTED" true)
-    (lib.cmakeBool "FETCHCONTENT_QUIET" false)
+        (lib.cmakeBool "UMF_BUILD_CUDA_PROVIDER" cudaSupport)
+        (lib.cmakeBool "UMF_BUILD_LEVEL_ZERO_PROVIDER" levelZeroSupport)
 
-    (lib.cmakeBool "UMF_BUILD_CUDA_PROVIDER" cudaSupport)
-    (lib.cmakeBool "UMF_BUILD_LEVEL_ZERO_PROVIDER" levelZeroSupport)
+        # (lib.cmakeBool "UMF_BUILD_LIBUMF_POOL_JEMALLOC" true)
 
-    # (lib.cmakeBool "UMF_BUILD_LIBUMF_POOL_JEMALLOC" true)
+        (lib.cmakeBool "UMF_BUILD_TESTS" buildTests)
+        (lib.cmakeBool "UMF_BUILD_GPU_TESTS" buildTests)
+        (lib.cmakeBool "UMF_BUILD_BENCHMARKS" buildTests)
+        (lib.cmakeBool "UMF_BUILD_EXAMPLES" buildTests)
+        (lib.cmakeBool "UMF_BUILD_GPU_EXAMPLES" buildTests)
+      ]
+      ++ lib.optionals buildTests [
+        (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_GOOGLETEST" "${gtest}")
+        (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK" "${gbench}")
+      ];
 
-    (lib.cmakeBool "UMF_BUILD_TESTS" buildTests)
-    (lib.cmakeBool "UMF_BUILD_GPU_TESTS" buildTests)
-    (lib.cmakeBool "UMF_BUILD_BENCHMARKS" buildTests)
-    (lib.cmakeBool "UMF_BUILD_EXAMPLES" buildTests)
-    (lib.cmakeBool "UMF_BUILD_GPU_EXAMPLES" buildTests)
-  ]
-  ++ lib.optionals buildTests [
-    (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_GOOGLETEST" "${gtest}")
-    (lib.cmakeFeature "FETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK" "${gbench}")
-  ];
-
-  passthru.tests = finalAttrs.finalPackage.override { buildTests = true; };
-})
+    passthru.tests = finalAttrs.finalPackage.override {buildTests = true;};
+  })

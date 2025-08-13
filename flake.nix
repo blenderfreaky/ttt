@@ -1,39 +1,37 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs-intel.url = "github:blenderfreaky/nixpkgs/package/intel-oneapi";
   };
 
-  outputs =
-    {
-      # self,
-      nixpkgs,
-      ...
-    }:
-    let
-      systems = [ "x86_64-linux" ];
-      forAllSys = nixpkgs.lib.genAttrs systems;
-      forAllSysPkgs = f: forAllSys (sys: f nixpkgs.legacyPackages.${sys});
-      rocm =
-        pkgs:
-        pkgs.symlinkJoin {
-          name = "rocm-merged";
-          paths = with pkgs.rocmPackages; [
-            clr
-            rocm-core
-            rocm-device-libs
-            rocm-runtime
-            hip-common
-          ];
-          buildInputs = [ pkgs.makeWrapper ];
-          postBuild = ''
-            wrapProgram $out/bin/hipcc \
-              --add-flags "--rocm-device-lib-path=$out/amdgcn/bitcode"
-          '';
-        };
-      ownPackages = pkgs: import ./nix { inherit pkgs; };
-      envPackages =
-        pkgs:
-        with pkgs;
+  outputs = {
+    # self,
+    nixpkgs,
+    nixpkgs-intel,
+    ...
+  }: let
+    systems = ["x86_64-linux"];
+    forAllSys = nixpkgs.lib.genAttrs systems;
+    forAllSysPkgs = f: forAllSys (sys: f nixpkgs.legacyPackages.${sys});
+    rocm = pkgs:
+      pkgs.symlinkJoin {
+        name = "rocm-merged";
+        paths = with pkgs.rocmPackages; [
+          clr
+          rocm-core
+          rocm-device-libs
+          rocm-runtime
+          hip-common
+        ];
+        buildInputs = [pkgs.makeWrapper];
+        postBuild = ''
+          wrapProgram $out/bin/hipcc \
+            --add-flags "--rocm-device-lib-path=$out/amdgcn/bitcode"
+        '';
+      };
+    ownPackages = pkgs: import ./nix {inherit pkgs;};
+    envPackages = pkgs:
+      with pkgs;
         [
           (rocm pkgs)
           cmake
@@ -48,7 +46,7 @@
           just
           llvmPackages.openmp
           gcc
-          (adaptivecpp.override { llvmPackages_18 = llvmPackages; })
+          (adaptivecpp.override {llvmPackages_18 = llvmPackages;})
         ]
         ++ (with (ownPackages pkgs); [
           kokkos
@@ -56,158 +54,174 @@
           kokkos-tools
         ]);
 
-      syclEnvPackages =
-        pkgs:
-        envPackages pkgs
-        ++ [
-          # Additional packages for SYCL development
-          pkgs.gdb
-          pkgs.stdenv
-          pkgs.boost
-          pkgs.valgrind
-          pkgs.opencl-headers
-          pkgs.clinfo
-        ];
-    in
-    {
-      nixpkgs.config = {
-        rocmSupport = true;
-        # Most of the intel stuff is closed source
-        allowUnfree = true;
+    syclEnvPackages = pkgs:
+      envPackages pkgs
+      ++ [
+        # Additional packages for SYCL development
+        pkgs.gdb
+        pkgs.stdenv
+        pkgs.boost
+        pkgs.valgrind
+        pkgs.opencl-headers
+        pkgs.clinfo
+      ];
+  in {
+    nixpkgs.config = {
+      rocmSupport = true;
+      # Most of the intel stuff is closed source
+      allowUnfree = true;
+    };
+    devShells = forAllSysPkgs (pkgs: {
+      default = pkgs.mkShell {
+        packages = envPackages pkgs;
+        shellHook = ''
+          # ROCm PR seems to set these to '-parallel-jobs=1' somehow, which breaks builds. I don't know why.
+          # export CFLAGS=$CFLAGS -D__HIP_PLATFORM_AMD__
+          # export CXXFLAGS=$CXXFLAGS -D__HIP_PLATFORM_AMD__
+          export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${
+            pkgs.lib.makeLibraryPath (
+              with pkgs; [
+                vulkan-loader
+                (rocm pkgs)
+              ]
+            )
+          }
+          echo AMONGUS
+          "'';
       };
-      devShells = forAllSysPkgs (pkgs: {
-        default = pkgs.mkShell {
-          packages = envPackages pkgs;
-          shellHook = ''
-            # ROCm PR seems to set these to '-parallel-jobs=1' somehow, which breaks builds. I don't know why.
-            # export CFLAGS=$CFLAGS -D__HIP_PLATFORM_AMD__
-            # export CXXFLAGS=$CXXFLAGS -D__HIP_PLATFORM_AMD__
-            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${
-              pkgs.lib.makeLibraryPath (
-                with pkgs;
-                [
-                  vulkan-loader
-                  (rocm pkgs)
-                ]
-              )
-            }
-            echo AMONGUS
-            "'';
-        };
 
-        # SYCL development shell with Intel OneAPI
-        sycl-intel =
-          let
-            intelPkgs = (ownPackages pkgs).intelPackages;
-          in
-          pkgs.mkShell {
-            packages = syclEnvPackages pkgs ++ [
+      intel-llvm-compile-env = pkgs.mkShell {
+        nativeBuildInputs = let
+          llvm = (ownPackages pkgs).intel.llvm;
+        in
+          llvm.buildInputs ++ llvm.nativeBuildInputs;
+
+        shellHook = ''
+          export LD_LIBRARY_PATH="${
+            pkgs.lib.makeLibraryPath [
+              pkgs.stdenv.cc.cc.lib
+              pkgs.zlib
+            ]
+          }:$PWD/lib"
+
+        '';
+      };
+
+      # SYCL development shell with Intel OneAPI
+      sycl-intel = let
+        intelPkgs = (ownPackages pkgs).intelPackages;
+      in
+        pkgs.mkShell {
+          packages =
+            syclEnvPackages pkgs
+            ++ [
               intelPkgs.intel-oneapi-hpckit
             ];
-            shellHook = ''
-              export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${
-                pkgs.lib.makeLibraryPath (
-                  with pkgs;
-                  [
-                    vulkan-loader
-                    (rocm pkgs)
-                  ]
-                )
-              }"
-
-              # Intel OneAPI setup
-              if [ -f "${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh" ]; then
-                source ${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh --force
-              else
-                echo "Intel OneAPI not found"
-              fi
-
-              echo "SYCL Intel OneAPI Development Environment"
-              echo "========================================"
-              echo "Available compilers:"
-              echo "  - dpcpp (Intel DPC++)"
-              echo "  - icpx (Intel C++ Compiler)"
-              echo ""
-              echo "To build SYCL project:"
-              echo "  cd sycl-test"
-              echo "  ./test.sh --intel"
-            '';
-          };
-
-        # SYCL development shell with AdaptiveCpp
-        sycl-adaptive = pkgs.mkShell {
-          packages = syclEnvPackages pkgs;
           shellHook = ''
             export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${
               pkgs.lib.makeLibraryPath (
-                with pkgs;
-                [
+                with pkgs; [
                   vulkan-loader
                   (rocm pkgs)
                 ]
               )
             }"
 
-            # AdaptiveCpp setup
-            export ACPP_TARGETS="omp"
+            # Intel OneAPI setup
+            if [ -f "${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh" ]; then
+              source ${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh --force
+            else
+              echo "Intel OneAPI not found"
+            fi
 
-            echo "SYCL AdaptiveCpp Development Environment"
-            echo "======================================="
-            echo "Available targets: $ACPP_TARGETS"
+            echo "SYCL Intel OneAPI Development Environment"
+            echo "========================================"
+            echo "Available compilers:"
+            echo "  - dpcpp (Intel DPC++)"
+            echo "  - icpx (Intel C++ Compiler)"
             echo ""
             echo "To build SYCL project:"
             echo "  cd sycl-test"
-            echo "  ./test.sh --adaptive"
+            echo "  ./test.sh --intel"
           '';
         };
 
-        # Full SYCL development shell with both implementations
-        sycl =
-          let
-            intelPkgs = (ownPackages pkgs).intelPackages;
-          in
-          pkgs.mkShell {
-            packages = syclEnvPackages pkgs ++ [
+      # SYCL development shell with AdaptiveCpp
+      sycl-adaptive = pkgs.mkShell {
+        packages = syclEnvPackages pkgs;
+        shellHook = ''
+          export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${
+            pkgs.lib.makeLibraryPath (
+              with pkgs; [
+                vulkan-loader
+                (rocm pkgs)
+              ]
+            )
+          }"
+
+          # AdaptiveCpp setup
+          export ACPP_TARGETS="omp"
+
+          echo "SYCL AdaptiveCpp Development Environment"
+          echo "======================================="
+          echo "Available targets: $ACPP_TARGETS"
+          echo ""
+          echo "To build SYCL project:"
+          echo "  cd sycl-test"
+          echo "  ./test.sh --adaptive"
+        '';
+      };
+
+      # Full SYCL development shell with both implementations
+      sycl = let
+        intelPkgs = (ownPackages pkgs).intelPackages;
+      in
+        pkgs.mkShell {
+          packages =
+            syclEnvPackages pkgs
+            ++ [
               intelPkgs.intel-oneapi-hpckit
             ];
-            shellHook = ''
-              export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${
-                pkgs.lib.makeLibraryPath (
-                  with pkgs;
-                  [
-                    vulkan-loader
-                    (rocm pkgs)
-                  ]
-                )
-              }"
+          shellHook = ''
+            export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${
+              pkgs.lib.makeLibraryPath (
+                with pkgs; [
+                  vulkan-loader
+                  (rocm pkgs)
+                ]
+              )
+            }"
 
-              # Intel OneAPI setup
-              if [ -f "${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh" ]; then
-                source ${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh --force
-              else
-                echo "Intel OneAPI not found"
-              fi
+            # Intel OneAPI setup
+            if [ -f "${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh" ]; then
+              source ${intelPkgs.intel-oneapi-hpckit}/opt/intel/oneapi/setvars.sh --force
+            else
+              echo "Intel OneAPI not found"
+            fi
 
-              # AdaptiveCpp setup
-              export ACPP_TARGETS="omp"
+            # AdaptiveCpp setup
+            export ACPP_TARGETS="omp"
 
-              echo "SYCL Full Development Environment"
-              echo "================================="
-              echo "Available implementations:"
-              echo "  - Intel DPC++ (dpcpp)"
-              echo "  - AdaptiveCpp (ACPP_TARGETS=$ACPP_TARGETS)"
-              echo ""
-              echo "To test both implementations:"
-              echo "  cd sycl-test"
-              echo "  ./test.sh"
-            '';
-          };
-      });
+            echo "SYCL Full Development Environment"
+            echo "================================="
+            echo "Available implementations:"
+            echo "  - Intel DPC++ (dpcpp)"
+            echo "  - AdaptiveCpp (ACPP_TARGETS=$ACPP_TARGETS)"
+            echo ""
+            echo "To test both implementations:"
+            echo "  cd sycl-test"
+            echo "  ./test.sh"
+          '';
+        };
+    });
 
-      packages = forAllSysPkgs (
-        pkgs:
+    packages = forAllSysPkgs (
+      pkgs: let
+        forkPkgs = nixpkgs-intel.legacyPackages.${pkgs.system};
+      in
         (ownPackages pkgs)
         // {
+          inherit (forkPkgs) intel-oneapi-basekit intel-oneapi-hpckit;
           ttt-kokkos = pkgs.stdenv.mkDerivation {
             name = "ttt-kokkos";
             src = ./kokkos;
@@ -215,10 +229,9 @@
           };
 
           # SYCL test package with Intel DPC++
-          sycl-test-intel =
-            let
-              intelPkgs = (ownPackages pkgs).intelPackages;
-            in
+          sycl-test-intel = let
+            intelPkgs = (ownPackages pkgs).intelPackages;
+          in
             pkgs.stdenv.mkDerivation {
               name = "sycl-test-intel";
               src = ./sycl-test;
@@ -226,10 +239,12 @@
                 pkgs.cmake
                 pkgs.ninja
               ];
-              buildInputs = syclEnvPackages pkgs ++ [
-                intelPkgs.intel-oneapi-basekit
-                intelPkgs.intel-oneapi-hpckit
-              ];
+              buildInputs =
+                syclEnvPackages pkgs
+                ++ [
+                  intelPkgs.intel-oneapi-basekit
+                  intelPkgs.intel-oneapi-hpckit
+                ];
 
               configurePhase = ''
                 # Source Intel OneAPI environment
@@ -287,6 +302,6 @@
             '';
           };
         }
-      );
-    };
+    );
+  };
 }
