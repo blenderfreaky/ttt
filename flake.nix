@@ -2,6 +2,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nixpkgs-intel.url = "github:blenderfreaky/nixpkgs/package/intel-oneapi";
+    intel-nix.url = "github:blenderfreaky/intel-nix/main";
   };
 
   outputs = {
@@ -46,7 +47,7 @@
           just
           llvmPackages.openmp
           gcc
-          (adaptivecpp.override {llvmPackages_18 = llvmPackages;})
+          adaptivecpp
         ]
         ++ (with (ownPackages pkgs); [
           kokkos
