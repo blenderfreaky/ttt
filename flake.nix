@@ -2,7 +2,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # nixpkgs-intel.url = "github:blenderfreaky/nixpkgs/package/intel-oneapi";
-    intel-nix.url = "github:blenderfreaky/intel-nix/main";
+    intel-nix = {
+      url = "github:blenderfreaky/intel-nix/main";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -89,6 +92,8 @@
             oneDNN
             oneMath
 
+            # spirv-tools
+
             adaptivecpp
 
             cmake
@@ -97,6 +102,10 @@
             just
             just-formatter
           ];
+
+          ROCM_PATH = "${pkgs.rocmPackages.clr}/bin";
+          ROCM_DEVICE_LIB_PATH = "${pkgs.rocmPackages.rocm-device-libs}/amdgcn/bitcode";
+          INTEL_LLVM_DIR = "${pkgs.intel-llvm}";
         };
       }
     );
