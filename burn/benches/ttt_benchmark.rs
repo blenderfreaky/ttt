@@ -1,0 +1,519 @@
+//! Generic benchmarks for TTT (Test-Time Training) inner models and full models.
+//!
+//! This benchmark suite provides:
+//! - Inner model benchmarks (forward/backward) - just the TTT learner
+//! - Full model benchmarks (forward/backward) - complete text generation model
+//!
+//! All benchmarks are generic over:
+//! - Backend (inference vs training with autodiff)
+//! - Inner model type (TTTLinear, FusedTTTLinear, TTTMLP)
+//! - Model configuration (hidden size, num heads, etc.)
+//! - Runtime parameters (batch size, sequence length, vocab size)
+//!
+//! # Usage
+//!
+//! Run all benchmarks:
+//!   cargo bench --bench ttt_benchmark
+//!
+//! Run specific benchmark:
+//!   cargo bench --bench ttt_benchmark -- inner_forward_linear
+//!   cargo bench --bench ttt_benchmark -- full_forward
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use burn::prelude::*;
+use burn::tensor::backend::Backend as BackendTrait;
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+
+use ttt::data::TrainingTextGenerationBatch;
+use ttt::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
+use ttt::ttt::TTTConfig;
+use ttt::ttt::cubecl_kernels::linear::FusedTTTLinear;
+use ttt::ttt::layer::{Qkv, TTTInnerModel, TTTInputsInner};
+use ttt::ttt::linear::TTTLinear;
+use ttt::ttt::mlp::TTTMLP;
+
+pub type InferenceBackend = burn::backend::Rocm;
+pub type TrainingBackend = burn::backend::Autodiff<InferenceBackend>;
+
+pub fn device() -> <InferenceBackend as BackendTrait>::Device {
+    Default::default()
+}
+
+/// Force async operations to complete before returning.
+fn sync<B: BackendTrait, const D: usize>(tensor: Tensor<B, D>) {
+    let _ = tensor.into_data();
+}
+
+#[derive(Clone, Debug)]
+pub struct BenchConfig {
+    pub name: &'static str,
+    pub hidden_size: usize,
+    pub num_heads: usize,
+    pub num_layers: usize,
+    pub mlp_intermediate: usize,
+    pub mini_batch_size: usize,
+}
+
+impl BenchConfig {
+    pub const fn tiny() -> Self {
+        Self {
+            name: "tiny",
+            hidden_size: 64,
+            num_heads: 2,
+            num_layers: 1,
+            mlp_intermediate: 128,
+            mini_batch_size: 16,
+        }
+    }
+
+    pub const fn small() -> Self {
+        Self {
+            name: "small",
+            hidden_size: 128,
+            num_heads: 4,
+            num_layers: 2,
+            mlp_intermediate: 256,
+            mini_batch_size: 16,
+        }
+    }
+
+    pub const fn medium() -> Self {
+        Self {
+            name: "medium",
+            hidden_size: 256,
+            num_heads: 8,
+            num_layers: 4,
+            mlp_intermediate: 512,
+            mini_batch_size: 16,
+        }
+    }
+
+    pub fn to_ttt_config(&self, vocab_size: usize) -> TTTConfig {
+        TTTConfig::new()
+            .with_token_size(self.hidden_size)
+            .with_hidden_size(self.hidden_size)
+            .with_num_heads(self.num_heads)
+            .with_num_hidden_layers(self.num_layers)
+            .with_swi_glu_mlp_intermediate_size(self.mlp_intermediate)
+            .with_mini_batch_size(self.mini_batch_size)
+            .with_conv_before_ttt(false)
+            .with_vocab_size(vocab_size)
+    }
+
+    pub fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_heads
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeParams {
+    pub batch_size: usize,
+    pub seq_length: usize,
+    pub vocab_size: usize,
+}
+
+impl RuntimeParams {
+    pub fn new(batch_size: usize, seq_length: usize, vocab_size: usize) -> Self {
+        Self {
+            batch_size,
+            seq_length,
+            vocab_size,
+        }
+    }
+
+    pub fn total_tokens(&self) -> usize {
+        self.batch_size * self.seq_length
+    }
+
+    pub fn id(&self) -> String {
+        format!("b{}_s{}", self.batch_size, self.seq_length)
+    }
+}
+
+fn create_inner_inputs<B: BackendTrait>(
+    config: &BenchConfig,
+    params: &RuntimeParams,
+    device: &B::Device,
+) -> TTTInputsInner<B> {
+    let batch_size = params.batch_size;
+    let num_heads = config.num_heads;
+    let seq_len = params.seq_length;
+    let head_dim = config.head_dim();
+
+    let xq = Tensor::random(
+        [batch_size, num_heads, seq_len, head_dim],
+        burn::tensor::Distribution::Normal(0.0, 0.1),
+        device,
+    );
+    let xk = Tensor::random(
+        [batch_size, num_heads, seq_len, head_dim],
+        burn::tensor::Distribution::Normal(0.0, 0.1),
+        device,
+    );
+    let xv = Tensor::random(
+        [batch_size, num_heads, seq_len, head_dim],
+        burn::tensor::Distribution::Normal(0.0, 0.1),
+        device,
+    );
+
+    let token_eta = Tensor::arange(1..(seq_len as i64 + 1), device)
+        .float()
+        .recip();
+
+    let ttt_lr_eta = Tensor::random(
+        [batch_size, num_heads, seq_len],
+        burn::tensor::Distribution::Uniform(0.01, 0.05),
+        device,
+    );
+
+    TTTInputsInner {
+        qkv: Qkv { xq, xk, xv },
+        token_eta,
+        ttt_lr_eta,
+        start_idx: 0,
+    }
+}
+
+fn random_logits<B: BackendTrait>(params: &RuntimeParams, device: &B::Device) -> Tensor<B, 2, Int> {
+    Tensor::random(
+        [params.batch_size, params.seq_length],
+        burn::tensor::Distribution::Uniform(0.0, params.vocab_size as f64 - 1.0),
+        device,
+    )
+}
+
+fn create_training_batch<B: BackendTrait>(
+    params: &RuntimeParams,
+    device: &B::Device,
+) -> TrainingTextGenerationBatch<B> {
+    let tokens_inputs = random_logits::<B>(params, device);
+    let targets = random_logits::<B>(params, device);
+    let mask_pad = Tensor::<B, 2, Bool>::ones([params.batch_size, params.seq_length], device);
+
+    TrainingTextGenerationBatch {
+        tokens_inputs,
+        targets,
+        mask_pad,
+    }
+}
+
+/// Benchmark inner model forward pass
+fn bench_inner_forward<B: BackendTrait, Inner: TTTInnerModel<B>>(
+    c: &mut Criterion,
+    config: &BenchConfig,
+    params: &RuntimeParams,
+    device: &B::Device,
+) {
+    let ttt_config = Arc::new(config.to_ttt_config(params.vocab_size));
+    let inner_config = Arc::new(Inner::Config::default());
+
+    let inner: Inner = Inner::new(&ttt_config, &inner_config, device);
+
+    // Warmup
+    let warmup_inputs = create_inner_inputs::<B>(config, params, device);
+    let mut warmup_state = inner.init_state(params.batch_size);
+    for _ in 0..3 {
+        let output = inner.forward(&mut warmup_state, warmup_inputs.clone());
+        sync(output);
+    }
+
+    let group_name = format!("inner_forward_{}", Inner::name());
+    let mut group = c.benchmark_group(&group_name);
+    group.throughput(Throughput::Elements(params.total_tokens() as u64));
+
+    let bench_id = format!("{}_{}", config.name, params.id());
+    group.bench_function(BenchmarkId::new("forward", &bench_id), |b| {
+        b.iter_batched(
+            || {
+                let inputs = create_inner_inputs::<B>(config, params, device);
+                let state = inner.init_state(params.batch_size);
+                (inputs, state)
+            },
+            |(inputs, mut state)| {
+                let output = inner.forward(&mut state, inputs);
+                sync(output);
+            },
+            criterion::BatchSize::LargeInput,
+        );
+    });
+
+    group.finish();
+}
+
+/// Benchmark inner model backward pass (forward + backward)
+fn bench_inner_backward<B: burn::tensor::backend::AutodiffBackend, Inner: TTTInnerModel<B>>(
+    c: &mut Criterion,
+    config: &BenchConfig,
+    params: &RuntimeParams,
+    device: &B::Device,
+) {
+    let ttt_config = Arc::new(config.to_ttt_config(params.vocab_size));
+    let inner_config = Arc::new(Inner::Config::default());
+
+    let inner: Inner = Inner::new(&ttt_config, &inner_config, device);
+
+    // Warmup
+    let warmup_inputs = create_inner_inputs::<B>(config, params, device);
+    let mut warmup_state = inner.init_state(params.batch_size);
+    let output = inner.forward(&mut warmup_state, warmup_inputs);
+    let _grads = output.sum().backward();
+
+    let group_name = format!("inner_backward_{}", Inner::name());
+    let mut group = c.benchmark_group(&group_name);
+    group.throughput(Throughput::Elements(params.total_tokens() as u64));
+    group.measurement_time(Duration::from_secs(30));
+
+    let bench_id = format!("{}_{}", config.name, params.id());
+    group.bench_function(BenchmarkId::new("backward", &bench_id), |b| {
+        b.iter_batched(
+            || {
+                let inputs = create_inner_inputs::<B>(config, params, device);
+                let state = inner.init_state(params.batch_size);
+                (inputs, state)
+            },
+            |(inputs, mut state)| {
+                let output = inner.forward(&mut state, inputs);
+                let _grads = output.sum().backward();
+            },
+            criterion::BatchSize::LargeInput,
+        );
+    });
+
+    group.finish();
+}
+
+/// Benchmark full model forward pass
+fn bench_full_forward<B: BackendTrait, Inner: TTTInnerModel<B>>(
+    c: &mut Criterion,
+    config: &BenchConfig,
+    params: &RuntimeParams,
+    device: &B::Device,
+) {
+    let ttt_config = config.to_ttt_config(params.vocab_size);
+    let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
+    let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
+
+    // Warmup
+    let warmup_input = random_logits::<B>(params, device);
+    for _ in 0..3 {
+        let output = model.forward_inference(warmup_input.clone());
+        sync(output);
+    }
+
+    let group_name = format!("full_forward_{}", Inner::name());
+    let mut group = c.benchmark_group(&group_name);
+    group.throughput(Throughput::Elements(params.total_tokens() as u64));
+
+    let bench_id = format!("{}_{}", config.name, params.id());
+    let input = random_logits::<B>(params, device);
+
+    group.bench_function(BenchmarkId::new("forward", &bench_id), |b| {
+        b.iter(|| {
+            let output = model.forward_inference(input.clone());
+            sync(output);
+        });
+    });
+
+    group.finish();
+}
+
+/// Benchmark full model backward pass (forward + backward)
+fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend, Inner: TTTInnerModel<B>>(
+    c: &mut Criterion,
+    config: &BenchConfig,
+    params: &RuntimeParams,
+    device: &B::Device,
+) {
+    let ttt_config = config.to_ttt_config(params.vocab_size);
+    let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
+    let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
+
+    // Warmup
+    let warmup_batch = create_training_batch::<B>(params, device);
+    let output = model.forward_training(warmup_batch);
+    let _grads = output.loss.backward();
+
+    let group_name = format!("full_backward_{}", Inner::name());
+    let mut group = c.benchmark_group(&group_name);
+    group.throughput(Throughput::Elements(params.total_tokens() as u64));
+    group.measurement_time(Duration::from_secs(60));
+    group.sample_size(20);
+
+    let bench_id = format!("{}_{}", config.name, params.id());
+    group.bench_function(BenchmarkId::new("backward", &bench_id), |b| {
+        b.iter_batched(
+            || create_training_batch::<B>(params, device),
+            |batch| {
+                let output = model.forward_training(batch);
+                let _grads = output.loss.backward();
+            },
+            criterion::BatchSize::LargeInput,
+        );
+    });
+
+    group.finish();
+}
+
+fn bench_inner_forward_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_inner_forward::<InferenceBackend, TTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_inner_forward_mlp(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_inner_forward::<InferenceBackend, TTTMLP<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_inner_forward_fused_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_inner_forward::<InferenceBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_inner_backward_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_inner_backward::<TrainingBackend, TTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_inner_backward_mlp(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_inner_backward::<TrainingBackend, TTTMLP<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_inner_backward_fused_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_inner_backward::<TrainingBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_full_forward_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_full_forward::<InferenceBackend, TTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_full_forward_mlp(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_full_forward::<InferenceBackend, TTTMLP<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_full_forward_fused_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_full_forward::<InferenceBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_full_backward_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_full_backward::<TrainingBackend, TTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_full_backward_mlp(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_full_backward::<TrainingBackend, TTTMLP<_>>(c, &config, &params, &device);
+    }
+}
+
+fn bench_full_backward_fused_linear(c: &mut Criterion) {
+    let config = BenchConfig::tiny();
+    let device = device();
+    for params in [
+        RuntimeParams::new(4, 64, 1000),
+        RuntimeParams::new(8, 128, 1000),
+    ] {
+        bench_full_backward::<TrainingBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+    }
+}
+
+criterion_group!(
+    inner_forward,
+    bench_inner_forward_linear,
+    bench_inner_forward_mlp,
+    bench_inner_forward_fused_linear,
+);
+
+criterion_group!(
+    inner_backward,
+    bench_inner_backward_linear,
+    bench_inner_backward_mlp,
+    bench_inner_backward_fused_linear,
+);
+
+criterion_group!(
+    full_forward,
+    bench_full_forward_linear,
+    bench_full_forward_mlp,
+    bench_full_forward_fused_linear,
+);
+
+criterion_group!(
+    full_backward,
+    bench_full_backward_linear,
+    bench_full_backward_mlp,
+    bench_full_backward_fused_linear,
+);
+
+criterion_main!(inner_forward, inner_backward, full_forward, full_backward);

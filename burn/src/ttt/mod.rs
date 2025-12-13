@@ -1,20 +1,29 @@
 use burn::config::Config;
 
 pub mod block;
+pub mod cubecl_kernels;
 pub mod layer;
 pub mod linear;
 pub mod lm;
+pub mod mlp;
 pub mod util;
+
+/// TTT Layer Type variants
+#[derive(Config, Debug, PartialEq)]
+pub enum TTTLayerType {
+    Linear,
+    MLP,
+}
 
 /// Configuration for the TTT layer.
 #[derive(Config, Debug)]
 pub struct TTTConfig {
     /// The size of token vectors.
-    #[config(default = 4096)]
+    #[config(default = 2048)]
     pub token_size: usize,
     /// The size of key, value, etc. across all heads.
-    /// In source it seems to be token_size
-    #[config(default = 4096)]
+    /// In source it seems to be equal to token_size
+    #[config(default = 2048)]
     pub hidden_size: usize,
     /// The number of TTT heads.
     #[config(default = 32)]
@@ -25,10 +34,6 @@ pub struct TTTConfig {
     /// The mini batch size.
     #[config(default = 16)]
     pub mini_batch_size: usize,
-    // TODO: Make positional encoding generic/exchangable for different types of positional encodings
-    /// The maximum sequence length (only used for rotary encoding).
-    #[config(default = 2048)]
-    pub max_sequence_len: usize,
     /// The theta value for the rotary encoding.
     #[config(default = 10000.0)]
     pub rope_theta: f32,
@@ -39,16 +44,164 @@ pub struct TTTConfig {
     pub epsilon: f64,
     #[config(default = false)]
     pub conv_before_ttt: bool,
-    #[config(default = 11008)]
+    #[config(default = 5504)]
     pub swi_glu_mlp_intermediate_size: usize,
-    #[config(default = 32)]
+    #[config(default = 24)]
     pub num_hidden_layers: usize,
-    #[config(default = 50277)]
+    // #[config(default = 32000)]
+    #[config(default = 50257)]
     pub vocab_size: usize,
+    /// The type of TTT layer to use
+    #[config(default = "TTTLayerType::Linear")]
+    pub layer_type: TTTLayerType,
+    /// Whether to use gating (as in Mamba backbone)
+    #[config(default = false)]
+    pub use_gate: bool,
 }
 
 impl TTTConfig {
+    #[must_use]
     pub fn head_dim(&self) -> usize {
         self.hidden_size / self.num_heads
+    }
+
+    // Default sized from reference
+    // TTT_STANDARD_CONFIGS = {
+    //     "125m": {
+    //         "hidden_size": 768,
+    //         "intermediate_size": 2048,
+    //         "num_hidden_layers": 12,
+    //         "num_attention_heads": 12,
+    //     },
+    //     "350m": {
+    //         "hidden_size": 1024,
+    //         "intermediate_size": 2736,
+    //         "num_hidden_layers": 24,
+    //         "num_attention_heads": 16,
+    //     },
+    //     "760m": {
+    //         "hidden_size": 1536,
+    //         "intermediate_size": 4096,
+    //         "num_hidden_layers": 24,
+    //         "num_attention_heads": 16,
+    //     },
+    //     "1b": {
+    //         "hidden_size": 2048,
+    //         "intermediate_size": 5504,
+    //         "num_hidden_layers": 24,
+    //         "num_attention_heads": 32,
+    //     },
+    // }
+    //
+    //
+    // def __init__(
+    //     self,
+    //     vocab_size=32000,
+    //     hidden_size=2048,
+    //     intermediate_size=5504,
+    //     num_hidden_layers=24,
+    //     num_attention_heads=32,
+    //     hidden_act="silu",
+    //     max_position_embeddings=2048,
+    //     initializer_range=0.02,
+    //     rms_norm_eps=1e-6,
+    //     use_cache=False,
+    //     pad_token_id=None,
+    //     bos_token_id=1,
+    //     eos_token_id=2,
+    //     pretraining_tp=1,
+    //     tie_word_embeddings=True,
+    //     rope_theta=10000.0,
+    //     use_gate=False,
+    //     share_qk=False,
+    //     ttt_layer_type="linear",
+    //     ttt_base_lr=1.0,
+    //     mini_batch_size=16,
+    //     pre_conv=False,
+    //     conv_kernel=4,
+    //     scan_checkpoint_group_size=0,
+    //     **kwargs,
+    // ):
+
+    // pub fn default() -> Self {
+    //     Self {
+    //         vocab_size: 32000,
+    //         hidden_size: 2048,
+    //         // Same as hidden_size in reference
+    //         token_size: 2048,
+    //         swi_glu_mlp_intermediate_size: 5504,
+    //         num_hidden_layers: 24,
+    //         num_heads: 32,
+    //         // hidden_act="silu",
+    //         max_sequence_len: 2048,
+    //         // initializer_range=0.02,
+    //         // rms_norm_eps: 1e-6,
+    //         epsilon: 1e-6,
+    //         // use_cache: False,
+    //         // pad_token_id: None,
+    //         // bos_token_id: 1,
+    //         // eos_token_id: 2,
+    //         // pretraining_tp: 1,
+    //         // tie_word_embeddings: True,
+    //         rope_theta: 10000.0,
+    //         use_gate: false,
+    //         // share_qk:False,
+    //         layer_type: TTTLayerType::Linear,
+    //         base_lr: 1.0,
+    //         mini_batch_size: 16,
+    //         conv_before_ttt: false,
+    //         conv_kernel_size: 4,
+    //         // scan_checkpoint_group_size:0,
+    //     }
+    // }
+
+    #[must_use]
+    pub fn default_tiny() -> Self {
+        Self::new()
+            .with_hidden_size(512)
+            .with_token_size(512)
+            .with_swi_glu_mlp_intermediate_size(768)
+            .with_num_hidden_layers(6)
+            .with_num_heads(8)
+    }
+
+    #[must_use]
+    pub fn default_125m() -> Self {
+        Self::new()
+            .with_hidden_size(768)
+            .with_token_size(768)
+            .with_swi_glu_mlp_intermediate_size(2048)
+            .with_num_hidden_layers(12)
+            .with_num_heads(12)
+    }
+
+    #[must_use]
+    pub fn default_350m() -> Self {
+        Self::new()
+            .with_hidden_size(1024)
+            .with_token_size(1024)
+            .with_swi_glu_mlp_intermediate_size(2736)
+            .with_num_hidden_layers(24)
+            .with_num_heads(16)
+    }
+
+    #[must_use]
+    pub fn default_760m() -> Self {
+        Self::new()
+            .with_hidden_size(1536)
+            .with_token_size(1536)
+            .with_swi_glu_mlp_intermediate_size(4096)
+            .with_num_hidden_layers(24)
+            .with_num_heads(16)
+    }
+
+    #[must_use]
+    pub fn default_1b() -> Self {
+        Self::new()
+            .with_hidden_size(2048)
+            .with_token_size(2048)
+            .with_swi_glu_mlp_intermediate_size(5504)
+            .with_num_hidden_layers(24)
+            .with_num_heads(32)
     }
 }

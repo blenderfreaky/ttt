@@ -1,0 +1,11 @@
+# CubeCL configuration for profiling
+# See: https://burn.dev/books/cubecl/advanced-usage/config.html
+
+# [profiling]
+# logger = { level = "full", stdout = true }
+
+# [autotune]
+# logger = { level = "disabled" }
+
+# [compilation]
+# logger = { level = "disabled" }

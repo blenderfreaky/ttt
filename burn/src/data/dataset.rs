@@ -1,6 +1,6 @@
 // Taken from the burn-rs text-generation example
 
-use burn::data::dataset::{source::huggingface::HuggingfaceDatasetLoader, Dataset, SqliteDataset};
+use burn::data::dataset::{Dataset, SqliteDataset, source::huggingface::HuggingfaceDatasetLoader};
 
 #[derive(Clone, Debug)]
 pub struct TextGenerationItem {
@@ -8,19 +8,19 @@ pub struct TextGenerationItem {
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct DbPediaItem {
-    pub content: String,
+pub struct DatasetItem {
+    pub text: String,
 }
 
-pub struct DbPediaDataset {
-    dataset: SqliteDataset<DbPediaItem>,
+pub struct TextDataset {
+    dataset: SqliteDataset<DatasetItem>,
 }
 
-impl Dataset<TextGenerationItem> for DbPediaDataset {
+impl Dataset<TextGenerationItem> for TextDataset {
     fn get(&self, index: usize) -> Option<TextGenerationItem> {
         self.dataset
             .get(index)
-            .map(|item| TextGenerationItem { text: item.content })
+            .map(|item| TextGenerationItem { text: item.text })
     }
 
     fn len(&self) -> usize {
@@ -28,19 +28,25 @@ impl Dataset<TextGenerationItem> for DbPediaDataset {
     }
 }
 
-impl DbPediaDataset {
+impl TextDataset {
+    #[must_use]
     pub fn train() -> Self {
         Self::new("train")
     }
 
+    #[must_use]
     pub fn test() -> Self {
-        Self::new("test")
+        // Self::new("test")
+        Self::new("validation")
     }
 
+    #[must_use]
     pub fn new(split: &str) -> Self {
-        let dataset: SqliteDataset<DbPediaItem> = HuggingfaceDatasetLoader::new("dbpedia_14")
-            .dataset(split)
-            .unwrap();
+        // let dataset: SqliteDataset<DbPediaItem> = HuggingfaceDatasetLoader::new("dbpedia_14")
+        let dataset: SqliteDataset<DatasetItem> =
+            HuggingfaceDatasetLoader::new("roneneldan/TinyStories")
+                .dataset(split)
+                .unwrap();
         Self { dataset }
     }
 }

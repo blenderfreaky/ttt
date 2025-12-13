@@ -1,48 +1,93 @@
-use std::sync::Arc;
+use std::env;
 
-use burn::{
-    prelude::Backend,
-    tensor::{Int, Tensor},
-};
-use tokenizers::Tokenizer;
-use ttt::{
-    linear::{TTTLinear, TTTLinearConfig},
-    TTTConfig,
-};
+pub mod data;
+pub mod inference;
+pub mod text_generation;
+pub mod training;
+pub mod ttt;
 
-fn compute<B: Backend>() {
-    let device = Default::default();
+type GpuBackend = burn::backend::Rocm;
 
-    let config = TTTConfig::new()
-        .with_token_size(2048)
-        .with_hidden_size(2048)
-        .with_swi_glu_mlp_intermediate_size(5504)
-        // .with_num_hidden_layers(24)
-        // .with_num_heads(32)
-        .with_num_hidden_layers(2)
-        .with_num_heads(2)
-        // .with_num_heads(4)
-        .with_conv_before_ttt(true);
-    let config = Arc::new(config);
-
-    let inner_config = Arc::new(TTTLinearConfig::new());
-
-    let model = config.init_with_inner_model::<_, TTTLinear<_>>(&inner_config, &device);
-
-    let tokenizer = Tokenizer::from_pretrained("meta-llama/Llama-2-7b-hf", None).unwrap();
-
-    let tokens = tokenizer.encode("Hello, world!", true).unwrap();
-    let token_ids = Tensor::<B, 1, Int>::from_ints(tokens.get_ids(), &device);
-    let token_ids = token_ids.unsqueeze();
-
-    let logits = model.forward(token_ids, 0);
-
-    dbg!(logits);
-}
+type Backend = burn::backend::Autodiff<
+    GpuBackend,
+    burn::backend::autodiff::checkpoint::strategy::BalancedCheckpointing,
+>;
 
 fn main() {
-    compute::<burn::backend::Wgpu>();
-}
+    let args: Vec<String> = env::args().collect();
 
-mod data;
-mod ttt;
+    if args.len() < 2 {
+        println!("Usage:");
+        println!(
+            "  {} train [artifact_dir]    - Train on DbPedia dataset",
+            args[0]
+        );
+        println!(
+            "  {} generate <artifact_dir> <prompt> - Generate text from prompt",
+            args[0]
+        );
+        println!(
+            "  {} interactive <artifact_dir>       - Interactive generation session",
+            args[0]
+        );
+        return;
+    }
+
+    let command = &args[1];
+
+    match command.as_str() {
+        "train" => {
+            let artifact_dir = args.get(2).map(|s| s.as_str()).unwrap_or("./artifacts");
+            println!("Training TTT text generation model...");
+            println!("Artifacts will be saved to: {}", artifact_dir);
+
+            let device = Default::default();
+
+            let config = training::TTTTrainingConfig::small();
+
+            training::train_dataset::<Backend>(&device, config, artifact_dir);
+        }
+        "generate" => {
+            if args.len() < 4 {
+                println!("Usage: {} generate <artifact_dir> <prompt>", args[0]);
+                return;
+            }
+
+            let artifact_dir = &args[2];
+            let prompt = &args[3];
+
+            let device = Default::default();
+
+            match inference::generate::<Backend>(artifact_dir, device, prompt) {
+                Ok(generated) => {
+                    println!("Prompt: {}", prompt);
+                    println!("Generated: {}", generated);
+                }
+                Err(e) => {
+                    eprintln!("Error generating text: {}", e);
+                }
+            }
+        }
+        "interactive" => {
+            if args.len() < 3 {
+                println!("Usage: {} interactive <artifact_dir>", args[0]);
+                return;
+            }
+
+            let artifact_dir = &args[2];
+
+            let device = Default::default();
+
+            match inference::interactive::<Backend>(artifact_dir, device) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error starting interactive session: {}", e);
+                }
+            }
+        }
+        _ => {
+            println!("Unknown command: {}", command);
+            println!("Use 'train', 'generate', or 'interactive'");
+        }
+    }
+}

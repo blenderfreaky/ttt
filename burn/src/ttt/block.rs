@@ -9,9 +9,9 @@ use burn::{
 };
 
 use super::{
-    layer::{TTTInnerModel, TTT},
-    util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
     TTTConfig,
+    layer::{TTT, TTTInnerModel},
+    util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
 };
 
 // We can't write the trait bound due to a limitation of the Module derive macro
@@ -19,20 +19,18 @@ use super::{
 //   Inner: TTTInnerModel<B>
 #[derive(Module, Debug)]
 pub struct TTTBlockWithSeq<B: Backend, Inner> {
-    block: TTTBlock<B>,
-    inner: Inner,
+    pub block: TTTBlock<B>,
+    pub inner: Inner,
 }
 
 impl<B: Backend, Inner: TTTInnerModel<B>> TTTBlockWithSeq<B, Inner> {
     pub fn forward(
         &self,
         input: Tensor<B, 3>,
-        residual: Option<Tensor<B, 3>>,
         state: &mut Inner::State,
         start_idx: usize,
-    ) -> (Tensor<B, 3>, Tensor<B, 3>) {
-        self.block
-            .forward(input, residual, state, &self.inner, start_idx)
+    ) -> Tensor<B, 3> {
+        self.block.forward(input, state, &self.inner, start_idx)
     }
 
     pub fn init_state(&self, batch_size: usize) -> Inner::State {
@@ -42,14 +40,13 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTBlockWithSeq<B, Inner> {
 
 #[derive(Module, Debug)]
 pub struct TTTBlock<B: Backend> {
-    layer_idx: usize,
-    conv: Option<(CausalConv<B>, RmsNorm<B>)>,
-    // conv_norm: Option<RmsNorm<B>>,
-    config: Ignored<Arc<TTTConfig>>,
-    seq_norm: RmsNorm<B>,
-    ffn_norm: RmsNorm<B>,
-    ttt: TTT<B>,
-    swi_glu_mlp: SwiGluMlp<B>,
+    pub layer_idx: usize,
+    pub conv: Option<(CausalConv<B>, RmsNorm<B>)>,
+    pub config: Ignored<Arc<TTTConfig>>,
+    pub seq_norm: RmsNorm<B>,
+    pub ffn_norm: RmsNorm<B>,
+    pub ttt: TTT<B>,
+    pub swi_glu_mlp: SwiGluMlp<B>,
 }
 
 #[derive(Config, Debug)]
@@ -96,45 +93,33 @@ impl TTTBlockConfig {
     }
 }
 
-// fn add_opt<B: Backend>(x: Tensor<B, 3>, opt: Option<Tensor<B, 3>>) -> Tensor<B, 3> {
-//     match opt {
-//         Some(a) => x + a,
-//         None => x,
-//     }
-// }
-
 impl<B: Backend> TTTBlock<B> {
     pub fn forward<Inner: TTTInnerModel<B>>(
         &self,
         input: Tensor<B, 3>,
-        residual: Option<Tensor<B, 3>>,
         state: &mut Inner::State,
         inner: &Inner,
         start_idx: usize,
-    ) -> (Tensor<B, 3>, Tensor<B, 3>) {
-        // This is not optimal for perf but I'm lazy rn
-        let mut residual = residual.unwrap_or_else(|| input.zeros_like());
-        let mut hidden_state = input;
+    ) -> Tensor<B, 3> {
+        let mut hidden_states = input;
 
         if let Some((conv, conv_norm)) = &self.conv {
-            // TODO: Fused add norm
-            // TODO: Residual in f32
+            let residual = hidden_states.clone();
+            hidden_states = conv_norm.forward(hidden_states);
+            hidden_states = conv.forward(hidden_states);
+            hidden_states = residual + hidden_states;
+        }
 
-            // let residual = add_opt(hidden_state, residual);
+        let residual = hidden_states.clone();
+        hidden_states = self.seq_norm.forward(hidden_states);
+        hidden_states = self.ttt.forward(hidden_states, inner, state, start_idx);
+        hidden_states = residual + hidden_states;
 
-            residual = hidden_state + residual;
-            hidden_state = conv_norm.forward(residual.clone());
-            hidden_state = conv.forward(hidden_state);
-        };
+        let residual = hidden_states.clone();
+        hidden_states = self.ffn_norm.forward(hidden_states);
+        hidden_states = self.swi_glu_mlp.forward(hidden_states);
+        hidden_states = residual + hidden_states;
 
-        residual = hidden_state + residual;
-        hidden_state = self.seq_norm.forward(residual.clone());
-        hidden_state = self.ttt.forward(hidden_state, inner, state, start_idx);
-
-        residual = hidden_state + residual;
-        hidden_state = self.ffn_norm.forward(residual.clone());
-        hidden_state = self.swi_glu_mlp.forward(hidden_state);
-
-        (hidden_state, residual)
+        hidden_states
     }
 }

@@ -1,1 +1,5 @@
 target/
+artifacts*/
+validation_data_reference/
+gpucore.*
+__pycache__/

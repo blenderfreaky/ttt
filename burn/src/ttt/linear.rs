@@ -5,48 +5,56 @@ use burn::{
     module::{Ignored, Module, Param},
     nn::Initializer,
     prelude::Backend,
-    tensor::{s, Tensor},
+    tensor::{Tensor, s},
 };
 
 use super::{
+    TTTConfig,
     layer::{TTTInnerModel, TTTInputsInner},
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
-    TTTConfig,
 };
 
 #[derive(Module, Debug)]
 pub struct TTTLinear<B: Backend> {
     /// [num_heads, head_dim, head_dim]
-    weight_init: Param<Tensor<B, 3>>,
+    pub weight_init: Param<Tensor<B, 3>>,
     /// [num_heads, head_dim]
-    bias_init: Param<Tensor<B, 2>>,
-    layer_norm: MultiHeadLayerNorm<B>,
-    config: Ignored<Arc<TTTConfig>>,
+    pub bias_init: Param<Tensor<B, 2>>,
+    pub layer_norm: MultiHeadLayerNorm<B>,
+    pub config: Ignored<Arc<TTTConfig>>,
 }
 
 #[derive(Module, Debug)]
 pub struct TTTLinearState<B: Backend> {
     /// [batch_size, num_heads, head_dim, head_dim]
-    weight: Tensor<B, 4>,
+    pub weight: Tensor<B, 4>,
     /// [batch_size, num_heads, head_dim]
-    bias: Tensor<B, 3>,
+    pub bias: Tensor<B, 3>,
     /// [batch_size, num_heads, head_dim, head_dim]
-    weight_grad: Tensor<B, 4>,
+    pub weight_grad: Tensor<B, 4>,
     /// [batch_size, num_heads, head_dim]
-    bias_grad: Tensor<B, 3>,
+    pub bias_grad: Tensor<B, 3>,
 }
 
 #[derive(Config, Debug)]
 pub struct TTTLinearConfig {
-    #[config(
-        default = "Initializer::KaimingUniform{gain:1.0/num_traits::Float::sqrt(3.0), fan_out_only:false}"
-    )]
+    #[config(default = "Initializer::Normal{mean:0.0, std:0.02}")]
     pub initializer: Initializer,
+}
+
+impl Default for TTTLinearConfig {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
     type Config = TTTLinearConfig;
     type State = TTTLinearState<B>;
+
+    fn name() -> &'static str {
+        "TTTLinear"
+    }
 
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
         let len = global_config.hidden_size;
@@ -99,47 +107,14 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         state: &mut TTTLinearState<B>,
         inputs: TTTInputsInner<B>,
     ) -> Tensor<B, 4> {
-        let qkv = inputs.qkv;
-
-        let [_batch_size, num_heads, seq_len, head_dim] = qkv.xv.shape().dims();
-        debug_assert_eq!(head_dim, self.config.head_dim());
-        debug_assert_eq!(num_heads, self.config.num_heads);
-
-        assert_eq!(seq_len, 1);
-
-        let z = qkv.xq.clone().matmul(state.weight.clone()) + state.bias.clone().unsqueeze_dim(2);
-
-        // Since we're using a residual connection, our target is the difference
-        let target = qkv.xv - qkv.xk.clone();
-
-        let (_ln_out, dl_dz) = self.layer_norm.forward_and_l2_grad(z, target);
-
-        let step = inputs.lr.unsqueeze_dim(3) * dl_dz;
-
-        let weight_grad = qkv.xk.transpose().matmul(step.clone());
-        let bias_grad = step.squeeze(2);
-
-        // It seems we only accumulate gradients, and don't update the weights per-step, even outside of prefill
-        state.weight_grad = state.weight_grad.clone() + weight_grad;
-        state.bias_grad = state.bias_grad.clone() + bias_grad;
-
-        let weight_new =
-            state.weight.clone() - inputs.token_idx.clone().unsqueeze() * state.weight_grad.clone();
-        let bias_new =
-            state.bias.clone() - (inputs.token_idx.clone().unsqueeze() * state.bias_grad.clone());
-
-        if (inputs.start_idx + 1) % self.config.mini_batch_size == 0 {
-            state.weight = weight_new.clone();
-            state.bias = bias_new.clone();
-
-            // TODO: This is rather hacky
-            state.weight_grad = state.weight_grad.zeros_like();
-            state.bias_grad = state.bias_grad.zeros_like();
-        }
-
-        // Recalculate after the backprop step
-        // TODO: Reference implementation does layernorm outside, I think we should do in here rather
-        qkv.xq.matmul(weight_new) + bias_new.unsqueeze_dim(2)
+        // Single token is just mini-batch with size 1
+        // We're not optimizing for inference, so this isn't our focus here
+        // TODO: I think this is not actually correct,
+        //       due to ignoring token_eta and so on. Reference impl implements
+        //       a variation of primal here.
+        //       I don't think we really need to implement this, but keep it in mind.
+        debug_assert_eq!(inputs.qkv.xq.shape().dims::<4>()[2], 1);
+        self.forward_mini_batch(state, inputs)
     }
 
     fn forward_mini_batch(
@@ -147,35 +122,83 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         state: &mut Self::State,
         inputs: TTTInputsInner<B>,
     ) -> Tensor<B, 4> {
+        // For reference:
+        // qkv: [batch_size, num_heads, seq_len, head_dim]
         let qkv = inputs.qkv;
 
-        let [batch_size, num_heads, seq_len, head_dim] = qkv.xq.shape().dims();
+        let x1 = qkv.xk.clone();
 
-        debug_assert_eq!(seq_len, self.config.mini_batch_size);
+        // Z1 = X1 @ W1_init + b1_init
+        let z1 = x1.clone().matmul(state.weight.clone()) + state.bias.clone().unsqueeze_dim(2);
 
-        let z = qkv.xk.clone().matmul(state.weight.clone().unsqueeze())
-            + state.bias.clone().unsqueeze();
+        let reconstruction_target = qkv.xv - qkv.xk;
 
-        let target = qkv.xv.clone() - qkv.xk.clone();
+        // Compute gradients using fused layer norm + L2 loss backward
+        let (_ln_out, grad_l_wrt_z1) = self
+            .layer_norm
+            .forward_and_l2_grad(z1, reconstruction_target);
 
-        let (_ln_out, dl_dz) = self.layer_norm.forward_and_l2_grad(z, target);
+        // token_eta: [seq_len] - position-based scale factor (1/k)
+        // ttt_lr_eta: [B, H, seq_len] - per-head learned learning rate
 
-        // [batch_size, num_heads, mini_batch_size, mini_batch_size]
-        let eta = inputs.token_idx.reshape([1i32, 1, -1, 1]) * inputs.lr.unsqueeze_dim(2);
-        dbg!(eta.shape());
-        let eta_last = eta.clone().slice(s![.., .., -1.., ..]);
+        let token_eta = inputs.token_eta.unsqueeze_dims::<4>(&[0, 0, -1]); // [1, 1, seq_len, 1]
 
-        let bias_new =
-            state.bias.clone().unsqueeze_dim(2) - eta.clone().tril(0).matmul(dl_dz.clone());
+        let ttt_lr_eta = inputs.ttt_lr_eta.unsqueeze_dim::<4>(2); // [B, H, 1, seq_len]
 
-        let attn = qkv.xq.clone().matmul(qkv.xk.clone().transpose()).tril(0);
+        // Combined eta: token_eta * ttt_lr_eta
+        // token_eta: [1, 1, seq_len, 1], ttt_lr_eta: [B, H, 1, seq_len]
+        // Result: [B, H, seq_len, seq_len] where eta[i,j] = token_eta[i] * ttt_lr_eta[j]
+        let eta_combined = token_eta * ttt_lr_eta;
 
-        let z = qkv.xq.matmul(state.weight.clone()) - (eta.clone() * attn).matmul(dl_dz.clone())
-            + bias_new.clone();
+        let eta_batch = eta_combined.tril(0); // [B, H, seq_len, seq_len]
 
-        state.weight = state.weight.clone() - eta_last * qkv.xk.matmul(dl_dz);
-        state.bias = bias_new.squeeze(2);
+        // Attn1 = tril(XQ_mini_batch @ X1.transpose(-2, -1))
+        let attn1 = qkv.xq.clone().matmul(x1.clone().transpose()).tril(0);
 
-        z
+        // b1_bar = b1_init - eta_batch @ grad_l_wrt_Z1
+        // state.bias is [B, H, D], unsqueeze to [B, H, 1, D] for broadcasting
+        // eta_batch @ grad: [B, H, K, K] @ [B, H, K, D] -> [B, H, K, D]
+        let b1_bar =
+            state.bias.clone().unsqueeze_dim(2) - eta_batch.clone().matmul(grad_l_wrt_z1.clone());
+
+        // Z1_bar = XQ_batch @ W1_init - (eta_batch * Attn1) @ grad_l_wrt_Z1 + b1_bar
+        let z1_bar = qkv.xq.clone().matmul(state.weight.clone())
+            - (eta_batch.clone() * attn1).matmul(grad_l_wrt_z1.clone())
+            + b1_bar;
+
+        // Update weights with last row of eta matrix
+        // Extract last row: eta[:, :, -1, :] -> [B, H, 1, K]
+        let last_eta_row = eta_batch.slice(s![.., .., -1.., ..]);
+
+        // W1_last = W1_init - (last_eta_row * X1).transpose(-1, -2) @ grad_l_wrt_Z1
+        // last_eta_row: [B, H, 1, K], X1: [B, H, K, D]
+        // Need to transpose last_eta_row to [B, H, K, 1] for proper broadcasting
+        let last_eta_col = last_eta_row.transpose(); // [B, H, K, 1]
+
+        // (last_eta_col * X1): [B, H, K, 1] * [B, H, K, D] -> [B, H, K, D]
+        // .transpose(): [B, H, D, K]
+        // @ grad: [B, H, D, K] @ [B, H, K, D] -> [B, H, D, D]
+        state.weight = state.weight.clone()
+            - (last_eta_col.clone() * x1)
+                .transpose()
+                .matmul(grad_l_wrt_z1.clone());
+
+        // b1_last = b1_init - sum(last_eta_col * grad_l_wrt_Z1, dim=-2)
+        // last_eta_col * grad: [B, H, K, 1] * [B, H, K, D] -> [B, H, K, D]
+        // .sum_dim(2): [B, H, 1, D] -> squeeze -> [B, H, D]
+        state.bias = state.bias.clone()
+            - (last_eta_col * grad_l_wrt_z1)
+                .sum_dim(2)
+                .squeeze_dim::<3>(2);
+
+        // Clear accumulated gradients after mini-batch
+        state.weight_grad = state.weight_grad.zeros_like();
+        state.bias_grad = state.bias_grad.zeros_like();
+
+        // Apply layer norm to final output
+        let z1_bar_normalized = self.layer_norm.forward(z1_bar);
+
+        // XQW_mini_batch = XQ_mini_batch + Z1_bar
+        qkv.xq + z1_bar_normalized
     }
 }

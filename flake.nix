@@ -3,7 +3,8 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # nixpkgs-intel.url = "github:blenderfreaky/nixpkgs/package/intel-oneapi";
     intel-nix = {
-      url = "github:blenderfreaky/intel-nix/main";
+      # url = "github:blenderfreaky/intel-nix/main";
+      url = "path:/home/blenderfreaky/src/projects/intel-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
@@ -22,7 +23,7 @@
         intel-pkgs = {
           intel-llvm = intel-pkgs-original.src.llvm;
           oneDNN = intel-pkgs-original.src.oneDNN;
-          oneMath = intel-pkgs-original.src.oneMath;
+          oneMath = intel-pkgs-original.src.oneMath-rocm;
           intel-oneapi-basekit = intel-pkgs-original.toolkits.installer.base;
           intel-oneapi-hpckit = intel-pkgs-original.toolkits.installer.hpc;
         };
@@ -87,21 +88,60 @@
         packages = own-pkgs // intel-pkgs;
 
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            intel-llvm
-            oneDNN
-            oneMath
+          buildInputs = with pkgs;
+            [
+              stdenv.cc.cc.lib
 
-            # spirv-tools
+              intel-llvm
+              # oneDNN
+              oneMath
 
-            adaptivecpp
+              # spirv-tools
+              lldb
+              gdb
 
-            cmake
-            ninja
+              stdenv.cc.cc.lib
 
-            just
-            just-formatter
-          ];
+              adaptivecpp
+
+              cmake
+              ninja
+
+              just
+              just-formatter
+
+              # Wrap clangd to query the Intel LLVM compiler for include paths
+              (writeShellScriptBin "clangd" ''
+                exec ${clang-tools}/bin/clangd --query-driver="${intel-llvm}/bin/clang++" "$@"
+              '')
+
+              (python3.withPackages
+                (ps:
+                  with ps; [
+                    numpy
+                    torch
+                    transformers
+                    # causal-conv1d
+                    safetensors
+                  ]))
+            ]
+            ++ [
+              # Memory profiling tools
+              heaptrack
+              valgrind
+              perf
+              hotspot
+            ]
+            ++ (with pkgs.rocmPackages; [
+              hip-common
+              clr
+              rocblas
+              rocwmma
+              rocm-smi
+              rocprofiler
+            ]);
+
+          LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.rocmPackages.clr}/lib";
 
           ROCM_PATH = "${pkgs.rocmPackages.clr}/bin";
           ROCM_DEVICE_LIB_PATH = "${pkgs.rocmPackages.rocm-device-libs}/amdgcn/bitcode";

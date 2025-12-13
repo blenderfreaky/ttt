@@ -2,6 +2,7 @@
 
 use super::{dataset::TextGenerationItem, tokenizer::Tokenizer};
 use burn::{data::dataloader::batcher::Batcher, nn::attention::generate_padding_mask, prelude::*};
+use derive_new::new;
 use std::sync::Arc;
 
 #[derive(Clone, new)]
