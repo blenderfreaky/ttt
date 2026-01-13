@@ -44,8 +44,8 @@
         ]
       },
       "locked": {
-        "lastModified": 1766364767,
-        "narHash": "sha256-NuPcBvZ6RylDjpnfXMxV/pS3x8HAIBbNqZY9Gqk1Nn8=",
+        "lastModified": 1766997496,
+        "narHash": "sha256-LOuJDDL+Uzlnh/8KguIGNGv4y9HB3fIeCc6LrcbXO8g=",
         "path": "/home/blenderfreaky/src/projects/intel-nix",
         "type": "path"
       },
@@ -56,11 +56,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1766070988,
-        "narHash": "sha256-G/WVghka6c4bAzMhTwT2vjLccg/awmHkdKSd2JrycLc=",
+        "lastModified": 1768127708,
+        "narHash": "sha256-1Sm77VfZh3mU0F5OqKABNLWxOuDeHIlcFjsXeeiPazs=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "c6245e83d836d0433170a16eb185cefe0572f8b8",
+        "rev": "ffbc9f8cbaacfb331b6017d5a5abb21a492c9a38",
         "type": "github"
       },
       "original": {
