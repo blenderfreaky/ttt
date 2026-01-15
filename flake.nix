@@ -32,7 +32,7 @@
           nixpkgs
           {
             inherit system;
-            nixpkgs.config = {
+            config = {
               rocmSupport = true;
               allowUnfree = true;
             };
