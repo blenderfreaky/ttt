@@ -210,9 +210,7 @@ pub fn interactive<B: Backend>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ttt::TTTConfig;
-
-    type GpuBackend = burn::backend::Rocm;
+    use crate::ttt::{GpuBackend, TTTConfig};
 
     /// Basic sanity check that everything runs without raising errors
     #[test]

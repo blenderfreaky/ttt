@@ -215,13 +215,11 @@ impl<B: Backend, Inner: TTTInnerModel<B>>
 
 #[cfg(test)]
 mod tests {
-    use crate::ttt::cubecl_kernels::linear::FusedTTTLinear;
+    use crate::ttt::{cubecl_kernels::linear::FusedTTTLinear, GpuAutodiffBackend};
 
     use super::*;
 
-    type GpuBackend = burn::backend::Autodiff<burn::backend::Rocm>;
-
-    type Inner = FusedTTTLinear<GpuBackend>;
+    type Inner = FusedTTTLinear<GpuAutodiffBackend>;
 
     #[test]
     fn forward_inference_doesnt_crash() {
@@ -229,7 +227,7 @@ mod tests {
 
         let model_config = TTTTextGenerationConfig::new_testing(TTTConfig::default_125m());
         let vocab_size = model_config.ttt_config.vocab_size;
-        let model = model_config.init::<GpuBackend, Inner>(&device);
+        let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
 
         let batch_size = 2;
         let seq_length = 10;
@@ -251,7 +249,7 @@ mod tests {
         let ttt_config = TTTConfig::default_tiny();
         let vocab_size = ttt_config.vocab_size;
         let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
-        let model = model_config.init::<GpuBackend, Inner>(&device);
+        let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
 
         let batch_size = 4;
         let seq_length = 32;

@@ -8,6 +8,27 @@ pub mod lm;
 pub mod mlp;
 pub mod util;
 
+// Central backend type aliases - selected via feature flags (rocm, cuda, wgpu)
+#[cfg(feature = "rocm")]
+pub type GpuBackend = burn::backend::Rocm;
+
+#[cfg(feature = "cuda")]
+pub type GpuBackend = burn::backend::Cuda;
+
+#[cfg(feature = "wgpu")]
+pub type GpuBackend = burn::backend::Wgpu;
+
+#[cfg(not(any(feature = "rocm", feature = "cuda", feature = "wgpu")))]
+compile_error!("One of the features 'rocm', 'cuda', or 'wgpu' must be enabled");
+
+pub type GpuAutodiffBackend = burn::backend::Autodiff<GpuBackend>;
+pub type TrainingBackend = burn::backend::Autodiff<
+    GpuBackend,
+    burn::backend::autodiff::checkpoint::strategy::BalancedCheckpointing,
+>;
+// Reference CPU backend for tests
+pub type CpuBackend = burn::backend::NdArray;
+
 /// TTT Layer Type variants
 #[derive(Config, Debug, PartialEq)]
 pub enum TTTLayerType {

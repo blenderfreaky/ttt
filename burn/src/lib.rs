@@ -24,3 +24,6 @@ pub mod inference;
 pub mod text_generation;
 pub mod training;
 pub mod ttt;
+
+// Re-export central backend types from ttt module
+pub use ttt::{CpuBackend, GpuAutodiffBackend, GpuBackend, TrainingBackend};

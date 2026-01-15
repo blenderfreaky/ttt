@@ -150,14 +150,13 @@ impl<B: FusedTttBackend> From<crate::ttt::linear::TTTLinear<B>> for FusedTTTLine
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ttt::layer::{Qkv, TTTInnerModel, TTTInputsInner};
-    use crate::ttt::linear::{TTTLinear, TTTLinearConfig};
+    use crate::ttt::{
+        CpuBackend, GpuAutodiffBackend, GpuBackend,
+        layer::{Qkv, TTTInnerModel, TTTInputsInner},
+        linear::{TTTLinear, TTTLinearConfig},
+    };
     use burn::tensor::TensorData;
     use std::sync::Arc;
-
-    type RefBackend = burn::backend::NdArray;
-    type GpuBackend = burn::backend::Rocm;
-    type GpuAutodiffBackend = burn::backend::Autodiff<GpuBackend>;
 
     fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
         assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match");
@@ -207,26 +206,26 @@ mod tests {
         let cpu_device = Default::default();
 
         // random input tensors
-        let xq_cpu: Tensor<RefBackend, 4> = Tensor::random(
+        let xq_cpu: Tensor<CpuBackend, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         );
-        let xk_cpu: Tensor<RefBackend, 4> = Tensor::random(
+        let xk_cpu: Tensor<CpuBackend, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         );
-        let xv_cpu: Tensor<RefBackend, 4> = Tensor::random(
+        let xv_cpu: Tensor<CpuBackend, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         );
-        let token_eta_cpu: Tensor<RefBackend, 1> =
+        let token_eta_cpu: Tensor<CpuBackend, 1> =
             Tensor::arange(1..(seq_len as i64 + 1), &cpu_device)
                 .float()
                 .recip();
-        let ttt_lr_eta_cpu: Tensor<RefBackend, 3> = Tensor::random(
+        let ttt_lr_eta_cpu: Tensor<CpuBackend, 3> = Tensor::random(
             [batch_size, num_heads, seq_len],
             burn::tensor::Distribution::Uniform(0.01, 0.05),
             &cpu_device,
@@ -238,7 +237,7 @@ mod tests {
         let token_eta_data: Vec<f32> = token_eta_cpu.to_data().to_vec().unwrap();
         let ttt_lr_eta_data: Vec<f32> = ttt_lr_eta_cpu.to_data().to_vec().unwrap();
 
-        let ttt_linear_cpu: TTTLinear<RefBackend> =
+        let ttt_linear_cpu: TTTLinear<CpuBackend> =
             TTTLinear::new(&config, &linear_config, &cpu_device);
         let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
 
@@ -367,26 +366,26 @@ mod tests {
         let cpu_device = Default::default();
 
         // random input tensors
-        let xq_cpu: Tensor<RefBackend, 4> = Tensor::random(
+        let xq_cpu: Tensor<CpuBackend, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         );
-        let xk_cpu: Tensor<RefBackend, 4> = Tensor::random(
+        let xk_cpu: Tensor<CpuBackend, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         );
-        let xv_cpu: Tensor<RefBackend, 4> = Tensor::random(
+        let xv_cpu: Tensor<CpuBackend, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         );
-        let token_eta_cpu: Tensor<RefBackend, 1> =
+        let token_eta_cpu: Tensor<CpuBackend, 1> =
             Tensor::arange(1..(seq_len as i64 + 1), &cpu_device)
                 .float()
                 .recip();
-        let ttt_lr_eta_cpu: Tensor<RefBackend, 3> = Tensor::random(
+        let ttt_lr_eta_cpu: Tensor<CpuBackend, 3> = Tensor::random(
             [batch_size, num_heads, seq_len],
             burn::tensor::Distribution::Uniform(0.01, 0.05),
             &cpu_device,
@@ -398,7 +397,7 @@ mod tests {
         let token_eta_data: Vec<f32> = token_eta_cpu.to_data().to_vec().unwrap();
         let ttt_lr_eta_data: Vec<f32> = ttt_lr_eta_cpu.to_data().to_vec().unwrap();
 
-        let ttt_linear_cpu: TTTLinear<RefBackend> =
+        let ttt_linear_cpu: TTTLinear<CpuBackend> =
             TTTLinear::new(&config, &linear_config, &cpu_device);
         let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
 
@@ -515,8 +514,8 @@ mod tests {
         let epsilon = 1e-6f64;
 
         // Seed RNG for deterministic results
-        let cpu_device: <RefBackend as Backend>::Device = Default::default();
-        RefBackend::seed(&cpu_device, 42);
+        let cpu_device: <CpuBackend as Backend>::Device = Default::default();
+        CpuBackend::seed(&cpu_device, 42);
 
         let config = Arc::new(crate::ttt::TTTConfig {
             num_heads,
@@ -529,7 +528,7 @@ mod tests {
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
 
-        let ttt_linear_cpu: TTTLinear<Autodiff<RefBackend>> =
+        let ttt_linear_cpu: TTTLinear<Autodiff<CpuBackend>> =
             TTTLinear::new(&config, &linear_config, &cpu_device);
         let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
 
@@ -551,29 +550,29 @@ mod tests {
             .to_vec()
             .unwrap();
 
-        let xq_cpu: Tensor<Autodiff<RefBackend>, 4> = Tensor::random(
+        let xq_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         )
         .require_grad();
-        let xk_cpu: Tensor<Autodiff<RefBackend>, 4> = Tensor::random(
+        let xk_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         )
         .require_grad();
-        let xv_cpu: Tensor<Autodiff<RefBackend>, 4> = Tensor::random(
+        let xv_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
             [batch_size, num_heads, seq_len, head_dim],
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         )
         .require_grad();
-        let token_eta_cpu: Tensor<Autodiff<RefBackend>, 1> =
+        let token_eta_cpu: Tensor<Autodiff<CpuBackend>, 1> =
             Tensor::arange(1..(seq_len as i64 + 1), &cpu_device)
                 .float()
                 .recip();
-        let ttt_lr_eta_cpu: Tensor<Autodiff<RefBackend>, 3> = Tensor::random(
+        let ttt_lr_eta_cpu: Tensor<Autodiff<CpuBackend>, 3> = Tensor::random(
             [batch_size, num_heads, seq_len],
             burn::tensor::Distribution::Uniform(0.01, 0.05),
             &cpu_device,

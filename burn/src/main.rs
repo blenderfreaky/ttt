@@ -6,12 +6,7 @@ pub mod text_generation;
 pub mod training;
 pub mod ttt;
 
-type GpuBackend = burn::backend::Rocm;
-
-type Backend = burn::backend::Autodiff<
-    GpuBackend,
-    burn::backend::autodiff::checkpoint::strategy::BalancedCheckpointing,
->;
+use ttt::TrainingBackend;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -45,7 +40,7 @@ fn main() {
 
             let config = training::TTTTrainingConfig::small();
 
-            training::train_dataset::<Backend>(&device, config, artifact_dir);
+            training::train_dataset::<TrainingBackend>(&device, config, artifact_dir);
         }
         "generate" => {
             if args.len() < 4 {
@@ -58,7 +53,7 @@ fn main() {
 
             let device = Default::default();
 
-            match inference::generate::<Backend>(artifact_dir, device, prompt) {
+            match inference::generate::<TrainingBackend>(artifact_dir, device, prompt) {
                 Ok(generated) => {
                     println!("Prompt: {}", prompt);
                     println!("Generated: {}", generated);
@@ -78,7 +73,7 @@ fn main() {
 
             let device = Default::default();
 
-            match inference::interactive::<Backend>(artifact_dir, device) {
+            match inference::interactive::<TrainingBackend>(artifact_dir, device) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error starting interactive session: {}", e);
