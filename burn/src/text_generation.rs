@@ -7,7 +7,7 @@ use burn::{
     nn::loss::CrossEntropyLossConfig,
     prelude::*,
     tensor::{Distribution, backend::AutodiffBackend},
-    train::{ClassificationOutput, TrainOutput, TrainStep, ValidStep},
+    train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
 use std::sync::Arc;
 
@@ -190,13 +190,14 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inner> {
     }
 }
 
-impl<B: AutodiffBackend, Inner: TTTInnerModel<B>>
-    TrainStep<TrainingTextGenerationBatch<B>, ClassificationOutput<B>>
-    for TTTTextGenerationModel<B, Inner>
+impl<B: AutodiffBackend, Inner: TTTInnerModel<B>> TrainStep for TTTTextGenerationModel<B, Inner>
 where
     Self: AutodiffModule<B>,
 {
-    fn step(&self, item: TrainingTextGenerationBatch<B>) -> TrainOutput<ClassificationOutput<B>> {
+    type Input = TrainingTextGenerationBatch<B>;
+    type Output = ClassificationOutput<B>;
+
+    fn step(&self, item: Self::Input) -> TrainOutput<Self::Output> {
         let item = self.forward_training(item);
         let grads = item.loss.backward();
 
@@ -204,18 +205,18 @@ where
     }
 }
 
-impl<B: Backend, Inner: TTTInnerModel<B>>
-    ValidStep<TrainingTextGenerationBatch<B>, ClassificationOutput<B>>
-    for TTTTextGenerationModel<B, Inner>
-{
-    fn step(&self, item: TrainingTextGenerationBatch<B>) -> ClassificationOutput<B> {
+impl<B: Backend, Inner: TTTInnerModel<B>> InferenceStep for TTTTextGenerationModel<B, Inner> {
+    type Input = TrainingTextGenerationBatch<B>;
+    type Output = ClassificationOutput<B>;
+
+    fn step(&self, item: Self::Input) -> Self::Output {
         self.forward_training(item)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ttt::{cubecl_kernels::linear::FusedTTTLinear, GpuAutodiffBackend};
+    use crate::ttt::{GpuAutodiffBackend, cubecl_kernels::linear::FusedTTTLinear};
 
     use super::*;
 

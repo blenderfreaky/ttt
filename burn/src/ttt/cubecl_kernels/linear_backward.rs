@@ -14,14 +14,14 @@ const EPSILON_SCALE_INV: f32 = 1e-9;
 /// Configuration for the fused TTT backward kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FusedTttBackwardConfig {
-    pub seq_len: u32,
-    pub head_dim: u32,
+    pub seq_len: usize,
+    pub head_dim: usize,
     pub epsilon_scaled: u32,
 }
 
 impl FusedTttBackwardConfig {
     #[must_use]
-    pub fn new(seq_len: u32, head_dim: u32, epsilon: f32) -> Self {
+    pub fn new(seq_len: usize, head_dim: usize, epsilon: f32) -> Self {
         Self {
             seq_len,
             head_dim,
@@ -75,17 +75,17 @@ pub fn fused_ttt_backward_kernel<F: Float>(
     outputs: &mut GradOutputs<F>,
     #[comptime] config: FusedTttBackwardConfig,
 ) {
-    let batch_idx = CUBE_POS_X;
-    let head_idx = CUBE_POS_Y;
+    let batch_idx = CUBE_POS_X as usize;
+    let head_idx = CUBE_POS_Y as usize;
 
-    let batch_size = inputs.xq.shape(0);
-    let num_heads = inputs.xq.shape(1);
+    let batch_size = inputs.xq.shape(0) as usize;
+    let num_heads = inputs.xq.shape(1) as usize;
     let seq_len = config.seq_len;
     let head_dim = config.head_dim;
     let epsilon = config.epsilon();
 
-    let dim_idx = UNIT_POS_X;
-    let seq_idx = UNIT_POS_Y;
+    let dim_idx = UNIT_POS_X as usize;
+    let seq_idx = UNIT_POS_Y as usize;
 
     // Shared memory for intermediates
     let mut z1_shared = SharedMemory::<F>::new(seq_len * head_dim);
@@ -619,8 +619,8 @@ pub fn launch_fused_ttt_backward<R: Runtime, F: Float + CubeElement>(
 ) {
     let batch_size = xq.shape[0] as u32;
     let num_heads = xq.shape[1] as u32;
-    let seq_len = config.seq_len;
-    let head_dim = config.head_dim;
+    let seq_len = config.seq_len as u32;
+    let head_dim = config.head_dim as u32;
 
     let cube_dim = CubeDim::new_2d(head_dim, seq_len);
 

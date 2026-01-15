@@ -83,7 +83,7 @@ pub mod cube_impl {
 
         let output = empty_device::<R, F>(xq.client.clone(), xq.device.clone(), shape);
 
-        let config = FusedTttConfig::new(seq_len as u32, head_dim as u32, epsilon);
+        let config = FusedTttConfig::new(seq_len, head_dim, epsilon);
 
         launch_fused_ttt_forward::<R, F>(
             &xq.client,
@@ -162,7 +162,7 @@ pub mod cube_impl {
             Shape::new([batch_size, num_heads, head_dim]),
         );
 
-        let config = FusedTttBackwardConfig::new(seq_len as u32, head_dim as u32, epsilon);
+        let config = FusedTttBackwardConfig::new(seq_len, head_dim, epsilon);
 
         launch_fused_ttt_backward::<R, F>(
             &xq.client,

@@ -22,7 +22,7 @@ use burn::{
     record::{CompactRecorder, DefaultRecorder, Recorder},
     tensor::backend::AutodiffBackend,
     train::{
-        ClassificationOutput, Learner, LearningParadigm, SupervisedTraining, ValidStep,
+        ClassificationOutput, InferenceStep, Learner, SupervisedTraining,
         metric::{AccuracyMetric, LearningRateMetric, LossMetric, PerplexityMetric},
     },
 };
@@ -144,9 +144,9 @@ fn run_training<
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
     <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
-    <TTTTextGenerationModel<B, Inner> as AutodiffModule<B>>::InnerModule: ValidStep<
-            TrainingTextGenerationBatch<B::InnerBackend>,
-            ClassificationOutput<B::InnerBackend>,
+    <TTTTextGenerationModel<B, Inner> as AutodiffModule<B>>::InnerModule: InferenceStep<
+            Input = TrainingTextGenerationBatch<B::InnerBackend>,
+            Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
     // Store untrained model for debugging purposes
@@ -196,7 +196,7 @@ fn run_training<
         .num_epochs(num_epochs)
         .summary();
 
-    let result = training.run(Learner::new(model, optim, lr_scheduler));
+    let result = training.launch(Learner::new(model, optim, lr_scheduler));
 
     DefaultRecorder::new()
         .record(

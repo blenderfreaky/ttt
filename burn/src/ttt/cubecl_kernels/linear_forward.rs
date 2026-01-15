@@ -24,16 +24,16 @@ const EPSILON_SCALE_INV: f32 = 1e-9;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FusedTttConfig {
     /// Mini-batch sequence length (K)
-    pub seq_len: u32,
+    pub seq_len: usize,
     /// Head dimension (D)
-    pub head_dim: u32,
+    pub head_dim: usize,
     /// Layer norm epsilon, stored as scaled integer (see EPSILON_SCALE_INV)
     pub epsilon_scaled: u32,
 }
 
 impl FusedTttConfig {
     #[must_use]
-    pub fn new(seq_len: u32, head_dim: u32, epsilon: f32) -> Self {
+    pub fn new(seq_len: usize, head_dim: usize, epsilon: f32) -> Self {
         Self {
             seq_len,
             head_dim,
@@ -93,18 +93,18 @@ pub fn fused_ttt_forward_kernel<F: Float>(
     output: &mut Tensor<F>,
     #[comptime] config: FusedTttConfig,
 ) {
-    let batch_idx = CUBE_POS_X;
-    let head_idx = CUBE_POS_Y;
+    let batch_idx = CUBE_POS_X as usize;
+    let head_idx = CUBE_POS_Y as usize;
 
-    let batch_size = xq.shape(0);
-    let num_heads = xq.shape(1);
+    let batch_size = xq.shape(0) as usize;
+    let num_heads = xq.shape(1) as usize;
     let seq_len = config.seq_len;
     let head_dim = config.head_dim;
     let epsilon = config.epsilon();
 
     // Thread indices
-    let dim_idx = UNIT_POS_X; // 0..head_dim
-    let seq_idx = UNIT_POS_Y; // 0..seq_len
+    let dim_idx = UNIT_POS_X as usize; // 0..head_dim
+    let seq_idx = UNIT_POS_Y as usize; // 0..seq_len
 
     // Shared memory for intermediates
     // z1[seq, dim], grad[seq, dim]
@@ -389,8 +389,8 @@ pub fn launch_fused_ttt_forward<R: Runtime, F: Float + CubeElement>(
 ) {
     let batch_size = xq.shape[0] as u32;
     let num_heads = xq.shape[1] as u32;
-    let seq_len = config.seq_len;
-    let head_dim = config.head_dim;
+    let seq_len = config.seq_len as u32;
+    let head_dim = config.head_dim as u32;
 
     // Each cube handles one (batch, head) pair
     // Threads within cube: head_dim x seq_len (or max allowed)
