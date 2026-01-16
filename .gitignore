@@ -4,3 +4,4 @@ result
 .cache/
 
 sycl-test
+.worktree
