@@ -463,8 +463,6 @@ fn test_ttt_inner_model() {
     let mut state = TTTLinearState {
         weight: w1_init.clone(),
         bias: b1_init.clone(),
-        weight_grad: w1_init.zeros_like(),
-        bias_grad: b1_init.zeros_like(),
     };
 
     let inputs = TTTInputsInner {
@@ -573,10 +571,6 @@ fn test_ttt_mlp_inner_model() {
         b1: b1_init.clone(),
         w2: w2_init.clone(),
         b2: b2_init.clone(),
-        w1_grad: w1_init.zeros_like(),
-        b1_grad: b1_init.zeros_like(),
-        w2_grad: w2_init.zeros_like(),
-        b2_grad: b2_init.zeros_like(),
     };
 
     let inputs = TTTInputsInner {

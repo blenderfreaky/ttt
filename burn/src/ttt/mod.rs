@@ -4,8 +4,12 @@ pub mod block;
 pub mod cubecl_kernels;
 pub mod layer;
 pub mod linear;
+pub mod linear_adam;
 pub mod lm;
 pub mod mlp;
+pub mod mlp2;
+pub mod mlp3;
+pub mod mlp4;
 pub mod util;
 
 // Central backend type aliases - selected via feature flags (rocm, cuda, wgpu)
@@ -33,7 +37,21 @@ pub type CpuBackend = burn::backend::NdArray;
 #[derive(Config, Debug, PartialEq)]
 pub enum TTTLayerType {
     Linear,
+    LinearAdam,
     MLP,
+    MLP2,
+    MLP3,
+    MLP4,
+}
+
+#[derive(Config, Debug, PartialEq)]
+pub enum PositionEncodingType {
+    /// Rotary Position Embeddings applied to Q/K
+    RoPE,
+    /// No position encoding
+    None,
+    /// Learned absolute position embeddings
+    Absolute,
 }
 
 /// Configuration for the TTT layer.
@@ -78,6 +96,12 @@ pub struct TTTConfig {
     /// Whether to use gating (as in Mamba backbone)
     #[config(default = false)]
     pub use_gate: bool,
+    /// The type of position encoding to use
+    #[config(default = "PositionEncodingType::RoPE")]
+    pub pos_encoding: PositionEncodingType,
+    /// Maximum sequence length for absolute position embeddings
+    #[config(default = 2048)]
+    pub max_seq_len: usize,
 }
 
 impl TTTConfig {

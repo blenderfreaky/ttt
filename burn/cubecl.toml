@@ -1,11 +1,10 @@
-# CubeCL configuration for profiling
+# CubeCL configuration
 # See: https://burn.dev/books/cubecl/advanced-usage/config.html
 
-# [profiling]
-# logger = { level = "full", stdout = true }
+[compilation]
+# Enable kernel caching to avoid JIT recompilation
+cache = "target"
 
-# [autotune]
-# logger = { level = "disabled" }
+[autotune]
+level = "balanced"
 
-# [compilation]
-# logger = { level = "disabled" }

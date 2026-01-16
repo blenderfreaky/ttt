@@ -16,7 +16,7 @@ use burn::{
 use burn_backend::Distribution;
 
 use super::{
-    TTTConfig,
+    PositionEncodingType, TTTConfig,
     util::{RotaryEmbedding, RotaryEmbeddingConfig, causal_conv1d_fn},
 };
 
@@ -113,8 +113,7 @@ pub struct TTT<B: Backend> {
     pub learnable_token_idx: Tensor<B, 1>,
     pub post_norm: LayerNorm<B>,
     pub config: Ignored<Arc<TTTConfig>>,
-    // TODO: Make positional encoding generic/exchangeable for different types of positional encodings
-    pub rot_enc: RotaryEmbedding<B>,
+    pub rot_enc: Option<RotaryEmbedding<B>>,
 }
 
 impl TTTConfig {
@@ -175,9 +174,14 @@ impl TTTConfig {
             post_norm: LayerNormConfig::new(self.hidden_size)
                 .with_epsilon(1e-6)
                 .init(device),
-            rot_enc: RotaryEmbeddingConfig::new(self.head_dim())
-                .with_base(f64::from(self.rope_theta))
-                .init(device),
+            rot_enc: match self.pos_encoding {
+                PositionEncodingType::RoPE => Some(
+                    RotaryEmbeddingConfig::new(self.head_dim())
+                        .with_base(f64::from(self.rope_theta))
+                        .init(device),
+                ),
+                _ => None,
+            },
             config: Ignored(self.clone()),
         }
     }
@@ -265,7 +269,7 @@ impl<B: Backend> TTTInputsInner<B> {
             ttt_lr_eta: self
                 .ttt_lr_eta
                 .clone()
-                .slice([0..batch_size, 0..num_heads, range]),
+                .slice([0..batch_size, 0..num_heads, range.clone()]),
         }
     }
 
@@ -318,18 +322,20 @@ impl<B: Backend> TTT<B> {
 
         // Apply rotary position encoding with position_ids % mini_batch_size
         // Use permute_qk/undo_permute_qk to match JAX/EasyLM format (see doc comment on permute_qk)
-        let xq = permute_qk(xq);
-        let xk = permute_qk(xk);
-
-        let (xq, xk) = self.rot_enc.apply(
-            xq,
-            xk,
-            start_idx % self.config.mini_batch_size,
-            self.config.mini_batch_size,
-        );
-
-        let xq = undo_permute_qk(xq);
-        let xk = undo_permute_qk(xk);
+        let (xq, xk) = match &self.rot_enc {
+            Some(rot_enc) => {
+                let xq = permute_qk(xq);
+                let xk = permute_qk(xk);
+                let (xq, xk) = rot_enc.apply(
+                    xq,
+                    xk,
+                    start_idx % self.config.mini_batch_size,
+                    self.config.mini_batch_size,
+                );
+                (undo_permute_qk(xq), undo_permute_qk(xk))
+            }
+            None => (xq, xk),
+        };
 
         Qkv { xq, xk, xv }
     }
@@ -341,25 +347,14 @@ impl<B: Backend> TTT<B> {
     ///
     /// Returns a tensor of shape `[batch_size, num_heads, seq_len]`
     fn get_lr(&self, x: Tensor<B, 3>) -> Tensor<B, 3> {
-        // learnable_ttt_lr_weight: [num_heads, token_size, 1]
-        // learnable_ttt_lr_bias: [num_heads, 1]
-        // x: [B, seq_len, token_size]
-        // Result should be [B, num_heads, seq_len]
-
         let lr_weight = self.learnable_ttt_lr_weight.clone().squeeze_dim::<2>(2); // [num_heads, token_size]
 
-        // x: [B, seq_len, token_size], weight: [num_heads, token_size]
-        // We want: x @ weight^T for each head
-        // weight^T: [token_size, num_heads]
         let lr_weight_t = lr_weight.transpose(); // [token_size, num_heads]
 
         let lr_weight_t = lr_weight_t.unsqueeze_dim::<3>(0); // [1, token_size, num_heads]
 
-        // x @ weight_t: [B, seq_len, token_size] @ [1, token_size, num_heads] = [B, seq_len, num_heads]
         let lr = x.matmul(lr_weight_t); // [B, seq_len, num_heads]
 
-        // Add bias: [num_heads, 1] needs to broadcast to [B, seq_len, num_heads]
-        // Reshape bias to [1, 1, num_heads] for broadcasting
         let lr_bias_expanded = self
             .learnable_ttt_lr_bias
             .clone()

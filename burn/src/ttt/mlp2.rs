@@ -16,50 +16,60 @@ use super::{
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
 };
 
+/// MLP with 2 hidden layers (3 weight layers total)
+/// input(D) -> hidden1(4D) -> hidden2(4D) -> output(D)
 #[derive(Module, Debug)]
-pub struct TTTMLP<B: Backend> {
+pub struct TTTMLP2<B: Backend> {
     /// First layer weight: [num_heads, head_dim, 4*head_dim]
     pub w1_init: Param<Tensor<B, 3>>,
     /// First layer bias: [num_heads, 4*head_dim]
     pub b1_init: Param<Tensor<B, 2>>,
-    /// Second layer weight: [num_heads, 4*head_dim, head_dim]
+    /// Second layer weight: [num_heads, 4*head_dim, 4*head_dim]
     pub w2_init: Param<Tensor<B, 3>>,
-    /// Second layer bias: [num_heads, head_dim]
+    /// Second layer bias: [num_heads, 4*head_dim]
     pub b2_init: Param<Tensor<B, 2>>,
+    /// Third layer weight: [num_heads, 4*head_dim, head_dim]
+    pub w3_init: Param<Tensor<B, 3>>,
+    /// Third layer bias: [num_heads, head_dim]
+    pub b3_init: Param<Tensor<B, 2>>,
     pub layer_norm: MultiHeadLayerNorm<B>,
     pub config: Ignored<Arc<TTTConfig>>,
 }
 
 #[derive(Module, Debug)]
-pub struct TTTMLPState<B: Backend> {
+pub struct TTTMLP2State<B: Backend> {
     /// First layer weight: [batch_size, num_heads, head_dim, 4*head_dim]
     pub w1: Tensor<B, 4>,
     /// First layer bias: [batch_size, num_heads, 4*head_dim]
     pub b1: Tensor<B, 3>,
-    /// Second layer weight: [batch_size, num_heads, 4*head_dim, head_dim]
+    /// Second layer weight: [batch_size, num_heads, 4*head_dim, 4*head_dim]
     pub w2: Tensor<B, 4>,
-    /// Second layer bias: [batch_size, num_heads, head_dim]
+    /// Second layer bias: [batch_size, num_heads, 4*head_dim]
     pub b2: Tensor<B, 3>,
+    /// Third layer weight: [batch_size, num_heads, 4*head_dim, head_dim]
+    pub w3: Tensor<B, 4>,
+    /// Third layer bias: [batch_size, num_heads, head_dim]
+    pub b3: Tensor<B, 3>,
 }
 
 #[derive(Config, Debug)]
-pub struct TTTMLPConfig {
+pub struct TTTMLP2Config {
     #[config(default = "Initializer::Normal{mean:0.0, std:0.02}")]
     pub initializer: Initializer,
 }
 
-impl Default for TTTMLPConfig {
+impl Default for TTTMLP2Config {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
-    type Config = TTTMLPConfig;
-    type State = TTTMLPState<B>;
+impl<B: Backend> TTTInnerModel<B> for TTTMLP2<B> {
+    type Config = TTTMLP2Config;
+    type State = TTTMLP2State<B>;
 
     fn name() -> &'static str {
-        "TTTMLP"
+        "TTTMLP2"
     }
 
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
@@ -81,12 +91,24 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
                 device,
             ),
             w2_init: config.initializer.init_with(
-                [global_config.num_heads, mlp_dim, head_dim],
+                [global_config.num_heads, mlp_dim, mlp_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
             b2_init: config.initializer.init_with(
+                [global_config.num_heads, mlp_dim],
+                Some(len),
+                Some(len),
+                device,
+            ),
+            w3_init: config.initializer.init_with(
+                [global_config.num_heads, mlp_dim, head_dim],
+                Some(len),
+                Some(len),
+                device,
+            ),
+            b3_init: config.initializer.init_with(
                 [global_config.num_heads, head_dim],
                 Some(len),
                 Some(len),
@@ -112,11 +134,20 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
         let b1 = self.b1_init.val().unsqueeze().repeat_dim(0, batch_size);
         let w2 = self.w2_init.val().unsqueeze().repeat_dim(0, batch_size);
         let b2 = self.b2_init.val().unsqueeze().repeat_dim(0, batch_size);
+        let w3 = self.w3_init.val().unsqueeze().repeat_dim(0, batch_size);
+        let b3 = self.b3_init.val().unsqueeze().repeat_dim(0, batch_size);
 
-        TTTMLPState { w1, b1, w2, b2 }
+        TTTMLP2State {
+            w1,
+            b1,
+            w2,
+            b2,
+            w3,
+            b3,
+        }
     }
 
-    fn forward_one(&self, state: &mut TTTMLPState<B>, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
+    fn forward_one(&self, state: &mut TTTMLP2State<B>, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
         // Single token is just mini-batch with size 1
         debug_assert_eq!(inputs.qkv.xq.shape().dims::<4>()[2], 1);
         self.forward_mini_batch(state, inputs)
@@ -132,16 +163,21 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
         let x1 = qkv.xk.clone();
 
         let z1 = x1.clone().matmul(state.w1.clone()) + state.b1.clone().unsqueeze_dim(2);
-
         let x2 = gelu(z1.clone());
 
         let z2 = x2.clone().matmul(state.w2.clone()) + state.b2.clone().unsqueeze_dim(2);
+        let x3 = gelu(z2.clone());
+
+        let z3 = x3.clone().matmul(state.w3.clone()) + state.b3.clone().unsqueeze_dim(2);
 
         let reconstruction_target = qkv.xv - qkv.xk;
 
-        let (_ln_out, grad_l_wrt_z2) = self
+        let (_ln_out, grad_l_wrt_z3) = self
             .layer_norm
-            .forward_and_l2_grad(z2, reconstruction_target);
+            .forward_and_l2_grad(z3, reconstruction_target);
+
+        let grad_l_wrt_z2 =
+            grad_l_wrt_z3.clone().matmul(state.w3.clone().transpose()) * gelu_bwd(z2);
 
         let grad_l_wrt_z1 =
             grad_l_wrt_z2.clone().matmul(state.w2.clone().transpose()) * gelu_bwd(z1);
@@ -149,30 +185,30 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
         let token_eta = inputs.token_eta.unsqueeze_dims::<4>(&[0, 0, -1]); // [1, 1, K, 1]
         let ttt_lr_eta = inputs.ttt_lr_eta.unsqueeze_dim::<4>(2); // [B, H, 1, K]
         let eta_combined = token_eta * ttt_lr_eta;
-
         let eta_batch = eta_combined.tril(0); // [B, H, K, K]
 
-        let attn_scores1 = qkv.xq.clone().matmul(x1.clone().transpose());
-
-        let attn1 = attn_scores1.tril(0);
-
+        let attn1 = qkv.xq.clone().matmul(x1.clone().transpose()).tril(0);
         let b1_bar =
             state.b1.clone().unsqueeze_dim(2) - eta_batch.clone().matmul(grad_l_wrt_z1.clone());
-
         let z1_bar = qkv.xq.clone().matmul(state.w1.clone())
             - (eta_batch.clone() * attn1).matmul(grad_l_wrt_z1.clone())
             + b1_bar;
-
         let x2_bar = gelu(z1_bar);
 
         let attn2 = x2_bar.clone().matmul(x2.clone().transpose()).tril(0);
-
         let b2_bar =
             state.b2.clone().unsqueeze_dim(2) - eta_batch.clone().matmul(grad_l_wrt_z2.clone());
-
         let z2_bar = x2_bar.matmul(state.w2.clone())
             - (eta_batch.clone() * attn2).matmul(grad_l_wrt_z2.clone())
             + b2_bar;
+        let x3_bar = gelu(z2_bar);
+
+        let attn3 = x3_bar.clone().matmul(x3.clone().transpose()).tril(0);
+        let b3_bar =
+            state.b3.clone().unsqueeze_dim(2) - eta_batch.clone().matmul(grad_l_wrt_z3.clone());
+        let z3_bar = x3_bar.matmul(state.w3.clone())
+            - (eta_batch.clone() * attn3).matmul(grad_l_wrt_z3.clone())
+            + b3_bar;
 
         let last_eta_row = eta_batch.slice(s![.., .., -1.., ..]);
         let last_eta_col = last_eta_row.transpose(); // [B, H, K, 1]
@@ -193,12 +229,22 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
                 .matmul(grad_l_wrt_z2.clone());
 
         state.b2 = state.b2.clone()
-            - (last_eta_col * grad_l_wrt_z2)
+            - (last_eta_col.clone() * grad_l_wrt_z2)
                 .sum_dim(2)
                 .squeeze_dim::<3>(2);
 
-        let z2_bar_normalized = self.layer_norm.forward(z2_bar);
+        state.w3 = state.w3.clone()
+            - (last_eta_col.clone() * x3)
+                .transpose()
+                .matmul(grad_l_wrt_z3.clone());
 
-        qkv.xq + z2_bar_normalized
+        state.b3 = state.b3.clone()
+            - (last_eta_col * grad_l_wrt_z3)
+                .sum_dim(2)
+                .squeeze_dim::<3>(2);
+
+        let z3_bar_normalized = self.layer_norm.forward(z3_bar);
+
+        qkv.xq + z3_bar_normalized
     }
 }

@@ -8,7 +8,7 @@ use burn::{
 };
 
 use super::{
-    TTTConfig,
+    PositionEncodingType, TTTConfig,
     block::{TTTBlockConfig, TTTBlockWithSeq},
     layer::TTTInnerModel,
 };
@@ -17,6 +17,8 @@ use super::{
 pub struct TTTModel<B: Backend, Inner> {
     pub config: Ignored<Arc<TTTConfig>>,
     pub embedding: Embedding<B>,
+    /// Optional absolute position embeddings (only present when pos_encoding is Absolute)
+    pub position_embedding: Option<Embedding<B>>,
     pub layers: Vec<TTTBlockWithSeq<B, Inner>>,
     pub norm: RmsNorm<B>,
 }
@@ -33,6 +35,19 @@ impl TTTConfig {
                 std: 0.02,
             })
             .init(device);
+
+        let position_embedding = match self.pos_encoding {
+            PositionEncodingType::Absolute => Some(
+                EmbeddingConfig::new(self.max_seq_len, self.hidden_size)
+                    .with_initializer(Initializer::Normal {
+                        mean: 0.0,
+                        std: 0.02,
+                    })
+                    .init(device),
+            ),
+            _ => None,
+        };
+
         let layers = (0..self.num_hidden_layers)
             .map(|idx| {
                 TTTBlockConfig::new(self.clone(), idx)
@@ -44,6 +59,7 @@ impl TTTConfig {
         TTTModel {
             config: Ignored(self.clone()),
             embedding,
+            position_embedding,
             layers,
             norm,
         }
@@ -73,9 +89,24 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
         start_idx: usize,
         states: &mut [Inner::State],
     ) -> Tensor<B, 3> {
+        let [_batch_size, seq_len] = input.shape().dims();
+        let device = input.device();
+
         let embedded = self.embedding.forward(input);
 
-        let mut hidden_states = embedded;
+        // Add absolute position embeddings if present
+        let mut hidden_states = match &self.position_embedding {
+            Some(pos_emb) => {
+                let positions = Tensor::<B, 1, Int>::arange(
+                    start_idx as i64..(start_idx + seq_len) as i64,
+                    &device,
+                )
+                .unsqueeze_dim::<2>(0); // [1, seq_len]
+                let pos_embedded = pos_emb.forward(positions); // [1, seq_len, hidden_size]
+                embedded + pos_embedded
+            }
+            None => embedded,
+        };
 
         for (layer, state) in self.layers.iter().zip(states.iter_mut()) {
             hidden_states = layer.forward(hidden_states, state, start_idx);

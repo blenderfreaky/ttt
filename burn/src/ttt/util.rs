@@ -401,3 +401,29 @@ fn apply_rotary_pos_emb_single<B: Backend>(
 ) -> Tensor<B, 4> {
     x.clone() * cos + rotate_half(x) * sin
 }
+
+/// GELU backward (derivative of tanh approximation)
+/// Reference: https://github.com/test-time-training/ttt-lm-pytorch/blob/main/ttt.py#L509
+///
+/// Using burns own gelu_backward is tricky because it's not nicely exposed,
+/// and using it requires weird tricks in passing tensors to the backend.
+pub fn gelu_bwd<B: Backend>(x: Tensor<B, 4>) -> Tensor<B, 4> {
+    // Constants from the tanh approximation of GELU
+    let sqrt_2_over_pi = 0.797_884_6_f32;
+    let coeff = 0.044_715_f32;
+
+    // tanh_out = tanh(sqrt(2/pi) * x * (1 + 0.044715 * x^2))
+    let x_sq = x.clone().powf_scalar(2.0);
+    let inner = x.clone() * (x_sq.clone() * coeff + 1.0) * sqrt_2_over_pi;
+    let tanh_out = inner.tanh();
+
+    // ff = 0.5 * x * ((1 - tanh_out^2) * (sqrt(2/pi) + 3 * 0.044715 * sqrt(2/pi) * x^2)) + 0.5 * (1 + tanh_out)
+    let tanh_sq = tanh_out.clone().powf_scalar(2.0);
+    let one_minus_tanh_sq = tanh_sq.neg() + 1.0;
+    let coeff2 = 3.0 * coeff * sqrt_2_over_pi; // 0.1070322243
+    let inner2 = one_minus_tanh_sq * (x_sq * coeff2 + sqrt_2_over_pi);
+    let term1 = x * inner2 * 0.5;
+    let term2 = (tanh_out + 1.0) * 0.5;
+
+    term1 + term2
+}
