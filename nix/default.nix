@@ -40,13 +40,10 @@
     runtimeDeps ? [],
     extraEnv ? [],
   }:
-    pkgs.dockerTools.buildImage {
+    pkgs.dockerTools.buildLayeredImage {
       inherit name;
       tag = "latest";
-      copyToRoot = pkgs.buildEnv {
-        name = "ttt-env";
-        paths = [tttPkg pkgs.cacert pkgs.bashInteractive pkgs.fish pkgs.coreutils pkgs.ripgrep pkgs.fd pkgs.dust pkgs.duf] ++ runtimeDeps;
-      };
+      contents = [tttPkg pkgs.cacert pkgs.bashInteractive pkgs.fish pkgs.coreutils pkgs.ripgrep pkgs.fd pkgs.dust pkgs.duf] ++ runtimeDeps;
       config = {
         Cmd = ["/bin/ttt"];
         Env = ["SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"] ++ extraEnv;
