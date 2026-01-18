@@ -44,9 +44,20 @@
       inherit name;
       tag = "latest";
       contents = [tttPkg pkgs.cacert pkgs.bashInteractive pkgs.fish pkgs.coreutils pkgs.ripgrep pkgs.fd pkgs.dust pkgs.duf] ++ runtimeDeps;
+      fakeRootCommands = ''
+        mkdir -p ./root ./tmp
+        chmod 1777 ./tmp
+      '';
+      enableFakechroot = true;
       config = {
-        Cmd = ["/bin/ttt"];
-        Env = ["SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"] ++ extraEnv;
+        Cmd = ["/bin/fish"];
+        Env = [
+          "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+          "HOME=/root"
+          "USER=root"
+          "TMPDIR=/tmp"
+        ] ++ extraEnv;
+        WorkingDir = "/root";
       };
     };
 
