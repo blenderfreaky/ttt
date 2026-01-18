@@ -7,44 +7,56 @@
   #   env.KOKKOS_TOOLS_LIBS = kokkos-tools;
   # };
 
-  mkTtt = { backend, extraBuildInputs ? [], extraNativeBuildInputs ? [], extraEnv ? {} }: pkgs.rustPlatform.buildRustPackage ({
-    pname = "ttt";
-    version = "0.1.0";
-    src = ../burn;
+  mkTtt = {
+    backend,
+    extraBuildInputs ? [],
+    extraNativeBuildInputs ? [],
+    extraEnv ? {},
+  }:
+    pkgs.rustPlatform.buildRustPackage ({
+        pname = "ttt";
+        version = "0.1.0";
+        src = ../burn;
 
-    cargoLock = {
-      lockFile = ../burn/Cargo.lock;
-      allowBuiltinFetchGit = true;
+        cargoLock = {
+          lockFile = ../burn/Cargo.lock;
+          allowBuiltinFetchGit = true;
+        };
+
+        nativeBuildInputs = with pkgs; [pkg-config cmake] ++ extraNativeBuildInputs;
+        buildInputs = [pkgs.openssl] ++ extraBuildInputs;
+
+        buildFeatures = [backend];
+        buildNoDefaultFeatures = true;
+
+        # Tests require GPU hardware and network access
+        doCheck = false;
+      }
+      // extraEnv);
+
+  mkTttDocker = {
+    name,
+    tttPkg,
+    runtimeDeps ? [],
+    extraEnv ? [],
+  }:
+    pkgs.dockerTools.buildImage {
+      inherit name;
+      tag = "latest";
+      copyToRoot = pkgs.buildEnv {
+        name = "ttt-env";
+        paths = [tttPkg pkgs.cacert pkgs.bashInteractive pkgs.fish pkgs.coreutils pkgs.ripgrep pkgs.fd pkgs.dust pkgs.duf] ++ runtimeDeps;
+      };
+      config = {
+        Cmd = ["/bin/ttt"];
+        Env = ["SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"] ++ extraEnv;
+      };
     };
-
-    nativeBuildInputs = with pkgs; [ pkg-config cmake ] ++ extraNativeBuildInputs;
-    buildInputs = [ pkgs.openssl ] ++ extraBuildInputs;
-
-    buildFeatures = [ backend ];
-    buildNoDefaultFeatures = true;
-
-    # Tests require GPU hardware and network access
-    doCheck = false;
-  } // extraEnv);
-
-  mkTttDocker = { name, tttPkg }: pkgs.dockerTools.buildImage {
-    inherit name;
-    tag = "latest";
-    copyToRoot = pkgs.buildEnv {
-      name = "ttt-env";
-      paths = [ tttPkg pkgs.cacert ];
-      pathsToLink = [ "/bin" ];
-    };
-    config = {
-      Cmd = [ "/bin/ttt" ];
-      Env = [ "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
-    };
-  };
 
   ttt-rocm = mkTtt {
     backend = "rocm";
-    extraNativeBuildInputs = with pkgs.rocmPackages; [ hipcc ];
-    extraBuildInputs = with pkgs.rocmPackages; [ hip-common clr rocblas rocwmma rocm-device-libs ];
+    extraNativeBuildInputs = with pkgs.rocmPackages; [hipcc];
+    extraBuildInputs = with pkgs.rocmPackages; [hip-common clr rocblas rocwmma rocm-device-libs];
     extraEnv = {
       ROCM_PATH = "${pkgs.rocmPackages.clr}";
       HIP_PATH = "${pkgs.rocmPackages.clr}";
@@ -54,10 +66,27 @@
 
   ttt-cuda = mkTtt {
     backend = "cuda";
-    extraBuildInputs = [ pkgs.cudaPackages.cudatoolkit ];
+    extraBuildInputs = [pkgs.cudaPackages.cudatoolkit];
     extraEnv.CUDA_PATH = "${pkgs.cudaPackages.cudatoolkit}";
   };
 
-  ttt-rocm-docker = mkTttDocker { name = "ttt-rocm"; tttPkg = ttt-rocm; };
-  ttt-cuda-docker = mkTttDocker { name = "ttt-cuda"; tttPkg = ttt-cuda; };
+  ttt-rocm-docker = mkTttDocker {
+    name = "ttt-rocm";
+    tttPkg = ttt-rocm;
+    runtimeDeps = with pkgs.rocmPackages; [clr rocblas rocwmma rocm-device-libs rocm-runtime];
+    extraEnv = [
+      "ROCM_PATH=${pkgs.rocmPackages.clr}"
+      "HIP_PATH=${pkgs.rocmPackages.clr}"
+      "ROCM_DEVICE_LIB_PATH=${pkgs.rocmPackages.rocm-device-libs}/amdgcn/bitcode"
+    ];
+  };
+
+  ttt-cuda-docker = mkTttDocker {
+    name = "ttt-cuda";
+    tttPkg = ttt-cuda;
+    runtimeDeps = [pkgs.cudaPackages.cudatoolkit];
+    extraEnv = [
+      "CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}"
+    ];
+  };
 }
