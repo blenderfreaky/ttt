@@ -5,9 +5,15 @@ use crate::{
     },
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
     ttt::{
-        TTTConfig,
+        TTTConfig, TTTLayerType,
         cubecl_kernels::{backend::FusedTttBackend, linear::FusedTTTLinear},
         layer::TTTInnerModel,
+        linear::TTTLinear,
+        linear_adam::TTTLinearAdam,
+        mlp::TTTMLP,
+        mlp2::TTTMLP2,
+        mlp3::TTTMLP3,
+        mlp4::TTTMLP4,
     },
 };
 use burn::{
@@ -52,6 +58,15 @@ pub struct TTTTrainingConfig {
     /// Maximum sequence length for training
     #[config(default = 2048)]
     pub max_seq_len: usize,
+    /// Training samples per epoch
+    #[config(default = 10000)]
+    pub train_samples: usize,
+    /// Test samples per epoch
+    #[config(default = 1000)]
+    pub test_samples: usize,
+    /// Dataloader workers
+    #[config(default = 2)]
+    pub num_workers: usize,
 }
 
 impl TTTTrainingConfig {
@@ -69,60 +84,14 @@ impl TTTTrainingConfig {
             warmup_steps: 100,
             learning_rate: 5e-4,
             max_seq_len: 1024,
+            train_samples: 10000,
+            test_samples: 1000,
+            num_workers: 2,
         }
     }
 }
 
-/// Train TTT text generation model (non-fused, works on any backend)
-pub fn train_ttt_text_generation<
-    B: AutodiffBackend + FusedTttBackend,
-    D: Dataset<TextGenerationItem> + 'static,
->(
-    device: &B::Device,
-    dataset_train: D,
-    dataset_test: D,
-    config: TTTTrainingConfig,
-    artifact_dir: &str,
-) where
-    B::InnerBackend: FusedTttBackend,
-{
-    let tokenizer = Arc::new(Gpt2Tokenizer::default());
-    let batcher = TextGenerationBatcher::new(tokenizer.clone(), config.max_seq_len);
-
-    std::fs::create_dir_all(artifact_dir).unwrap();
-
-    let hidden_size = config.ttt_config.hidden_size;
-
-    config.save(format!("{artifact_dir}/config.json")).unwrap();
-
-    assert_eq!(config.ttt_config.vocab_size, tokenizer.vocab_size());
-    let model_config = TTTTextGenerationConfig {
-        ttt_config: config.ttt_config,
-        pad_token: tokenizer.pad_token(),
-    };
-
-    println!("Initializing model...");
-    let model = model_config.init::<B, FusedTTTLinear<B>>(device);
-    println!("Model initialized successfully");
-
-    run_training(
-        model,
-        batcher,
-        dataset_train,
-        dataset_test,
-        &config.optimizer,
-        config.batch_size,
-        config.num_epochs,
-        config.grad_accumulation,
-        config.warmup_steps,
-        config.learning_rate,
-        hidden_size,
-        tokenizer.pad_token(),
-        artifact_dir,
-    );
-}
-
-/// Common training loop for both fused and non-fused models
+/// Common training loop for all inner model types
 fn run_training<
     B: AutodiffBackend,
     Inner: TTTInnerModel<B> + ModuleDisplay + AutodiffModule<B> + 'static,
@@ -132,13 +101,7 @@ fn run_training<
     batcher: TextGenerationBatcher,
     dataset_train: D,
     dataset_test: D,
-    optimizer_config: &AdamConfig,
-    batch_size: usize,
-    num_epochs: usize,
-    grad_accumulation: usize,
-    warmup_steps: usize,
-    learning_rate: f64,
-    hidden_size: usize,
+    config: &TTTTrainingConfig,
     pad_token: usize,
     artifact_dir: &str,
 ) where
@@ -159,19 +122,23 @@ fn run_training<
 
     println!("Creating data loaders...");
     let dataloader_train = DataLoaderBuilder::new(batcher.clone())
-        .batch_size(batch_size)
-        .num_workers(8)
-        .build(SamplerDataset::new(dataset_train, 10_000));
+        .batch_size(config.batch_size)
+        .num_workers(config.num_workers)
+        .build(SamplerDataset::new(dataset_train, config.train_samples));
 
     let dataloader_test = DataLoaderBuilder::new(batcher)
-        .batch_size(batch_size)
-        .num_workers(8)
-        .build(SamplerDataset::new(dataset_test, 1_000));
+        .batch_size(config.batch_size)
+        .num_workers(config.num_workers)
+        .build(SamplerDataset::new(dataset_test, config.test_samples));
     println!("Data loaders created successfully");
 
     println!("Initializing optimizer...");
-    let optim = optimizer_config.init();
+    let optim = config.optimizer.init();
     println!("Optimizer initialized");
+
+    let hidden_size = config.ttt_config.hidden_size;
+    let warmup_steps = config.warmup_steps;
+    let learning_rate = config.learning_rate;
 
     println!("Initializing learning rate scheduler...");
     println!(
@@ -192,8 +159,8 @@ fn run_training<
         .metric_valid(LossMetric::new())
         .metric_train_numeric(LearningRateMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
-        .grads_accumulation(grad_accumulation)
-        .num_epochs(num_epochs)
+        .grads_accumulation(config.grad_accumulation)
+        .num_epochs(config.num_epochs)
         .summary();
 
     let result = training.launch(Learner::new(model, optim, lr_scheduler));
@@ -206,7 +173,53 @@ fn run_training<
         .unwrap();
 }
 
-/// Quick training function with dataset
+/// Train with a specific inner model type
+fn train_with_inner<
+    B: AutodiffBackend,
+    Inner: TTTInnerModel<B> + ModuleDisplay + AutodiffModule<B> + 'static,
+    D: Dataset<TextGenerationItem> + 'static,
+>(
+    device: &B::Device,
+    dataset_train: D,
+    dataset_test: D,
+    config: TTTTrainingConfig,
+    artifact_dir: &str,
+) where
+    TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
+    <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
+    <TTTTextGenerationModel<B, Inner> as AutodiffModule<B>>::InnerModule: InferenceStep<
+            Input = TrainingTextGenerationBatch<B::InnerBackend>,
+            Output = ClassificationOutput<B::InnerBackend>,
+        >,
+{
+    let tokenizer = Arc::new(Gpt2Tokenizer::default());
+    let batcher = TextGenerationBatcher::new(tokenizer.clone(), config.max_seq_len);
+
+    std::fs::create_dir_all(artifact_dir).unwrap();
+    config.save(format!("{artifact_dir}/config.json")).unwrap();
+
+    assert_eq!(config.ttt_config.vocab_size, tokenizer.vocab_size());
+    let model_config = TTTTextGenerationConfig {
+        ttt_config: config.ttt_config.clone(),
+        pad_token: tokenizer.pad_token(),
+    };
+
+    println!("Initializing model...");
+    let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
+    println!("Model initialized successfully");
+
+    let pad_token = tokenizer.pad_token();
+    run_training(
+        model,
+        batcher,
+        dataset_train,
+        dataset_test,
+        &config,
+        pad_token,
+        artifact_dir,
+    );
+}
+
 pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: TTTTrainingConfig,
@@ -219,7 +232,73 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     let dataset_test = TextDataset::test();
 
     println!("Starting TTT text generation training...");
-    train_ttt_text_generation::<B, _>(device, dataset_train, dataset_test, config, artifact_dir);
+    println!("Layer type: {:?}", config.ttt_config.layer_type);
+
+    match config.ttt_config.layer_type {
+        TTTLayerType::Linear => {
+            train_with_inner::<B, TTTLinear<B>, _>(
+                device,
+                dataset_train,
+                dataset_test,
+                config,
+                artifact_dir,
+            );
+        }
+        TTTLayerType::LinearAdam => {
+            train_with_inner::<B, TTTLinearAdam<B>, _>(
+                device,
+                dataset_train,
+                dataset_test,
+                config,
+                artifact_dir,
+            );
+        }
+        TTTLayerType::MLP => {
+            train_with_inner::<B, TTTMLP<B>, _>(
+                device,
+                dataset_train,
+                dataset_test,
+                config,
+                artifact_dir,
+            );
+        }
+        TTTLayerType::MLP2 => {
+            train_with_inner::<B, TTTMLP2<B>, _>(
+                device,
+                dataset_train,
+                dataset_test,
+                config,
+                artifact_dir,
+            );
+        }
+        TTTLayerType::MLP3 => {
+            train_with_inner::<B, TTTMLP3<B>, _>(
+                device,
+                dataset_train,
+                dataset_test,
+                config,
+                artifact_dir,
+            );
+        }
+        TTTLayerType::MLP4 => {
+            train_with_inner::<B, TTTMLP4<B>, _>(
+                device,
+                dataset_train,
+                dataset_test,
+                config,
+                artifact_dir,
+            );
+        }
+        TTTLayerType::FusedLinear => {
+            train_with_inner::<B, FusedTTTLinear<B>, _>(
+                device,
+                dataset_train,
+                dataset_test,
+                config,
+                artifact_dir,
+            );
+        }
+    }
 
     println!("Training completed! Artifacts saved to: {artifact_dir}");
 }

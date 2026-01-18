@@ -42,6 +42,7 @@ pub enum TTTLayerType {
     MLP2,
     MLP3,
     MLP4,
+    FusedLinear,
 }
 
 #[derive(Config, Debug, PartialEq)]

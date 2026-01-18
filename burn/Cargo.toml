@@ -30,6 +30,7 @@ num-traits = "0.2"
 derive-new = "0.7"
 log = "0.4"
 env_logger = "0.11"
+clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports", "csv_output"] }
