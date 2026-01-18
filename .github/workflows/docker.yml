@@ -37,7 +37,7 @@ jobs:
         uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build Docker image
-        run: nix build .#${{ matrix.image.package }} --accept-flake-config
+        run: nix build .#${{ matrix.image.package }} --accept-flake-config --print-build-logs --print-out-paths
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
