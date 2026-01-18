@@ -1,0 +1,66 @@
+name: Build and Publish Docker Images
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: ttt-rocm
+            package: ttt-rocm-docker
+          - name: ttt-cuda
+            package: ttt-cuda-docker
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build Docker image
+        run: nix build .#${{ matrix.image.package }} --accept-flake-config
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load and push image
+        if: github.event_name != 'pull_request'
+        run: |
+          # Load the image from the nix build result
+          docker load < result
+
+          # Tag with registry path
+          IMAGE_NAME="${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image.name }}"
+          IMAGE_NAME_LOWER=$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+
+          # Tag with latest and commit SHA
+          docker tag ${{ matrix.image.name }}:latest "${IMAGE_NAME_LOWER}:latest"
+          docker tag ${{ matrix.image.name }}:latest "${IMAGE_NAME_LOWER}:${{ github.sha }}"
+
+          # Push both tags
+          docker push "${IMAGE_NAME_LOWER}:latest"
+          docker push "${IMAGE_NAME_LOWER}:${{ github.sha }}"
