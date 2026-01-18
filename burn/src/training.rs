@@ -6,7 +6,7 @@ use crate::{
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
     ttt::{
         TTTConfig, TTTLayerType,
-        cubecl_kernels::{backend::FusedTttBackend, linear::FusedTTTLinear},
+        cubecl_kernels::{Fused, backend::FusedTttBackend},
         layer::TTTInnerModel,
         linear::TTTLinear,
         linear_adam::TTTLinearAdam,
@@ -290,7 +290,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
             );
         }
         TTTLayerType::FusedLinear => {
-            train_with_inner::<B, FusedTTTLinear<B>, _>(
+            train_with_inner::<B, Fused<B, TTTLinear<B>>, _>(
                 device,
                 dataset_train,
                 dataset_test,
