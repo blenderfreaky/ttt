@@ -2,11 +2,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     # nixpkgs-intel.url = "github:blenderfreaky/nixpkgs/package/intel-oneapi";
-    intel-nix = {
-      # url = "github:blenderfreaky/intel-nix/main";
-      url = "path:/home/blenderfreaky/src/projects/intel-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # intel-nix = {
+    #   # url = "github:blenderfreaky/intel-nix/main";
+    #   url = "path:/home/blenderfreaky/src/projects/intel-nix";
+    #   inputs.nixpkgs.follows = "nixpkgs";
+    # };
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -14,19 +14,19 @@
     self,
     nixpkgs,
     # nixpkgs-intel,
-    intel-nix,
+    # intel-nix,
     flake-utils,
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
-        intel-pkgs-original = intel-nix.packages.${system};
-        intel-pkgs = {
-          intel-llvm = intel-pkgs-original.src.llvm;
-          oneDNN = intel-pkgs-original.src.oneDNN;
-          oneMath = intel-pkgs-original.src.oneMath-rocm;
-          intel-oneapi-basekit = intel-pkgs-original.toolkits.installer.base;
-          intel-oneapi-hpckit = intel-pkgs-original.toolkits.installer.hpc;
-        };
+        # intel-pkgs-original = intel-nix.packages.${system};
+        # intel-pkgs = {
+        #   intel-llvm = intel-pkgs-original.src.llvm;
+        #   oneDNN = intel-pkgs-original.src.oneDNN;
+        #   oneMath = intel-pkgs-original.src.oneMath-rocm;
+        #   intel-oneapi-basekit = intel-pkgs-original.toolkits.installer.base;
+        #   intel-oneapi-hpckit = intel-pkgs-original.toolkits.installer.hpc;
+        # };
         pkgs =
           import
           nixpkgs
@@ -36,36 +36,36 @@
               rocmSupport = true;
               allowUnfree = true;
             };
-            overlays = [
-              (final: prev: {
-                ccacheStdenv = prev.ccacheStdenv.override {
-                  extraConfig = ''
-                    export CCACHE_COMPRESS=1
-                    #export CCACHE_DIR="$ {config.programs.ccache.cacheDir}"
-                    export CCACHE_DIR="/var/cache/ccache"
-                    export CCACHE_UMASK=007
-                    export CCACHE_SLOPPINESS=random_seed
-                    if [ ! -d "$CCACHE_DIR" ]; then
-                      echo "====="
-                      echo "Directory '$CCACHE_DIR' does not exist"
-                      echo "Please create it with:"
-                      echo "  sudo mkdir -m0770 '$CCACHE_DIR'"
-                      echo "  sudo chown root:nixbld '$CCACHE_DIR'"
-                      echo "====="
-                      exit 1
-                    fi
-                    if [ ! -w "$CCACHE_DIR" ]; then
-                      echo "====="
-                      echo "Directory '$CCACHE_DIR' is not accessible for user $(whoami)"
-                      echo "Please verify its access permissions"
-                      echo "====="
-                      exit 1
-                    fi
-                  '';
-                };
-              })
-              (_: _: intel-pkgs)
-            ];
+            # overlays = [
+            #   (final: prev: {
+            #     ccacheStdenv = prev.ccacheStdenv.override {
+            #       extraConfig = ''
+            #         export CCACHE_COMPRESS=1
+            #         #export CCACHE_DIR="$ {config.programs.ccache.cacheDir}"
+            #         export CCACHE_DIR="/var/cache/ccache"
+            #         export CCACHE_UMASK=007
+            #         export CCACHE_SLOPPINESS=random_seed
+            #         if [ ! -d "$CCACHE_DIR" ]; then
+            #           echo "====="
+            #           echo "Directory '$CCACHE_DIR' does not exist"
+            #           echo "Please create it with:"
+            #           echo "  sudo mkdir -m0770 '$CCACHE_DIR'"
+            #           echo "  sudo chown root:nixbld '$CCACHE_DIR'"
+            #           echo "====="
+            #           exit 1
+            #         fi
+            #         if [ ! -w "$CCACHE_DIR" ]; then
+            #           echo "====="
+            #           echo "Directory '$CCACHE_DIR' is not accessible for user $(whoami)"
+            #           echo "Please verify its access permissions"
+            #           echo "====="
+            #           exit 1
+            #         fi
+            #       '';
+            #     };
+            #   })
+            #   (_: _: intel-pkgs)
+            # ];
           };
         own-pkgs = pkgs.callPackage ./nix {};
         # rocmMerged = pkgs:
@@ -85,16 +85,22 @@
         #     '';
         #   };
       in {
-        packages = own-pkgs // intel-pkgs;
+        packages = own-pkgs;
+        # // intel-pkgs;
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs;
             [
               stdenv.cc.cc.lib
 
-              intel-llvm
+              # intel-llvm
               # oneDNN
-              oneMath
+              # oneMath
+
+              # # Wrap clangd to query the Intel LLVM compiler for include paths
+              # (writeShellScriptBin "clangd" ''
+              #   exec ${clang-tools}/bin/clangd --query-driver="${intel-llvm}/bin/clang++" "$@"
+              # '')
 
               # spirv-tools
               lldb
@@ -109,11 +115,6 @@
 
               just
               just-formatter
-
-              # Wrap clangd to query the Intel LLVM compiler for include paths
-              (writeShellScriptBin "clangd" ''
-                exec ${clang-tools}/bin/clangd --query-driver="${intel-llvm}/bin/clang++" "$@"
-              '')
 
               (python3.withPackages
                 (ps:
@@ -145,7 +146,7 @@
 
           ROCM_PATH = "${pkgs.rocmPackages.clr}/bin";
           ROCM_DEVICE_LIB_PATH = "${pkgs.rocmPackages.rocm-device-libs}/amdgcn/bitcode";
-          INTEL_LLVM_DIR = "${pkgs.intel-llvm}";
+          # INTEL_LLVM_DIR = "${pkgs.intel-llvm}";
         };
       }
     );
