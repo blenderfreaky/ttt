@@ -109,10 +109,11 @@
     };
   };
 
-  cudaPackages = pkgs.cudaPackages_12_9;
+  cudaPackages = pkgs.cudaPackages_12_8;  # Match RunPod's CUDA 12.8.1
 
   ttt-cuda = mkTtt {
     backend = "cuda";
+    extraNativeBuildInputs = [cudaPackages.cudatoolkit];  # nvcc needed at build time for cudarc version detection
     extraBuildInputs = [cudaPackages.cudatoolkit];
     extraEnv.CUDA_PATH = "${cudaPackages.cudatoolkit}";
   };
