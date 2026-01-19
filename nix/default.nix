@@ -50,7 +50,7 @@
           bashInteractive
           fish
           coreutils
-          readelf
+          bintools
           file
           findutils
 
