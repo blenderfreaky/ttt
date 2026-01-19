@@ -16,42 +16,7 @@
 
 use cubecl::prelude::*;
 
-/// Scaling factor for converting epsilon to integer representation.
-/// CubeCL requires comptime configs to implement Eq + Hash, but f32 doesn't implement these.
-const EPSILON_SCALE_INV: f32 = 1e-9;
-
-/// Configuration for the fused TTT forward kernel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FusedTttConfig {
-    /// Mini-batch sequence length (K)
-    pub seq_len: usize,
-    /// Head dimension (D)
-    pub head_dim: usize,
-    /// Layer norm epsilon, stored as scaled integer (see EPSILON_SCALE_INV)
-    pub epsilon_scaled: u32,
-}
-
-impl FusedTttConfig {
-    #[must_use]
-    pub fn new(seq_len: usize, head_dim: usize, epsilon: f32) -> Self {
-        Self {
-            seq_len,
-            head_dim,
-            epsilon_scaled: (epsilon / EPSILON_SCALE_INV) as u32,
-        }
-    }
-
-    #[must_use]
-    pub fn epsilon(&self) -> f32 {
-        self.epsilon_scaled as f32 * EPSILON_SCALE_INV
-    }
-}
-
-impl Default for FusedTttConfig {
-    fn default() -> Self {
-        Self::new(16, 64, 1e-6)
-    }
-}
+use crate::ttt::cubecl_kernels::FusedTttConfig;
 
 /// Fully fused TTT-Linear forward pass kernel.
 ///

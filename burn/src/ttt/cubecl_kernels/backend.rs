@@ -51,10 +51,9 @@ pub mod cube_impl {
     use burn_cubecl::{BoolElement, CubeBackend, CubeRuntime, FloatElement, IntElement};
     use cubek::reduce::components::instructions::ReduceOperationConfig;
 
-    use crate::ttt::cubecl_kernels::linear_backward::{
-        FusedTttBackwardConfig, launch_fused_ttt_backward,
-    };
-    use crate::ttt::cubecl_kernels::linear_forward::{FusedTttConfig, launch_fused_ttt_forward};
+    use crate::ttt::cubecl_kernels::FusedTttConfig;
+    use crate::ttt::cubecl_kernels::linear_backward::launch_fused_ttt_backward;
+    use crate::ttt::cubecl_kernels::linear_forward::launch_fused_ttt_forward;
 
     pub fn fused_ttt_forward_launch<R: CubeRuntime, F: FloatElement>(
         xq: CubeTensor<R>,
@@ -162,7 +161,7 @@ pub mod cube_impl {
             Shape::new([batch_size, num_heads, head_dim]),
         );
 
-        let config = FusedTttBackwardConfig::new(seq_len, head_dim, epsilon);
+        let config = FusedTttConfig::new(seq_len, head_dim, epsilon);
 
         launch_fused_ttt_backward::<R, F>(
             &xq.client,

@@ -30,3 +30,33 @@ impl<B: Backend, T: TTTInnerModel<B>> From<T> for Fused<B, T> {
         }
     }
 }
+
+/// Scaling factor for converting epsilon to integer representation.
+/// CubeCL requires comptime configs to implement Eq + Hash, but f32 doesn't implement these.
+const EPSILON_SCALE_INV: f32 = 1e-9;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FusedTttConfig {
+    /// Mini-batch sequence length (CS)
+    pub seq_len: usize,
+    /// Head dimension (F)
+    pub head_dim: usize,
+    /// Layer norm epsilon, stored as scaled integer (see EPSILON_SCALE_INV)
+    pub epsilon_scaled: u32,
+}
+
+impl FusedTttConfig {
+    #[must_use]
+    pub fn new(seq_len: usize, head_dim: usize, epsilon: f32) -> Self {
+        Self {
+            seq_len,
+            head_dim,
+            epsilon_scaled: (epsilon / EPSILON_SCALE_INV) as u32,
+        }
+    }
+
+    #[must_use]
+    pub fn epsilon(&self) -> f32 {
+        self.epsilon_scaled as f32 * EPSILON_SCALE_INV
+    }
+}

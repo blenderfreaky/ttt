@@ -8,34 +8,7 @@
 
 use cubecl::prelude::*;
 
-/// Scaling factor for epsilon (see forward kernel).
-const EPSILON_SCALE_INV: f32 = 1e-9;
-
-/// Configuration for the fused TTT backward kernel.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct FusedTttBackwardConfig {
-    pub seq_len: usize,
-    pub head_dim: usize,
-    pub epsilon_scaled: u32,
-}
-
-impl FusedTttBackwardConfig {
-    #[must_use]
-    pub fn new(seq_len: usize, head_dim: usize, epsilon: f32) -> Self {
-        Self {
-            seq_len,
-            head_dim,
-            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-            epsilon_scaled: (epsilon / EPSILON_SCALE_INV) as u32,
-        }
-    }
-
-    #[must_use]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-    pub fn epsilon(&self) -> f32 {
-        self.epsilon_scaled as f32 * EPSILON_SCALE_INV
-    }
-}
+use crate::ttt::cubecl_kernels::FusedTttConfig;
 
 /// Forward pass input tensors grouped into a struct.
 #[derive(CubeType, CubeLaunch)]
@@ -73,7 +46,7 @@ pub fn fused_ttt_backward_kernel<F: Float>(
     inputs: &ForwardInputs<F>,
     grad_output: &Tensor<F>,
     outputs: &mut GradOutputs<F>,
-    #[comptime] config: FusedTttBackwardConfig,
+    #[comptime] config: FusedTttConfig,
 ) {
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;
@@ -615,7 +588,7 @@ pub fn launch_fused_ttt_backward<R: Runtime, F: Float + CubeElement>(
     grad_ttt_lr_eta: TensorHandleRef<R>,
     grad_ln_weight: TensorHandleRef<R>,
     grad_ln_bias: TensorHandleRef<R>,
-    config: FusedTttBackwardConfig,
+    config: FusedTttConfig,
 ) {
     let batch_size = xq.shape[0] as u32;
     let num_heads = xq.shape[1] as u32;
