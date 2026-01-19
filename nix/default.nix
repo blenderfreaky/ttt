@@ -43,7 +43,26 @@
     pkgs.dockerTools.buildLayeredImage {
       inherit name;
       tag = "latest";
-      contents = [tttPkg pkgs.cacert pkgs.bashInteractive pkgs.fish pkgs.coreutils pkgs.ripgrep pkgs.fd pkgs.dust pkgs.duf] ++ runtimeDeps;
+      contents = with pkgs;
+        [
+          tttPkg
+          cacert
+          bashInteractive
+          fish
+          coreutils
+          ripgrep
+          fd
+          dust
+          duf
+          (
+            python313.withPackages
+            (ps:
+              with ps; [
+                huggingface-hub
+              ])
+          )
+        ]
+        ++ runtimeDeps;
       fakeRootCommands = ''
         mkdir -p ./root ./tmp
         chmod 1777 ./tmp
@@ -51,12 +70,14 @@
       enableFakechroot = true;
       config = {
         Cmd = ["/bin/fish"];
-        Env = [
-          "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-          "HOME=/root"
-          "USER=root"
-          "TMPDIR=/tmp"
-        ] ++ extraEnv;
+        Env =
+          [
+            "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+            "HOME=/root"
+            "USER=root"
+            "TMPDIR=/tmp"
+          ]
+          ++ extraEnv;
         WorkingDir = "/root";
       };
     };
@@ -81,7 +102,7 @@
   ttt-rocm-docker = mkTttDocker {
     name = "ttt-rocm";
     tttPkg = ttt-rocm;
-    runtimeDeps = with pkgs.rocmPackages; [clr rocblas rocwmma rocm-device-libs rocm-runtime];
+    runtimeDeps = with pkgs.rocmPackages; [clr rocblas rocwmma rocm-device-libs rocm-runtime] ++ [pkgs.nvtopPackages.amd];
     extraEnv = [
       "ROCM_PATH=${pkgs.rocmPackages.clr}"
       "HIP_PATH=${pkgs.rocmPackages.clr}"
@@ -92,7 +113,7 @@
   ttt-cuda-docker = mkTttDocker {
     name = "ttt-cuda";
     tttPkg = ttt-cuda;
-    runtimeDeps = [pkgs.cudaPackages.cudatoolkit];
+    runtimeDeps = [pkgs.cudaPackages.cudatoolkit pkgs.nvtopPackages.nvidia];
     extraEnv = [
       "CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}"
     ];
