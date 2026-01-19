@@ -54,6 +54,7 @@
           fd
           dust
           duf
+          tmux
           (
             python313.withPackages
             (ps:
