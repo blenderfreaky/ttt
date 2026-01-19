@@ -60,6 +60,8 @@
           duf
           tmux
           stdenv.cc.cc.lib
+          dockerTools.fakeNss
+
           (
             python313.withPackages
             (ps:
@@ -71,6 +73,11 @@
         ++ runtimeDeps;
       fakeRootCommands = ''
         mkdir -p ./root ./tmp
+        mkdir -p ./usr/lib/x86_64-linux-gnu
+        mkdir -p ./usr/local/nvidia/lib64
+        mkdir -p ./usr/lib64
+        mkdir -p ./run/nvidia
+        mkdir -p ./tmp ./root
         chmod 1777 ./tmp
       '';
       enableFakechroot = true;
@@ -82,7 +89,9 @@
             "HOME=/root"
             "USER=root"
             "TMPDIR=/tmp"
-            # "LD_LIBRARY_PATH="
+            "NVIDIA_VISIBLE_DEVICES=all"
+            "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
+            "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/lib64"
           ]
           ++ extraEnv;
         WorkingDir = "/root";
