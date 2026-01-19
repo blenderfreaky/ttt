@@ -1,12 +1,6 @@
 use std::{marker::PhantomData, sync::Arc};
 
-use burn::{
-    config::Config,
-    module::{Ignored, Module, Param},
-    nn::Initializer,
-    prelude::Backend,
-    tensor::Tensor,
-};
+use burn::tensor::Tensor;
 
 use crate::ttt::{
     TTTConfig,
@@ -16,7 +10,6 @@ use crate::ttt::{
     },
     layer::{TTTInnerModel, TTTInputsInner},
     linear::TTTLinear,
-    util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
 };
 
 impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
