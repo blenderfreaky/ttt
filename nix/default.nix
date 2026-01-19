@@ -50,6 +50,10 @@
           bashInteractive
           fish
           coreutils
+          readelf
+          file
+          findutils
+
           ripgrep
           fd
           dust
@@ -98,8 +102,8 @@
 
   ttt-cuda = mkTtt {
     backend = "cuda";
-    extraBuildInputs = [pkgs.cudaPackages.cudatoolkit];
-    extraEnv.CUDA_PATH = "${pkgs.cudaPackages.cudatoolkit}";
+    extraBuildInputs = [pkgs.cudaPackages_12.cudatoolkit];
+    extraEnv.CUDA_PATH = "${pkgs.cudaPackages_12.cudatoolkit}";
   };
 
   ttt-rocm-docker = mkTttDocker {
@@ -116,9 +120,9 @@
   ttt-cuda-docker = mkTttDocker {
     name = "ttt-cuda";
     tttPkg = ttt-cuda;
-    runtimeDeps = with pkgs.cudaPackages; [cudatoolkit cuda_cudart] ++ [pkgs.nvtopPackages.nvidia];
+    runtimeDeps = with pkgs.cudaPackages_12; [cudatoolkit] ++ [pkgs.nvtopPackages.nvidia];
     extraEnv = [
-      "CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}"
+      "CUDA_PATH=${pkgs.cudaPackages_12.cudatoolkit}"
     ];
   };
 }
