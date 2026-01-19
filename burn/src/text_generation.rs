@@ -216,11 +216,11 @@ impl<B: Backend, Inner: TTTInnerModel<B>> InferenceStep for TTTTextGenerationMod
 
 #[cfg(test)]
 mod tests {
-    use crate::ttt::{GpuAutodiffBackend, cubecl_kernels::linear::FusedTTTLinear};
+    use crate::ttt::{GpuAutodiffBackend, cubecl_kernels::Fused, linear::TTTLinear};
 
     use super::*;
 
-    type Inner = FusedTTTLinear<GpuAutodiffBackend>;
+    type Inner = Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>;
 
     #[test]
     fn forward_inference_doesnt_crash() {

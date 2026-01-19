@@ -86,8 +86,13 @@ mod tests {
         CpuBackend, GpuAutodiffBackend, GpuBackend,
         layer::{Qkv, TTTInnerModel, TTTInputsInner},
         linear::{TTTLinear, TTTLinearConfig},
+        util::MultiHeadLayerNorm,
     };
-    use burn::tensor::TensorData;
+    use burn::{
+        module::{Ignored, Param},
+        tensor::TensorData,
+    };
+    use burn_backend::Backend;
     use std::sync::Arc;
 
     fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
@@ -367,7 +372,7 @@ mod tests {
 
         let gpu_device: <GpuBackend as Backend>::Device = Default::default();
 
-        let fused_linear: FusedTTTLinear<GpuBackend> = FusedTTTLinear {
+        let fused_linear: Fused<GpuBackend, TTTLinear<GpuBackend>> = TTTLinear {
             weight_init: Param::from_tensor(Tensor::from_data(
                 TensorData::new(weight_init_data, [num_heads, head_dim, head_dim]),
                 &gpu_device,
@@ -388,7 +393,8 @@ mod tests {
                 epsilon,
             },
             config: Ignored(config),
-        };
+        }
+        .into();
 
         let mut fused_state = fused_linear.init_state(batch_size);
 
@@ -545,7 +551,7 @@ mod tests {
 
         let gpu_device: <GpuAutodiffBackend as Backend>::Device = Default::default();
 
-        let fused_linear: FusedTTTLinear<GpuAutodiffBackend> = FusedTTTLinear {
+        let fused_linear: Fused<_, TTTLinear<_>> = TTTLinear {
             weight_init: Param::from_tensor(Tensor::from_data(
                 TensorData::new(weight_init_data, [num_heads, head_dim, head_dim]),
                 &gpu_device,
@@ -566,7 +572,8 @@ mod tests {
                 epsilon,
             },
             config: Ignored(config),
-        };
+        }
+        .into();
 
         let mut fused_state = fused_linear.init_state(batch_size);
 

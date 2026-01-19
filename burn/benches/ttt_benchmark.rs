@@ -29,7 +29,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use ttt::data::TrainingTextGenerationBatch;
 use ttt::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 use ttt::ttt::TTTConfig;
-use ttt::ttt::cubecl_kernels::linear::FusedTTTLinear;
+use ttt::ttt::cubecl_kernels::Fused;
 use ttt::ttt::layer::{Qkv, TTTInnerModel, TTTInputsInner};
 use ttt::ttt::linear::TTTLinear;
 use ttt::ttt::mlp::TTTMLP;
@@ -385,7 +385,9 @@ fn bench_inner_forward_fused_linear(c: &mut Criterion) {
         RuntimeParams::new(4, 64, 1000),
         RuntimeParams::new(8, 128, 1000),
     ] {
-        bench_inner_forward::<InferenceBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+        bench_inner_forward::<InferenceBackend, Fused<_, TTTLinear<_>>>(
+            c, &config, &params, &device,
+        );
     }
 }
 
@@ -418,7 +420,9 @@ fn bench_inner_backward_fused_linear(c: &mut Criterion) {
         RuntimeParams::new(4, 64, 1000),
         RuntimeParams::new(8, 128, 1000),
     ] {
-        bench_inner_backward::<TrainingBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+        bench_inner_backward::<TrainingBackend, Fused<_, TTTLinear<_>>>(
+            c, &config, &params, &device,
+        );
     }
 }
 
@@ -451,7 +455,9 @@ fn bench_full_forward_fused_linear(c: &mut Criterion) {
         RuntimeParams::new(4, 64, 1000),
         RuntimeParams::new(8, 128, 1000),
     ] {
-        bench_full_forward::<InferenceBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+        bench_full_forward::<InferenceBackend, Fused<_, TTTLinear<_>>>(
+            c, &config, &params, &device,
+        );
     }
 }
 
@@ -484,7 +490,9 @@ fn bench_full_backward_fused_linear(c: &mut Criterion) {
         RuntimeParams::new(4, 64, 1000),
         RuntimeParams::new(8, 128, 1000),
     ] {
-        bench_full_backward::<TrainingBackend, FusedTTTLinear<_>>(c, &config, &params, &device);
+        bench_full_backward::<TrainingBackend, Fused<_, TTTLinear<_>>>(
+            c, &config, &params, &device,
+        );
     }
 }
 
