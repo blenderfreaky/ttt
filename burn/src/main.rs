@@ -102,6 +102,14 @@ struct TrainArgs {
     #[arg(long, default_value = "5e-4")]
     lr: f64,
 
+    /// Base learning rate for TTT
+    #[arg(long, default_value = "1")]
+    ttt_base_lr: f32,
+
+    /// Mini-batch size
+    #[arg(long, default_value = "32")]
+    mini_batch_size: usize,
+
     /// Training samples per epoch
     #[arg(long, default_value = "10000")]
     samples: usize,
@@ -155,6 +163,8 @@ impl TrainArgs {
             .size
             .to_ttt_config()
             .with_layer_type(self.inner.to_layer_type())
+            .with_mini_batch_size(self.mini_batch_size)
+            .with_base_lr(self.ttt_base_lr)
             .with_max_seq_len(self.seq_len);
 
         TTTTrainingConfig {
