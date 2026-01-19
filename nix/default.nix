@@ -55,6 +55,7 @@
           dust
           duf
           tmux
+          stdenv.cc.cc.lib
           (
             python313.withPackages
             (ps:
@@ -77,6 +78,7 @@
             "HOME=/root"
             "USER=root"
             "TMPDIR=/tmp"
+            # "LD_LIBRARY_PATH="
           ]
           ++ extraEnv;
         WorkingDir = "/root";
