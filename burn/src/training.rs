@@ -55,6 +55,9 @@ pub struct TTTTrainingConfig {
     /// Peak learning rate
     #[config(default = 5e-4)]
     pub learning_rate: f64,
+    /// Mini-batch size
+    #[config(default = 32)]
+    pub mini_batch_size: usize,
     /// Maximum sequence length for training
     #[config(default = 2048)]
     pub max_seq_len: usize,
@@ -83,6 +86,7 @@ impl TTTTrainingConfig {
             grad_accumulation: 1,
             warmup_steps: 100,
             learning_rate: 5e-4,
+            mini_batch_size: 32,
             max_seq_len: 1024,
             train_samples: 10000,
             test_samples: 1000,
