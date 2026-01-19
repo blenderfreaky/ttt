@@ -38,7 +38,7 @@ const EPSILON_SCALE_INV: f32 = 1e-9;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FusedTttConfig {
     /// Mini-batch sequence length (CS)
-    pub seq_len: usize,
+    pub mini_batch_len: usize,
     /// Head dimension (F)
     pub head_dim: usize,
     /// Layer norm epsilon, stored as scaled integer (see EPSILON_SCALE_INV)
@@ -47,9 +47,9 @@ pub struct FusedTttConfig {
 
 impl FusedTttConfig {
     #[must_use]
-    pub fn new(seq_len: usize, head_dim: usize, epsilon: f32) -> Self {
+    pub fn new(mini_batch_len: usize, head_dim: usize, epsilon: f32) -> Self {
         Self {
-            seq_len,
+            mini_batch_len,
             head_dim,
             epsilon_scaled: (epsilon / EPSILON_SCALE_INV) as u32,
         }

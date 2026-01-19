@@ -63,7 +63,7 @@ pub fn fused_ttt_forward_kernel<F: Float>(
 
     let batch_size = xq.shape(0) as usize;
     let num_heads = xq.shape(1) as usize;
-    let seq_len = config.seq_len;
+    let seq_len = config.mini_batch_len;
     let head_dim = config.head_dim;
     let epsilon = config.epsilon();
 
@@ -354,7 +354,7 @@ pub fn launch_fused_ttt_forward<R: Runtime, F: Float + CubeElement>(
 ) {
     let batch_size = xq.shape[0] as u32;
     let num_heads = xq.shape[1] as u32;
-    let seq_len = config.seq_len as u32;
+    let seq_len = config.mini_batch_len as u32;
     let head_dim = config.head_dim as u32;
 
     // Each cube handles one (batch, head) pair
