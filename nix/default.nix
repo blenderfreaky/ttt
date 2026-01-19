@@ -109,10 +109,12 @@
     };
   };
 
+  cudaPackages = pkgs.cudaPackages_12_9;
+
   ttt-cuda = mkTtt {
     backend = "cuda";
-    extraBuildInputs = [pkgs.cudaPackages_12.cudatoolkit];
-    extraEnv.CUDA_PATH = "${pkgs.cudaPackages_12.cudatoolkit}";
+    extraBuildInputs = [cudaPackages.cudatoolkit];
+    extraEnv.CUDA_PATH = "${cudaPackages.cudatoolkit}";
   };
 
   ttt-rocm-docker = mkTttDocker {
@@ -129,9 +131,9 @@
   ttt-cuda-docker = mkTttDocker {
     name = "ttt-cuda";
     tttPkg = ttt-cuda;
-    runtimeDeps = with pkgs.cudaPackages_12; [cudatoolkit] ++ [pkgs.nvtopPackages.nvidia];
+    runtimeDeps = with cudaPackages; [cudatoolkit] ++ [pkgs.nvtopPackages.nvidia];
     extraEnv = [
-      "CUDA_PATH=${pkgs.cudaPackages_12.cudatoolkit}"
+      "CUDA_PATH=${cudaPackages.cudatoolkit}"
     ];
   };
 }
