@@ -116,7 +116,7 @@
   ttt-cuda-docker = mkTttDocker {
     name = "ttt-cuda";
     tttPkg = ttt-cuda;
-    runtimeDeps = [pkgs.cudaPackages.cudatoolkit pkgs.nvtopPackages.nvidia];
+    runtimeDeps = with pkgs.cudaPackages; [cudatoolkit cuda_cudart] ++ [pkgs.nvtopPackages.nvidia];
     extraEnv = [
       "CUDA_PATH=${pkgs.cudaPackages.cudatoolkit}"
     ];
