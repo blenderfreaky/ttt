@@ -91,7 +91,7 @@
             "TMPDIR=/tmp"
             "NVIDIA_VISIBLE_DEVICES=all"
             "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
-            "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/lib64"
+            "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/lib64:/lib"
           ]
           ++ extraEnv;
         WorkingDir = "/root";
