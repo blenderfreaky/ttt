@@ -89,8 +89,6 @@
             "HOME=/root"
             "USER=root"
             "TMPDIR=/tmp"
-            "NVIDIA_VISIBLE_DEVICES=all"
-            "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
             "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/lib64:/lib"
           ]
           ++ extraEnv;
@@ -109,11 +107,11 @@
     };
   };
 
-  cudaPackages = pkgs.cudaPackages_12_8;  # Match RunPod's CUDA 12.8.1
+  cudaPackages = pkgs.cudaPackages_12_8; # Match RunPod's CUDA 12.8.1
 
   ttt-cuda = mkTtt {
     backend = "cuda";
-    extraNativeBuildInputs = [cudaPackages.cudatoolkit];  # nvcc needed at build time for cudarc version detection
+    extraNativeBuildInputs = [cudaPackages.cudatoolkit]; # nvcc needed at build time for cudarc version detection
     extraBuildInputs = [cudaPackages.cudatoolkit];
     extraEnv.CUDA_PATH = "${cudaPackages.cudatoolkit}";
   };
@@ -134,6 +132,8 @@
     tttPkg = ttt-cuda;
     runtimeDeps = with cudaPackages; [cudatoolkit] ++ [pkgs.nvtopPackages.nvidia];
     extraEnv = [
+      "NVIDIA_VISIBLE_DEVICES=all"
+      "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
       "CUDA_PATH=${cudaPackages.cudatoolkit}"
     ];
   };
