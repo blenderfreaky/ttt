@@ -1,0 +1,20 @@
+[package]
+name = "thundercube"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cubecl = { version = "0.9.0", features = ["test-runtime"] }
+half = "2"
+
+[dev-dependencies]
+test-case = "3"
+rand = "0.9"
+paste = "1"
+
+[features]
+default = ["hip"]
+hip = ["cubecl/hip"]
+cuda = ["cubecl/cuda"]
+wgpu = ["cubecl/wgpu"]
+cpu = ["cubecl/cpu"]
