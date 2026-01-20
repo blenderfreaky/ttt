@@ -16,7 +16,7 @@ macro_rules! test_kernel {
             $(seed($seed:expr);)?
 
             $(
-                let $var:ident: $vty:ty = [$($val:expr),*];
+            let $var:ident: $vty:ty = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;
             )*
 
             assert_eq!(
@@ -34,7 +34,7 @@ macro_rules! test_kernel {
             name: $name;
             args: ($($args)*);
             seed: ($($seed)?);
-            vars: $(let $var: $vty = [$($val),*];)*;
+            vars: $(let $var: $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;)*;
             kernel: $kernel;
             kernel_args: ($($kernel_arg_name($($kernel_arg)?)),*);
             count: ($($count),*);
@@ -118,7 +118,7 @@ macro_rules! test_kernel {
         type: $t:ty;
         args: ($($args:tt)*);
         seed: ($($seed:expr)?);
-        vars: $(let $var:ident: $vty:tt = [$($val:expr),*];)*;
+        vars: $(let $var:ident: $vty:tt = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;)*;
         kernel: $kernel:ident;
         kernel_args: ($($kernel_arg_name:ident($($kernel_arg:expr)?)),*);
         count: ($($count:expr),*);
@@ -129,10 +129,11 @@ macro_rules! test_kernel {
             let client = $crate::test_utils::client();
 
             use rand::SeedableRng;
+            #[allow(unused_variables)]
             let mut rng = rand::rngs::StdRng::seed_from_u64(test_kernel!{ @seed ($($seed)?) });
 
             $(
-            test_kernel!{ @val($t, rng, client) $vty = [$($val),*];
+            test_kernel!{ @val($t, rng, client) $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;
                 [< $var _shape >], [< $var _strides >], [< $var _len >],
                 $var, [< $var _handle >], [< $var _arg >]
             }
@@ -170,19 +171,29 @@ macro_rules! test_kernel {
     { @dim($client:ident) ($x:expr, $y:expr) } => { CubeDim::new_2d($x, $y) };
     { @dim($client:ident) ($x:expr, $y:expr, $z:expr) } => { CubeDim::new_3d($x, $y, $z) };
 
-    { @val($t:ty, $rng:ident, $client:ident) $vty:tt = [$($val:expr),*];
+    { @val($t:ty, $rng:ident, $client:ident) $vty:tt = [$($val:expr),*] $(as $distrib:tt $(($($distrib_param:tt),+))?)?;
         $shape:ident, $strides:ident, $len:ident, $data:ident, $handle:ident, $arg:ident
     } => {
         let $shape = vec![$($val),*];
         println!("Initializing {} with shape {:?}", stringify!($vty), $shape);
         let $strides = $crate::test_utils::get_strides(&$shape);
         let $len: usize = $shape.iter().product();
-        let mut $data = $crate::test_utils::random_vec::<$t>(&mut $rng, $len);
+        let mut $data = test_kernel!{ @init_val($t, $rng, $len) $(as $distrib $(($($distrib_param),+))?)? };
         let $handle = $crate::test_utils::upload(&$client, &$data);
         println!("Strides: {:?}", $strides);
         println!("Length: {}", $len);
         assert_eq!($len % $crate::LINE_SIZE, 0, "Length must be a multiple of LINE_SIZE");
         test_kernel!{ @make_arg($t) $vty; $handle, $strides, $shape, $len, $arg }
+    };
+
+    { @init_val($t:ty, $rng:ident, $len:ident) } => {
+        test_kernel!{ @init_val($t, $rng, $len) as Uniform(-10.0, 10.0) }
+    };
+    { @init_val($t:ty, $rng:ident, $len:ident) as Range } => {
+        $crate::test_utils::range_vec::<$t>($len)
+    };
+    { @init_val($t:ty, $rng:ident, $len:ident) as Uniform($start:expr, $end:expr) } => {
+        $crate::test_utils::random_vec::<$t>(&mut $rng, $len, $start, $end)
     };
 
     { @make_arg($t:ty) Array; $handle:ident, $strides:ident, $shape:ident, $len:ident, $arg:ident } => {
@@ -211,9 +222,13 @@ pub fn client() -> TestClient {
 
 pub type TestClient = ComputeClient<TestRuntime>;
 
-pub fn random_vec<F: TestFloat>(rng: &mut StdRng, len: usize) -> Vec<F> {
+pub fn range_vec<F: TestFloat>(len: usize) -> Vec<F> {
+    (0..len).map(|i| F::from_int(i as i64)).collect()
+}
+
+pub fn random_vec<F: TestFloat>(rng: &mut StdRng, len: usize, start: f64, end: f64) -> Vec<F> {
     (0..len)
-        .map(|_| F::from_f64(rng.random_range(-10.0..10.0)))
+        .map(|_| F::from_f64(rng.random_range(start..end)))
         .collect()
 }
 
@@ -411,6 +426,19 @@ mod test_macro_tests {
                 noop(x()) for (1, 1, 1) @ max(1),
                 {
                     x[0] = F::from_f64(0.5311481800554763);
+                }
+            );
+        }
+
+        #[test_matrix([4, 16])]
+        fn range_vec(n: usize) for F in all {
+            let x: Tensor = [n] as Range;
+            assert_eq!(
+                noop(x()) for (1, 1, 1) @ max(1),
+                {
+                    for f in 0..n {
+                        x[f] = F::from_int(f as i64);
+                    }
                 }
             );
         }
