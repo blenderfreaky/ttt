@@ -1,4 +1,9 @@
-use std::fmt::Display;
+#![allow(dead_code)]
+
+use std::{
+    fmt::Display,
+    hash::{DefaultHasher, Hasher},
+};
 
 use cubecl::{TestRuntime, prelude::*, server::Handle};
 
@@ -30,7 +35,7 @@ use rand::{Rng, rngs::StdRng};
 /// - **Test attributes**: Standard Rust test attributes like `#[test]`, `#[test_case(...)]`, `#[test_matrix(...)]`
 /// - **Type specification**: `for TypeName in [f32, f64]` or `for TypeName in all` (expands to bf16, f16, f32, f64).
 ///   Custom type aliases use `Type | alias` syntax (e.g., `::half::f16 | f16`).
-/// - **Seed**: Optional `seed(u64)` for deterministic RNG. Defaults to 42.
+/// - **Seed**: Optional `seed(u64)` for deterministic RNG. Defaults to hash of the test name.
 /// - **Variables**: Declare test data with `let name: Type = [dims] as Distribution;`
 ///   - `Type`: `Tensor` or `Array`
 ///   - `dims`: Shape dimensions (e.g., `[4, 8]`)
@@ -178,6 +183,7 @@ macro_rules! test_kernel {
                 type $tname = $t;
                 test_kernel! {
                     @inner
+                    name: $name;
                     type: $t;
                     args: ($($args)*);
                     $($rest)*
@@ -190,6 +196,7 @@ macro_rules! test_kernel {
     // Generates the actual test implementation: setup, kernel launch, and verification
     {
         @inner
+        name: $name:ident;
         type: $t:ty;
         args: ($($args:tt)*);
         seed: ($($seed:expr)?);
@@ -206,7 +213,7 @@ macro_rules! test_kernel {
 
             use rand::SeedableRng;
             #[allow(unused_variables)]
-            let mut rng = rand::rngs::StdRng::seed_from_u64(test_kernel!{ @seed ($($seed)?) });
+            let mut rng = rand::rngs::StdRng::seed_from_u64(test_kernel!{ @seed($name) ($($seed)?) });
 
             // 2. Initialize variables: create data, upload to GPU, build kernel args
             //    We're passing all the identifiers here because if they were
@@ -247,22 +254,24 @@ macro_rules! test_kernel {
     { @arg($arg_name:ident) $_:ident() } => { $arg_name };
     // `lit(expr)` - pass a literal value directly
     { @arg($arg_name:ident) lit($arg:expr) } => { $arg };
+    // `scalar(expr)` - pass a scalar value arg
+    { @arg($arg_name:ident) scalar($arg:expr) } => { ::cubecl::frontend::ScalarArg { elem: $arg } };
 
     // ==================== HELPER: SEED (@seed) ====================
-    { @seed () } => { 42 };  // Default seed
-    { @seed ($seed:expr) } => { $seed };
+    { @seed($name:ident) () } => { $crate::test_utils::string_to_seed(stringify!($name)) };  // Default seed
+    { @seed($name:ident) ($seed:expr) } => { $seed };
 
     // ==================== HELPER: CUBE DIMENSIONS (@dim) ====================
     // `max(n)` - query device for max supported dimensions
-    { @dim($client:ident) max($dim:expr) } => { CubeDim::new(&$client, $dim) };
+    { @dim($client:ident) max($dim:expr) } => { CubeDim::new(&$client, $dim as usize) };
     // Fixed dimensions
-    { @dim($client:ident) ($x:expr) } => { CubeDim::new_1d($x) };
-    { @dim($client:ident) ($x:expr, $y:expr) } => { CubeDim::new_2d($x, $y) };
-    { @dim($client:ident) ($x:expr, $y:expr, $z:expr) } => { CubeDim::new_3d($x, $y, $z) };
+    { @dim($client:ident) ($x:expr) } => { CubeDim::new_1d($x as u32) };
+    { @dim($client:ident) ($x:expr, $y:expr) } => { CubeDim::new_2d($x as u32, $y as u32) };
+    { @dim($client:ident) ($x:expr, $y:expr, $z:expr) } => { CubeDim::new_3d($x as u32, $y as u32, $z as u32) };
 
     // ==================== HELPER: VARIABLE INITIALIZATION (@val) ====================
     // Creates shape, strides, data vector, GPU handle, and kernel argument for a variable
-    { @val($t:ty, $rng:ident, $client:ident) $vty:tt = [$($val:expr),*] $(as $distrib:tt $(($($distrib_param:tt),+))?)?;
+    { @val($t:ty, $rng:ident, $client:ident) $vty:tt = [$($val:expr),*] $(as $distrib:tt $(($($distrib_param:expr),+))?)?;
         $shape:ident, $strides:ident, $len:ident, $data:ident, $handle:ident, $arg:ident
     } => {
         let $shape = vec![$($val),*];
@@ -324,6 +333,12 @@ pub type TestClient = ComputeClient<TestRuntime>;
 
 pub fn range_vec<F: TestFloat>(len: usize) -> Vec<F> {
     (0..len).map(|i| F::from_int(i as i64)).collect()
+}
+
+pub fn string_to_seed(s: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hasher.write(s.as_bytes());
+    hasher.finish()
 }
 
 pub fn random_vec<F: TestFloat>(rng: &mut StdRng, len: usize, start: f64, end: f64) -> Vec<F> {

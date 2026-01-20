@@ -1,8 +1,5 @@
 use crate::{
-    plane::{
-        load_direct_swizzled, load_transpose_swizzled, store_direct_swizzled,
-        store_transpose_swizzled,
-    },
+    plane::{load_st_direct, load_st_transpose, store_st_direct, store_st_transpose},
     prelude::*,
     test_kernel,
 };
@@ -20,8 +17,8 @@ fn rw_direct<F: Float>(
 
     let r_off = CUBE_POS_X as usize * tile_rows;
     let c_off = CUBE_POS_Y as usize * tile_cols;
-    load_direct_swizzled(input, &mut st, r_off, c_off);
-    store_direct_swizzled(&st, output, r_off, c_off);
+    load_st_direct(input, &mut st, 0, r_off, c_off);
+    store_st_direct(&st, output, 0, r_off, c_off);
 }
 
 #[cube(launch)]
@@ -35,8 +32,8 @@ fn rw_transpose<F: Float>(
 
     let r_off = CUBE_POS_X as usize * tile_rows;
     let c_off = CUBE_POS_Y as usize * tile_cols;
-    load_transpose_swizzled(input, &mut st, r_off, c_off);
-    store_transpose_swizzled(&st, output, r_off, c_off);
+    load_st_transpose(input, &mut st, 0, r_off, c_off);
+    store_st_transpose(&st, output, 0, r_off, c_off);
 }
 
 test_kernel! {
