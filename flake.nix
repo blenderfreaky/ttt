@@ -121,6 +121,8 @@
               just
               just-formatter
 
+              cargo-nextest
+
               (python3.withPackages
                 (ps:
                   with ps; [
