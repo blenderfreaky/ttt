@@ -1,4 +1,6 @@
-use cubecl::prelude::*;
+use cubecl::{prelude::*, std::ReinterpretSliceMut};
+
+use crate::LINE_SIZE;
 
 // This is ugly, but it works
 // CubeCL doesn't like [Line<F>; LINE_SIZE]
@@ -36,6 +38,14 @@ pub fn transpose_4<F: Float>(
     c3[3] = r3[3];
 
     (c0, c1, c2, c3)
+}
+
+#[cube]
+pub fn write_into_line<F: Float>(one_slice: SliceMut<Line<F>>, idx: usize, val: F) {
+    ReinterpretSliceMut::<F, F>::new(one_slice, LINE_SIZE).write(idx, val);
+    // let mut l = one_slice[0];
+    // l[idx] = val;
+    // one_slice[0] = l;
 }
 
 #[cube]

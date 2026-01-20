@@ -5,13 +5,9 @@ pub mod plane;
 pub mod tiles;
 pub mod util;
 
-// #[cfg(test)]
-// mod test_utils_old;
 #[cfg(test)]
 #[macro_use]
 mod test_utils;
-#[cfg(test)]
-mod tests;
 
 // We could parametrize this
 // but right now it's not worth the effort

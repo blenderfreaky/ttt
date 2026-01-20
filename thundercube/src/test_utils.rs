@@ -5,6 +5,7 @@ use cubecl::{TestRuntime, prelude::*, server::Handle};
 use half::{bf16, f16};
 use rand::{Rng, rngs::StdRng};
 
+#[macro_export]
 macro_rules! test_kernel {
     {
     $(
@@ -140,7 +141,7 @@ macro_rules! test_kernel {
             println!("Launching kernel");
             $kernel::launch::<$t, cubecl::TestRuntime>(
                 &client,
-                CubeCount::Static($($count),*),
+                CubeCount::Static($(($count) as u32),*),
                 test_kernel!{ @dim(client) $($max)? ($($dim),*) },
                 $(
                     test_kernel!{ @arg([<$kernel_arg_name _arg>]) $kernel_arg_name($($kernel_arg)?) }
@@ -340,7 +341,7 @@ impl TestFloat for bf16 {
 }
 
 // These tests are for testing the macro, not any actual CubeCL code
-#[cfg(true)]
+#[cfg(false)]
 mod test_macro_tests {
     use test_case::{test_case, test_matrix};
 
