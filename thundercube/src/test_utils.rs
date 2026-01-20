@@ -5,8 +5,68 @@ use cubecl::{TestRuntime, prelude::*, server::Handle};
 use half::{bf16, f16};
 use rand::{Rng, rngs::StdRng};
 
+/// A macro for testing CubeCL GPU kernels by comparing their output against reference implementations.
+///
+/// # Syntax
+///
+/// ```ignore
+/// test_kernel! {
+///     #[test_attributes]
+///     fn test_name(test_args) for TypeName in [type_list] or all {
+///         seed(optional_seed);
+///
+///         let var_name: VarType = [dims] as Distribution;
+///
+///         assert_eq!(
+///             kernel_name(arg_spec, ...) for (cube_x, cube_y, cube_z) @ dim_spec,
+///             { reference_code }
+///         );
+///     }
+/// }
+/// ```
+///
+/// # Components
+///
+/// - **Test attributes**: Standard Rust test attributes like `#[test]`, `#[test_case(...)]`, `#[test_matrix(...)]`
+/// - **Type specification**: `for TypeName in [f32, f64]` or `for TypeName in all` (expands to bf16, f16, f32, f64).
+///   Custom type aliases use `Type | alias` syntax (e.g., `::half::f16 | f16`).
+/// - **Seed**: Optional `seed(u64)` for deterministic RNG. Defaults to 42.
+/// - **Variables**: Declare test data with `let name: Type = [dims] as Distribution;`
+///   - `Type`: `Tensor` or `Array`
+///   - `dims`: Shape dimensions (e.g., `[4, 8]`)
+///   - `Distribution`: `Range` (0..len) or `Uniform(start, end)`. Defaults to `Uniform(-10.0, 10.0)`.
+/// - **Kernel launch**: `kernel_name(args) for (cube_count) @ dim_spec`
+///   - `args`: `var_name()` passes the variable, `lit(expr)` passes a literal value
+///   - `cube_count`: `(x, y, z)` cube count for launch
+///   - `dim_spec`: `(x, y, z)` fixed dimensions or `max(n)` for max supported dimensions
+/// - **Reference code**: A block that mutates declared variables to their expected values
+///
+/// # Example
+///
+/// ```ignore
+/// test_kernel! {
+///     #[test_case(4, 4)]
+///     fn my_kernel_test(rows: usize, cols: usize) for F in all {
+///         seed(123);
+///         let input: Tensor = [rows, cols];
+///         let output: Tensor = [rows, cols] as Range;
+///         assert_eq!(
+///             my_kernel(input(), output()) for (1, 1, 1) @ (32, 32),
+///             {
+///                 // Compute expected values in `output`
+///                 for i in 0..output.len() {
+///                     output[i] = input[i] * F::from_int(2);
+///                 }
+///             }
+///         );
+///     }
+/// }
+/// ```
 #[macro_export]
 macro_rules! test_kernel {
+    // ==================== ENTRY POINT ====================
+    // Parses the user-facing syntax and normalizes it into internal representation.
+    // Accepts: `fn name(args) for TypeName in [types] or all { ... }`
     {
     $(
         $(#[$attr:meta])*
@@ -27,6 +87,7 @@ macro_rules! test_kernel {
     )*
     } => {
     $(
+        // Rewrite into internal tagged format for further processing
         test_kernel! {
             types: $([$($float_type),*])? $($all)?;
             type_name: $tname;
@@ -44,11 +105,17 @@ macro_rules! test_kernel {
     )*
     };
 
+    // ==================== TYPE LIST ITERATION ====================
+    // These arms iterate over the type list, generating one test per type.
+
+    // Base case: empty type list, stop recursion
     {
         types: [];
         $($rest:tt)*
     } => {
     };
+
+    // `all` expands to the four standard float types
     {
         types: all;
         $($rest:tt)*
@@ -59,21 +126,24 @@ macro_rules! test_kernel {
         }
     };
 
+    // Type with explicit alias: `Type | alias` (e.g., `::half::f16 | f16`)
     {
         types: [$t:ty | $tid:ident $(, $($other_types:tt)+)?];
         $($rest:tt)*
     } => {
+        // Generate test for this type
         test_kernel! {
             type: $t | $tid;
             $($rest)*
         }
-
+        // Recurse for remaining types
         test_kernel! {
             types: [$($($other_types)+)?];
             $($rest)*
         }
     };
 
+    // Type without alias: use the type name as both type and identifier (e.g., `f32`)
     {
         types: [$t:tt $(, $($other_types:tt),+)?];
         $($rest:tt)*
@@ -82,13 +152,15 @@ macro_rules! test_kernel {
             type: $t | $t;
             $($rest)*
         }
-
+        // Recurse for remaining types
         test_kernel! {
             types: [$($($other_types),+)?];
             $($rest)*
         }
     };
 
+    // ==================== FUNCTION GENERATION ====================
+    // Creates the actual test function with type suffix (e.g., `test_name_f32`)
     {
         type: $t:tt | $tid:ident;
         type_name: $tname:ident;
@@ -101,6 +173,7 @@ macro_rules! test_kernel {
             $(#[$attr])*
             #[allow(unused_mut)]
             fn [< $name _ $tid >]($($args)*) {
+                // Create type alias so user can refer to the float type by name
                 #[allow(dead_code)]
                 type $tname = $t;
                 test_kernel! {
@@ -113,6 +186,8 @@ macro_rules! test_kernel {
         }
     };
 
+    // ==================== TEST BODY (@inner) ====================
+    // Generates the actual test implementation: setup, kernel launch, and verification
     {
         @inner
         type: $t:ty;
@@ -126,12 +201,17 @@ macro_rules! test_kernel {
         ref: $ref:expr;
     } => {
         ::paste::paste! {
+            // 1. Setup: get compute client and RNG
             let client = $crate::test_utils::client();
 
             use rand::SeedableRng;
             #[allow(unused_variables)]
             let mut rng = rand::rngs::StdRng::seed_from_u64(test_kernel!{ @seed ($($seed)?) });
 
+            // 2. Initialize variables: create data, upload to GPU, build kernel args
+            //    We're passing all the identifiers here because if they were
+            //    generated by the macro, they would be unique and not accessible
+            //    outside of that invocation due to hygiene.
             $(
             test_kernel!{ @val($t, rng, client) $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;
                 [< $var _shape >], [< $var _strides >], [< $var _len >],
@@ -139,6 +219,7 @@ macro_rules! test_kernel {
             }
             )*
 
+            // 3. Launch the kernel
             println!("Launching kernel");
             $kernel::launch::<$t, cubecl::TestRuntime>(
                 &client,
@@ -149,9 +230,11 @@ macro_rules! test_kernel {
                 ),*
             ).expect("Kernel launch failed");
 
+            // 4. Compute reference values (mutates the local `$var` vectors)
             println!("Computing reference");
             $ref;
 
+            // 5. Download GPU results and compare against reference
             println!("Checking results");
             $(
             test_kernel!{ @check(client) $var == [< $var _handle >] }
@@ -159,18 +242,26 @@ macro_rules! test_kernel {
         }
     };
 
+    // ==================== HELPER: KERNEL ARGUMENTS (@arg) ====================
+    // `var()` - pass the variable's kernel arg
     { @arg($arg_name:ident) $_:ident() } => { $arg_name };
+    // `lit(expr)` - pass a literal value directly
     { @arg($arg_name:ident) lit($arg:expr) } => { $arg };
 
-    { @seed () } => { 42 };
+    // ==================== HELPER: SEED (@seed) ====================
+    { @seed () } => { 42 };  // Default seed
     { @seed ($seed:expr) } => { $seed };
 
+    // ==================== HELPER: CUBE DIMENSIONS (@dim) ====================
+    // `max(n)` - query device for max supported dimensions
     { @dim($client:ident) max($dim:expr) } => { CubeDim::new(&$client, $dim) };
-
+    // Fixed dimensions
     { @dim($client:ident) ($x:expr) } => { CubeDim::new_1d($x) };
     { @dim($client:ident) ($x:expr, $y:expr) } => { CubeDim::new_2d($x, $y) };
     { @dim($client:ident) ($x:expr, $y:expr, $z:expr) } => { CubeDim::new_3d($x, $y, $z) };
 
+    // ==================== HELPER: VARIABLE INITIALIZATION (@val) ====================
+    // Creates shape, strides, data vector, GPU handle, and kernel argument for a variable
     { @val($t:ty, $rng:ident, $client:ident) $vty:tt = [$($val:expr),*] $(as $distrib:tt $(($($distrib_param:tt),+))?)?;
         $shape:ident, $strides:ident, $len:ident, $data:ident, $handle:ident, $arg:ident
     } => {
@@ -186,27 +277,36 @@ macro_rules! test_kernel {
         test_kernel!{ @make_arg($t) $vty; $handle, $strides, $shape, $len, $arg }
     };
 
+    // ==================== HELPER: DATA INITIALIZATION (@init_val) ====================
+    // No distribution specified: default to Uniform(-10, 10)
     { @init_val($t:ty, $rng:ident, $len:ident) } => {
         test_kernel!{ @init_val($t, $rng, $len) as Uniform(-10.0, 10.0) }
     };
+    // `as Range` - sequential values 0, 1, 2, ...
     { @init_val($t:ty, $rng:ident, $len:ident) as Range } => {
         $crate::test_utils::range_vec::<$t>($len)
     };
+    // `as Uniform(start, end)` - random values in [start, end)
     { @init_val($t:ty, $rng:ident, $len:ident) as Uniform($start:expr, $end:expr) } => {
         $crate::test_utils::random_vec::<$t>(&mut $rng, $len, $start, $end)
     };
 
+    // ==================== HELPER: KERNEL ARG CONSTRUCTION (@make_arg) ====================
+    // Build ArrayArg for `Array` type variables
     { @make_arg($t:ty) Array; $handle:ident, $strides:ident, $shape:ident, $len:ident, $arg:ident } => {
         let $arg: ArrayArg<'_, cubecl::TestRuntime> = unsafe {
             ArrayArg::from_raw_parts::<Line<$t>>(&$handle, $len, $crate::LINE_SIZE)
         };
     };
+    // Build TensorArg for `Tensor` type variables
     { @make_arg($t:ty) Tensor; $handle:ident, $strides:ident, $shape:ident, $len:ident, $arg:ident } => {
         let $arg: TensorArg<'_, cubecl::TestRuntime> = unsafe {
             TensorArg::from_raw_parts::<Line<$t>>(&$handle, &$strides, &$shape, $crate::LINE_SIZE)
         };
     };
 
+    // ==================== HELPER: RESULT VERIFICATION (@check) ====================
+    // Downloads GPU data and compares against expected values
     { @check($client:ident) $var:ident == $handle:ident } => {
         paste::paste! {
             println!("Comparing {}", stringify!($var));
