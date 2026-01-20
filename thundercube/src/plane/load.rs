@@ -98,27 +98,37 @@ pub fn load_transpose_swizzled<F: Float>(
     }
 }
 
-/// Helper to load a Line<F> from a scalar Tensor<F>.
-/// Uses index_2d to handle strides properly.
+/// Helper to load a Line<F> from a Tensor<Line<F>>.
+/// Parameters r and c are in scalar coordinates.
+/// When stride_col == 1 (row-major), loads a contiguous Line.
+/// When stride_col != 1 (column-major), gathers 4 scalars into a Line.
 #[cube]
 fn load_safe<F: Float>(g: &Tensor<Line<F>>, r: usize, c: usize) -> Line<F> {
     if r < g.shape(0) && c < g.shape(1) {
         let stride_col = g.stride(1);
-        let base_idx = index_2d(g, r, c);
+        let scalar_idx = index_2d(g, r, c);
 
         if stride_col == 1 {
-            g[base_idx]
+            // Row-major: scalar index maps to Line index by dividing by LINE_SIZE
+            let line_idx = scalar_idx / LINE_SIZE;
+            g[line_idx]
         } else {
-            let v0 = g[base_idx][0];
-            let v1 = g[base_idx + stride_col][0];
-            let v2 = g[base_idx + stride_col * 2][0];
-            let v3 = g[base_idx + stride_col * 3][0];
+            // Column-major: gather 4 scalars from different Lines
+            let line_idx0 = scalar_idx / LINE_SIZE;
+            let line_idx1 = (scalar_idx + stride_col) / LINE_SIZE;
+            let line_idx2 = (scalar_idx + stride_col * 2) / LINE_SIZE;
+            let line_idx3 = (scalar_idx + stride_col * 3) / LINE_SIZE;
+
+            let elem0 = scalar_idx % LINE_SIZE;
+            let elem1 = (scalar_idx + stride_col) % LINE_SIZE;
+            let elem2 = (scalar_idx + stride_col * 2) % LINE_SIZE;
+            let elem3 = (scalar_idx + stride_col * 3) % LINE_SIZE;
 
             let mut l = Line::empty(LINE_SIZE);
-            l[0] = v0;
-            l[1] = v1;
-            l[2] = v2;
-            l[3] = v3;
+            l[0] = g[line_idx0][elem0];
+            l[1] = g[line_idx1][elem1];
+            l[2] = g[line_idx2][elem2];
+            l[3] = g[line_idx3][elem3];
             l
         }
     } else {

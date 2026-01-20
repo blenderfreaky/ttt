@@ -95,19 +95,36 @@ pub fn store_transpose_swizzled<F: Float>(
     }
 }
 
+/// Helper to store a Line<F> to a Tensor<Line<F>>.
+/// Parameters r and c are in scalar coordinates.
+/// When stride_col == 1 (row-major), stores a contiguous Line.
+/// When stride_col != 1 (column-major), scatters 4 scalars to different Lines.
 #[cube]
 pub fn store_safe<F: Float>(g: &mut Tensor<Line<F>>, r: usize, c: usize, val: Line<F>) {
     if r < g.shape(0) && c < g.shape(1) {
-        let str = g.stride(1);
-        let idx = index_2d(g, r, c);
+        let stride_col = g.stride(1);
+        let scalar_idx = index_2d(g, r, c);
 
-        if str == 1 {
-            g[idx] = val;
+        if stride_col == 1 {
+            // Row-major: scalar index maps to Line index by dividing by LINE_SIZE
+            let line_idx = scalar_idx / LINE_SIZE;
+            g[line_idx] = val;
         } else {
-            write_into_line(g.slice_mut(idx, idx), 0, val[0]);
-            write_into_line(g.slice_mut(idx + str, idx + str), 0, val[1]);
-            write_into_line(g.slice_mut(idx + str * 2, idx + str * 2), 0, val[2]);
-            write_into_line(g.slice_mut(idx + str * 3, idx + str * 3), 0, val[3]);
+            // Column-major: scatter 4 scalars to different Lines
+            let line_idx0 = scalar_idx / LINE_SIZE;
+            let line_idx1 = (scalar_idx + stride_col) / LINE_SIZE;
+            let line_idx2 = (scalar_idx + stride_col * 2) / LINE_SIZE;
+            let line_idx3 = (scalar_idx + stride_col * 3) / LINE_SIZE;
+
+            let elem0 = scalar_idx % LINE_SIZE;
+            let elem1 = (scalar_idx + stride_col) % LINE_SIZE;
+            let elem2 = (scalar_idx + stride_col * 2) % LINE_SIZE;
+            let elem3 = (scalar_idx + stride_col * 3) % LINE_SIZE;
+
+            write_into_line(g.slice_mut(line_idx0, line_idx0 + 1), elem0, val[0]);
+            write_into_line(g.slice_mut(line_idx1, line_idx1 + 1), elem1, val[1]);
+            write_into_line(g.slice_mut(line_idx2, line_idx2 + 1), elem2, val[2]);
+            write_into_line(g.slice_mut(line_idx3, line_idx3 + 1), elem3, val[3]);
         }
     }
 }
