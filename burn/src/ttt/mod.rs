@@ -1,4 +1,6 @@
 use burn::config::Config;
+#[cfg(feature = "rocm")]
+use half::bf16;
 
 pub mod block;
 pub mod cubecl_kernels;
@@ -13,8 +15,10 @@ pub mod mlp4;
 pub mod util;
 
 // Central backend type aliases - selected via feature flags (rocm, cuda, wgpu)
-#[cfg(feature = "rocm")]
-pub type GpuBackend = burn::backend::Rocm;
+#[cfg(all(feature = "rocm", not(feature = "bf16")))]
+pub type GpuBackend = burn::backend::Rocm<f32>;
+#[cfg(all(feature = "rocm", feature = "bf16"))]
+pub type GpuBackend = burn::backend::Rocm<bf16>;
 
 #[cfg(feature = "cuda")]
 pub type GpuBackend = burn::backend::Cuda;
@@ -226,7 +230,7 @@ impl TTTConfig {
     // }
 
     #[must_use]
-    pub fn default_20m() -> Self {
+    pub fn default_12m() -> Self {
         Self::new()
             .with_hidden_size(256)
             .with_token_size(256)

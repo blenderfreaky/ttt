@@ -48,6 +48,7 @@ harness = false
 
 [features]
 default = ["rocm"]
+bf16 = []
 rocm = ["burn/rocm", "cubecl/hip"]
 cuda = ["burn/cuda", "cubecl/cuda"]
 wgpu = ["burn/wgpu"]

@@ -219,7 +219,7 @@ mod tests {
 
         let tokenizer = Arc::new(Tokenizer::default());
         let model_config =
-            TTTTextGenerationConfig::from_tokenizer(TTTConfig::default_20m(), &*tokenizer);
+            TTTTextGenerationConfig::from_tokenizer(TTTConfig::default_12m(), &*tokenizer);
         let model = model_config.init::<GpuBackend, TTTLinear<GpuBackend>>(&device);
 
         let generator = TTTTextGenerator::new(model, tokenizer, device);

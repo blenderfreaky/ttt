@@ -247,7 +247,7 @@ mod tests {
         let device = Default::default();
 
         // Use smaller config for faster test
-        let ttt_config = TTTConfig::default_20m();
+        let ttt_config = TTTConfig::default_12m();
         let vocab_size = ttt_config.vocab_size;
         let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
         let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);

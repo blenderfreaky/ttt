@@ -61,8 +61,8 @@ enum InnerModel {
 enum ModelSize {
     // -- custom --
     /// 20M parameter model
-    #[value(name = "20m")]
-    M20,
+    #[value(name = "12m")]
+    M12,
     /// 60M parameter model
     #[default]
     M60,
@@ -161,7 +161,7 @@ impl InnerModel {
 impl ModelSize {
     fn to_ttt_config(self) -> TTTConfig {
         match self {
-            ModelSize::M20 => TTTConfig::default_20m(),
+            ModelSize::M12 => TTTConfig::default_12m(),
             ModelSize::M60 => TTTConfig::default_60m(),
             ModelSize::M125 => TTTConfig::default_125m(),
             ModelSize::M350 => TTTConfig::default_350m(),
