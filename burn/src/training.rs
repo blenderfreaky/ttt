@@ -1,7 +1,7 @@
 use crate::{
     data::{
-        Gpt2Tokenizer, TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher,
-        TokenizedItem, Tokenizer, TrainingTextGenerationBatch, load_or_pretokenize,
+        TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher, TokenizedItem,
+        Tokenizer, TokenizerTrait, TrainingTextGenerationBatch, load_or_pretokenize,
     },
     dispatch_ttt_layer_type,
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
@@ -63,29 +63,6 @@ pub struct TTTTrainingConfig {
     /// If set, don't perform any training, just setup
     #[config(default = false)]
     pub dry_run: bool,
-}
-
-impl TTTTrainingConfig {
-    #[must_use]
-    pub fn small() -> Self {
-        Self {
-            ttt_config: TTTConfig::default_tiny(),
-            optimizer: AdamConfig::new()
-                .with_beta_1(0.9)
-                .with_beta_2(0.95)
-                .with_epsilon(1e-8),
-            batch_size: 8,
-            num_epochs: 10,
-            grad_accumulation: 1,
-            warmup_steps: 100,
-            learning_rate: 5e-4,
-            max_seq_len: 1024,
-            train_samples: 10000,
-            test_samples: 1000,
-            num_workers: 2,
-            dry_run: false,
-        }
-    }
 }
 
 /// Common training loop for all inner model types
@@ -205,7 +182,7 @@ fn train_with_inner<
             Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
-    let tokenizer = Arc::new(Gpt2Tokenizer::default());
+    let tokenizer = Arc::new(Tokenizer::default());
     let batcher = TextGenerationBatcher::new(tokenizer.clone(), config.max_seq_len);
 
     std::fs::create_dir_all(artifact_dir).unwrap();
@@ -318,7 +295,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     B::InnerBackend: FusedTttBackend,
 {
     println!("Loading tokenizer...");
-    let tokenizer = Gpt2Tokenizer::default();
+    let tokenizer = Tokenizer::default();
     assert_eq!(config.ttt_config.vocab_size, tokenizer.vocab_size());
     let pad_token = tokenizer.pad_token();
 

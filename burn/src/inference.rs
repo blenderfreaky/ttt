@@ -1,5 +1,5 @@
 use crate::{
-    data::{Gpt2Tokenizer, Tokenizer},
+    data::{Tokenizer, TokenizerTrait},
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
     training::TTTTrainingConfig,
     ttt::{layer::TTTInnerModel, linear::TTTLinear},
@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 pub struct TTTTextGenerator<B: Backend, Inner> {
     model: TTTTextGenerationModel<B, Inner>,
-    tokenizer: Arc<dyn Tokenizer>,
+    tokenizer: Arc<dyn TokenizerTrait>,
     device: B::Device,
 }
 
@@ -26,7 +26,7 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
         let config: TTTTrainingConfig =
             TTTTrainingConfig::load(format!("{artifact_dir}/config.json"))?;
 
-        let tokenizer = Arc::new(Gpt2Tokenizer::default());
+        let tokenizer = Arc::new(Tokenizer::default());
 
         let model_config = TTTTextGenerationConfig {
             ttt_config: config.ttt_config.with_vocab_size(tokenizer.vocab_size()),
@@ -50,7 +50,7 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
 impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
     pub fn new(
         model: TTTTextGenerationModel<B, Inner>,
-        tokenizer: Arc<dyn Tokenizer>,
+        tokenizer: Arc<dyn TokenizerTrait>,
         device: B::Device,
     ) -> Self {
         Self {
@@ -217,9 +217,9 @@ mod tests {
     fn test_text_generation() {
         let device = Default::default();
 
-        let tokenizer = Arc::new(Gpt2Tokenizer::default());
+        let tokenizer = Arc::new(Tokenizer::default());
         let model_config =
-            TTTTextGenerationConfig::from_tokenizer(TTTConfig::default_tiny(), &*tokenizer);
+            TTTTextGenerationConfig::from_tokenizer(TTTConfig::default_20m(), &*tokenizer);
         let model = model_config.init::<GpuBackend, TTTLinear<GpuBackend>>(&device);
 
         let generator = TTTTextGenerator::new(model, tokenizer, device);

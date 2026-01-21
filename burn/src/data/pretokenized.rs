@@ -12,7 +12,7 @@ use std::{
 };
 
 use super::batcher::{TextGenerationBatch, TrainingTextGenerationBatch};
-use super::tokenizer::Tokenizer;
+use super::tokenizer::TokenizerTrait;
 
 /// File header for pre-tokenized dataset
 /// Format: [magic: 4 bytes][version: u32][num_sequences: u64][max_seq_len: u32][pad: 4 bytes]
@@ -43,7 +43,7 @@ pub fn pretokenize_dataset<D, T>(
 ) -> std::io::Result<u64>
 where
     D: Dataset<super::dataset::TextGenerationItem>,
-    T: Tokenizer,
+    T: TokenizerTrait,
 {
     let num_sequences = dataset.len() as u64;
     let pad_token = tokenizer.pad_token() as u32;
@@ -265,7 +265,7 @@ pub fn pretokenized_path(
 
 /// Load or create a pre-tokenized dataset.
 /// If the binary file doesn't exist, downloads and tokenizes the source dataset.
-pub fn load_or_pretokenize<T: Tokenizer>(
+pub fn load_or_pretokenize<T: TokenizerTrait>(
     tokenizer: &T,
     split: &str,
     max_seq_len: usize,

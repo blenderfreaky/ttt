@@ -1,5 +1,5 @@
 use crate::{
-    data::{Tokenizer, TrainingTextGenerationBatch},
+    data::{TokenizerTrait, TrainingTextGenerationBatch},
     ttt::{TTTConfig, layer::TTTInnerModel, lm::TTTModel},
 };
 use burn::{
@@ -24,7 +24,7 @@ pub struct TTTTextGenerationModel<B: Backend, Inner> {
 }
 
 impl TTTTextGenerationConfig {
-    pub fn from_tokenizer(ttt_config: TTTConfig, tokenizer: &impl Tokenizer) -> Self {
+    pub fn from_tokenizer(ttt_config: TTTConfig, tokenizer: &impl TokenizerTrait) -> Self {
         assert_eq!(tokenizer.vocab_size(), ttt_config.vocab_size);
         Self {
             ttt_config,
@@ -247,7 +247,7 @@ mod tests {
         let device = Default::default();
 
         // Use smaller config for faster test
-        let ttt_config = TTTConfig::default_tiny();
+        let ttt_config = TTTConfig::default_20m();
         let vocab_size = ttt_config.vocab_size;
         let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
         let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);

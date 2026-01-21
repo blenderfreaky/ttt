@@ -226,7 +226,17 @@ impl TTTConfig {
     // }
 
     #[must_use]
-    pub fn default_tiny() -> Self {
+    pub fn default_20m() -> Self {
+        Self::new()
+            .with_hidden_size(256)
+            .with_token_size(256)
+            .with_swi_glu_mlp_intermediate_size(512)
+            .with_num_hidden_layers(6)
+            .with_num_heads(4)
+    }
+
+    #[must_use]
+    pub fn default_60m() -> Self {
         Self::new()
             .with_hidden_size(512)
             .with_token_size(512)

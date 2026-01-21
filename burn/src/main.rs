@@ -59,9 +59,14 @@ enum InnerModel {
 
 #[derive(Clone, Copy, Debug, ValueEnum, Default)]
 enum ModelSize {
-    /// Tiny model (512 hidden, 6 layers)
+    // -- custom --
+    /// 20M parameter model
+    #[value(name = "20m")]
+    M20,
+    /// 60M parameter model
     #[default]
-    Tiny,
+    M60,
+    // -- below are included in the reference --
     /// 125M parameter model
     #[value(name = "125m")]
     M125,
@@ -156,7 +161,8 @@ impl InnerModel {
 impl ModelSize {
     fn to_ttt_config(self) -> TTTConfig {
         match self {
-            ModelSize::Tiny => TTTConfig::default_tiny(),
+            ModelSize::M20 => TTTConfig::default_20m(),
+            ModelSize::M60 => TTTConfig::default_60m(),
             ModelSize::M125 => TTTConfig::default_125m(),
             ModelSize::M350 => TTTConfig::default_350m(),
             ModelSize::M760 => TTTConfig::default_760m(),
