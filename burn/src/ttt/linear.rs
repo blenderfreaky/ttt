@@ -133,20 +133,20 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
 
         let eta_combined = token_eta * ttt_lr_eta;
 
-        let eta_batch = eta_combined.tril(0); // [B, H, seq_len, seq_len]
+        let eta_mini_batch = eta_combined.tril(0); // [B, H, seq_len, seq_len]
 
         let attn_scores = qkv.xq.clone().matmul(x1.clone().transpose());
 
         let attn1 = attn_scores.tril(0);
 
-        let b1_bar =
-            state.bias.clone().unsqueeze_dim(2) - eta_batch.clone().matmul(grad_l_wrt_z1.clone());
+        let b1_bar = state.bias.clone().unsqueeze_dim(2)
+            - eta_mini_batch.clone().matmul(grad_l_wrt_z1.clone());
 
         let z1_bar = qkv.xq.clone().matmul(state.weight.clone())
-            - (eta_batch.clone() * attn1).matmul(grad_l_wrt_z1.clone())
+            - (eta_mini_batch.clone() * attn1).matmul(grad_l_wrt_z1.clone())
             + b1_bar;
 
-        let last_eta_row = eta_batch.slice(s![.., .., -1.., ..]);
+        let last_eta_row = eta_mini_batch.slice(s![.., .., -1.., ..]);
 
         let last_eta_col = last_eta_row.transpose(); // [B, H, K, 1]
 
