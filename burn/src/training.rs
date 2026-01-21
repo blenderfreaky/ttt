@@ -65,6 +65,29 @@ pub struct TTTTrainingConfig {
     pub dry_run: bool,
 }
 
+impl TTTTrainingConfig {
+    #[must_use]
+    pub fn small() -> Self {
+        Self {
+            ttt_config: TTTConfig::default_tiny(),
+            optimizer: AdamConfig::new()
+                .with_beta_1(0.9)
+                .with_beta_2(0.95)
+                .with_epsilon(1e-8),
+            batch_size: 8,
+            num_epochs: 10,
+            grad_accumulation: 1,
+            warmup_steps: 100,
+            learning_rate: 5e-4,
+            max_seq_len: 1024,
+            train_samples: 10000,
+            test_samples: 1000,
+            num_workers: 2,
+            dry_run: false,
+        }
+    }
+}
+
 /// Common training loop for all inner model types
 fn run_training<
     B: AutodiffBackend,
