@@ -133,6 +133,10 @@ struct TrainArgs {
     /// Use pre-tokenized dataset (faster, recommended)
     #[arg(long, default_value = "true")]
     pretokenized: bool,
+
+    /// If set, don't perform any training, just setup
+    #[arg(long, default_value = "false")]
+    dry_run: bool,
 }
 
 impl InnerModel {
@@ -186,6 +190,7 @@ impl TrainArgs {
             train_samples: self.samples,
             test_samples: self.test_samples,
             num_workers: self.workers,
+            dry_run: self.dry_run,
         }
     }
 }

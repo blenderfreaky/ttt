@@ -15,7 +15,7 @@ use burn::{
         dataset::{Dataset, transform::SamplerDataset},
     },
     lr_scheduler::noam::NoamLrSchedulerConfig,
-    module::{AutodiffModule, ModuleDisplay},
+    module::{AutodiffModule, DisplaySettings, ModuleDisplay},
     optim::AdamConfig,
     prelude::*,
     record::{CompactRecorder, DefaultRecorder, Recorder},
@@ -60,6 +60,9 @@ pub struct TTTTrainingConfig {
     /// Dataloader workers
     #[config(default = 2)]
     pub num_workers: usize,
+    /// If set, don't perform any training, just setup
+    #[config(default = false)]
+    pub dry_run: bool,
 }
 
 impl TTTTrainingConfig {
@@ -80,6 +83,7 @@ impl TTTTrainingConfig {
             train_samples: 10000,
             test_samples: 1000,
             num_workers: 2,
+            dry_run: false,
         }
     }
 }
@@ -162,6 +166,15 @@ fn run_training<
         .grads_accumulation(config.grad_accumulation)
         .num_epochs(config.num_epochs)
         .summary();
+
+    if config.dry_run {
+        println!(
+            "Model: {}",
+            &model.format(DisplaySettings::new().with_show_num_parameters(true))
+        );
+        println!("Dry run completed");
+        return;
+    }
 
     let result = training.launch(Learner::new(model, optim, lr_scheduler));
 
