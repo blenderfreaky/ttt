@@ -1,7 +1,7 @@
 use crate::{
     plane::{load_st_direct, load_st_transpose, store_rt_direct},
     prelude::*,
-    tiles::mma::mma,
+    tiles::{Dim, mma::mma},
 };
 use cubecl::prelude::*;
 
@@ -13,55 +13,56 @@ use cubecl::prelude::*;
 /// - C: Row-major [M, N] in global memory
 ///
 /// # Thread Mapping
-/// Each thread computes a `(TILE_M / THREADS_M) x (TILE_N / THREADS_N)` portion of the output.
+/// Each thread computes a `ThreadTileM x ThreadTileN` portion of the output.
 /// Threads are arranged in a 2D grid: thread (i, j) handles output block at (i, j).
 ///
-/// # Compile-Time Parameters
-/// - `TILE_M`: Tile size in M dimension (must be divisible by LINE_SIZE and THREADS_M)
-/// - `TILE_N`: Tile size in N dimension (must be divisible by LINE_SIZE and THREADS_N)
-/// - `TILE_K`: Tile size in K dimension (must be divisible by LINE_SIZE)
-/// - `THREADS_M`: Number of threads along M dimension
-/// - `THREADS_N`: Number of threads along N dimension
+/// # Type Parameters
+/// - `TileK`: Tile size in K dimension
+/// - `TileM`: Tile size in M dimension (shared memory)
+/// - `TileN`: Tile size in N dimension (shared memory)
+/// - `ThreadTileM`: Per-thread tile size in M dimension
+/// - `ThreadTileN`: Per-thread tile size in N dimension
 #[cube]
-pub fn cooperative_mma<F: Float>(
+pub fn cooperative_mma<
+    F: Float,
+    TileK: Dim,
+    TileM: Dim,
+    TileN: Dim,
+    ThreadTileM: Dim,
+    ThreadTileN: Dim,
+>(
     a: &Tensor<Line<F>>,
     b: &Tensor<Line<F>>,
     c: &mut Tensor<Line<F>>,
     a_base_offset: usize,
     b_base_offset: usize,
     c_base_offset: usize,
-    #[comptime] tile_m: usize,
-    #[comptime] tile_n: usize,
-    #[comptime] tile_k: usize,
-    #[comptime] threads_m: usize,
-    #[comptime] threads_n: usize,
 ) {
-    let thread_tile_m = comptime!(tile_m / threads_m);
-    let thread_tile_n = comptime!(tile_n / threads_n);
+    // st_a: [K, M] transposed from [M, K]
+    // st_b: [K, N]
+    let mut st_a = St::<F, TileK, TileM>::new();
+    let mut st_b = St::<F, TileK, TileN>::new();
 
-    // Transposed
-    let mut st_a = St::<F>::new(tile_k, tile_m);
-    let mut st_b = St::<F>::new(tile_k, tile_n);
-
-    let mut rt_c = Rt::<F>::new(thread_tile_m, thread_tile_n);
+    let mut rt_c = Rt::<F, ThreadTileM, ThreadTileN>::new();
 
     rt_c.zero();
 
     let k_dim = a.shape(a.rank() - 1);
-    let num_k_tiles = div_ceil::<usize>(k_dim, tile_k);
+    let num_k_tiles = div_ceil::<usize>(k_dim, TileK::VALUE);
 
     let tid = UNIT_POS as usize;
+    let threads_n = TileN::VALUE / ThreadTileN::VALUE;
     let thread_m = tid / threads_n;
     let thread_n = tid % threads_n;
 
-    let offset_m = comptime!(thread_tile_m / LINE_SIZE) * thread_m;
-    let offset_n = comptime!(thread_tile_n / LINE_SIZE) * thread_n;
+    let offset_m = ThreadTileM::LINES * thread_m;
+    let offset_n = ThreadTileN::LINES * thread_n;
 
-    let block_m = CUBE_POS_X as usize * tile_m;
-    let block_n = CUBE_POS_Y as usize * tile_n;
+    let block_m = CUBE_POS_X as usize * TileM::VALUE;
+    let block_n = CUBE_POS_Y as usize * TileN::VALUE;
 
     for k_tile_idx in 0..num_k_tiles {
-        let k_offset = k_tile_idx * tile_k;
+        let k_offset = k_tile_idx * TileK::VALUE;
 
         load_st_transpose(a, &mut st_a, a_base_offset, block_m, k_offset);
 
@@ -74,8 +75,8 @@ pub fn cooperative_mma<F: Float>(
         sync_cube();
     }
 
-    let c_row = block_m + thread_m * thread_tile_m;
-    let c_col = block_n + thread_n * thread_tile_n;
+    let c_row = block_m + thread_m * ThreadTileM::VALUE;
+    let c_col = block_n + thread_n * ThreadTileN::VALUE;
 
     store_rt_direct(&rt_c, c, c_base_offset, c_row, c_col);
 }

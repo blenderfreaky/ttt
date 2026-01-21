@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::tiles::Dim;
 use cubecl::frontend::{Exp, Log, Tanh};
 use cubecl::prelude::*;
 
@@ -68,7 +69,7 @@ macro_rules! impl_convenience_fns {
         ::paste::paste! {
             $(
                 #[cube]
-                impl<$t: Float> $ty<F> {
+                impl<$t: Float, R: Dim, C: Dim> $ty<$t, R, C> {
                     pub fn [<$name:snake>](&mut self $(, $state: $t)?) {
                         self.apply_unary_op::
                         <
@@ -219,7 +220,7 @@ mod tests {
                 output: &mut Array<Line<F>>,
                 $( $arg: F, )?
             ) {
-                let mut rt = Rt::<F>::new(LINE_SIZE, LINE_SIZE);
+                let mut rt = Rt::<F, D4, D4>::new();
                 rt.copy_from_array(input);
                 rt.$method($($arg)?);
                 rt.copy_to_array(output);

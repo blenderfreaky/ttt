@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{prelude::*, tiles::Dim};
 use cubecl::prelude::*;
 
 /// Swizzle function for bank-conflict-free shared memory access.
@@ -18,23 +18,34 @@ fn swizzle(row: usize, vec_col: usize, mask: usize) -> usize {
 ///      (Loaded from row-major [K, N] via load_st_direct)
 /// - C: Row-Major Register Tile [M, N].
 ///
+/// Type parameters:
+/// - CM, CN: C tile dimensions (rows, cols)
+/// - K, AM: A tile dimensions (K rows, M cols) - A is transposed [K, M]
+/// - K, BN: B tile dimensions (K rows, N cols)
+///
 /// 'offset_m/n' are the base offsets (in Lines) for the sub-tile this thread processes.
 #[cube]
-pub fn mma<F: Float>(c: &mut Rt<F>, a: &St<F>, b: &St<F>, offset_m: usize, offset_n: usize) {
-    // A is [K, M]: a.rows = K, a.cols = M
-    // B is [K, N]: b.rows = K, b.cols = N
-    let k_dim = comptime!(a.rows);
+pub fn mma<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
+    c: &mut Rt<F, CM, CN>,
+    a: &St<F, K, AM>,
+    b: &St<F, K, BN>,
+    offset_m: usize,
+    offset_n: usize,
+) {
+    // A is [K, M]: K::VALUE rows, AM::VALUE cols
+    // B is [K, N]: K::VALUE rows, BN::VALUE cols
+    let k_dim = K::VALUE;
 
-    let num_m_vecs = comptime!(c.rows / LINE_SIZE);
-    let num_n_vecs = comptime!(c.cols / LINE_SIZE);
+    let num_m_vecs = CM::LINES;
+    let num_n_vecs = CN::LINES;
 
     // Row-major strides (in Lines)
-    let a_stride = comptime!(a.cols / LINE_SIZE); // M / LINE_SIZE
-    let b_stride = comptime!(b.cols / LINE_SIZE); // N / LINE_SIZE
+    let a_stride = AM::LINES; // M / LINE_SIZE
+    let b_stride = BN::LINES; // N / LINE_SIZE
 
     // Swizzle masks
-    let a_mask = comptime!(a_stride - 1);
-    let b_mask = comptime!(b_stride - 1);
+    let a_mask = a_stride - 1;
+    let b_mask = b_stride - 1;
 
     for k in 0..k_dim {
         #[unroll]

@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::tiles::Dim;
 use cubecl::prelude::*;
 
 #[cube]
@@ -47,8 +48,8 @@ macro_rules! impl_binary_convenience_fns {
         ::paste::paste! {
             $(
                 #[cube]
-                impl<$t: Float> $ty<$t> {
-                    pub fn [<$name:snake>](&mut self, other: &$ty<$t>) {
+                impl<$t: Float, R: Dim, C: Dim> $ty<$t, R, C> {
+                    pub fn [<$name:snake>](&mut self, other: &$ty<$t, R, C>) {
                         self.apply_binary_op::<[<$name Op>]>([<$name Op>], other);
                     }
                 }
@@ -92,8 +93,8 @@ mod tests {
                 b: &Array<Line<F>>,
                 output: &mut Array<Line<F>>,
             ) {
-                let mut rt_a = Rt::<F>::new(LINE_SIZE, LINE_SIZE);
-                let mut rt_b = Rt::<F>::new(LINE_SIZE, LINE_SIZE);
+                let mut rt_a = Rt::<F, D4, D4>::new();
+                let mut rt_b = Rt::<F, D4, D4>::new();
                 rt_a.copy_from_array(a);
                 rt_b.copy_from_array(b);
                 rt_a.$method(&rt_b);

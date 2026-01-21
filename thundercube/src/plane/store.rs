@@ -1,6 +1,7 @@
 use crate::{
     plane::swizzle,
     prelude::*,
+    tiles::Dim,
     util::{transpose_4, write_into_line},
 };
 use cubecl::prelude::*;
@@ -18,17 +19,15 @@ use cubecl::prelude::*;
 /// * `g_offset_row` - Row offset within the matrix for this tile
 /// * `g_offset_col` - Column offset within the matrix for this tile
 #[cube]
-pub fn store_st_direct<F: Float>(
-    s_mem: &St<F>,
+pub fn store_st_direct<F: Float, R: Dim, C: Dim>(
+    s_mem: &St<F, R, C>,
     g_mem: &mut Tensor<Line<F>>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let s_rows = comptime!(s_mem.rows);
-    let s_cols = comptime!(s_mem.cols);
-    let vec_stride = comptime!(s_cols / LINE_SIZE);
-    let total_vecs = comptime!(s_rows * vec_stride);
+    let vec_stride = C::LINES;
+    let total_vecs = R::VALUE * vec_stride;
 
     let num_threads = CUBE_DIM as usize;
     let tid = UNIT_POS as usize;
@@ -64,20 +63,17 @@ pub fn store_st_direct<F: Float>(
 /// * `g_offset_row` - Row offset within the matrix for the destination tile
 /// * `g_offset_col` - Column offset within the matrix for the destination tile
 #[cube]
-pub fn store_st_transpose<F: Float>(
-    s_mem: &St<F>,
+pub fn store_st_transpose<F: Float, R: Dim, C: Dim>(
+    s_mem: &St<F, R, C>,
     g_mem: &mut Tensor<Line<F>>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let s_rows = comptime!(s_mem.rows);
-    let s_cols = comptime!(s_mem.cols);
-    let s_stride = comptime!(s_cols / LINE_SIZE);
-
-    let patches_h = comptime!(s_rows / LINE_SIZE);
-    let patches_w = comptime!(s_cols / LINE_SIZE);
-    let total_patches = comptime!(patches_h * patches_w);
+    let s_stride = C::LINES;
+    let patches_h = R::LINES;
+    let patches_w = C::LINES;
+    let total_patches = patches_h * patches_w;
 
     let num_threads = CUBE_DIM as usize;
     let tid = UNIT_POS as usize;
@@ -135,16 +131,15 @@ pub fn store_st_transpose<F: Float>(
 /// * `g_offset_row` - Row offset within the matrix for this thread's tile
 /// * `g_offset_col` - Column offset within the matrix for this thread's tile
 #[cube]
-pub fn store_rt_direct<F: Float>(
-    rt_mem: &Rt<F>,
+pub fn store_rt_direct<F: Float, R: Dim, C: Dim>(
+    rt_mem: &Rt<F, R, C>,
     g_mem: &mut Tensor<Line<F>>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let rt_rows = comptime!(rt_mem.rows);
-    let rt_cols = comptime!(rt_mem.cols);
-    let num_n_vecs = comptime!(rt_cols / LINE_SIZE);
+    let rt_rows = R::VALUE;
+    let num_n_vecs = C::LINES;
 
     let rank = g_mem.rank();
     let num_rows = g_mem.shape(rank - 2);

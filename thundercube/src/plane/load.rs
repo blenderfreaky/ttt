@@ -1,4 +1,4 @@
-use crate::{plane::swizzle, prelude::*, util::transpose_4};
+use crate::{plane::swizzle, prelude::*, tiles::Dim, util::transpose_4};
 use cubecl::prelude::*;
 
 /// Cooperatively loads a tile from global memory into shared memory without transposing.
@@ -14,17 +14,16 @@ use cubecl::prelude::*;
 /// * `g_offset_row` - Row offset within the matrix for this tile
 /// * `g_offset_col` - Column offset within the matrix for this tile
 #[cube]
-pub fn load_st_direct<F: Float>(
+pub fn load_st_direct<F: Float, R: Dim, C: Dim>(
     g_mem: &Tensor<Line<F>>,
-    s_mem: &mut St<F>,
+    s_mem: &mut St<F, R, C>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let s_rows = comptime!(s_mem.rows);
-    let s_cols = comptime!(s_mem.cols);
-    let vec_stride = comptime!(s_cols / LINE_SIZE);
-    let total_vecs = comptime!(s_rows * vec_stride);
+    let vec_stride = C::LINES;
+    let total_vecs = R::VALUE * vec_stride;
+    let mask = vec_stride - 1;
 
     let num_threads = CUBE_DIM as usize;
     let tid = UNIT_POS as usize;
@@ -39,7 +38,6 @@ pub fn load_st_direct<F: Float>(
 
         let val = load_safe(g_mem, base_offset, g_r, g_c);
 
-        let mask = vec_stride - 1;
         let phys_c = swizzle(r, c_vec, mask);
         let s_idx = (r * vec_stride) + phys_c;
 
@@ -61,20 +59,17 @@ pub fn load_st_direct<F: Float>(
 /// * `g_offset_row` - Row offset within the matrix for the source tile
 /// * `g_offset_col` - Column offset within the matrix for the source tile
 #[cube]
-pub fn load_st_transpose<F: Float>(
+pub fn load_st_transpose<F: Float, R: Dim, C: Dim>(
     g_mem: &Tensor<Line<F>>,
-    s_mem: &mut St<F>,
+    s_mem: &mut St<F, R, C>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let s_rows = comptime!(s_mem.rows);
-    let s_cols = comptime!(s_mem.cols);
-    let s_stride = comptime!(s_cols / LINE_SIZE);
-
-    let patches_h = comptime!(s_rows / LINE_SIZE);
-    let patches_w = comptime!(s_cols / LINE_SIZE);
-    let total_patches = comptime!(patches_h * patches_w);
+    let s_stride = C::LINES;
+    let patches_h = R::LINES;
+    let patches_w = C::LINES;
+    let total_patches = patches_h * patches_w;
 
     let num_threads = CUBE_DIM as usize;
     let tid = UNIT_POS as usize;
@@ -134,16 +129,15 @@ pub fn load_st_transpose<F: Float>(
 /// * `g_offset_row` - Row offset within the matrix for this thread's tile
 /// * `g_offset_col` - Column offset within the matrix for this thread's tile
 #[cube]
-pub fn load_rt_direct<F: Float>(
+pub fn load_rt_direct<F: Float, R: Dim, C: Dim>(
     g_mem: &Tensor<Line<F>>,
-    rt_mem: &mut Rt<F>,
+    rt_mem: &mut Rt<F, R, C>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let rt_rows = comptime!(rt_mem.rows);
-    let rt_cols = comptime!(rt_mem.cols);
-    let num_n_vecs = comptime!(rt_cols / LINE_SIZE);
+    let rt_rows = R::VALUE;
+    let num_n_vecs = C::LINES;
 
     let rank = g_mem.rank();
     let num_rows = g_mem.shape(rank - 2);
