@@ -13,10 +13,17 @@
     extraNativeBuildInputs ? [],
     extraEnv ? {},
   }:
-    pkgs.rustPlatform.buildRustPackage ({
+    pkgs.rustPlatform.buildRustPackage (finalAttrs:
+      {
         pname = "ttt";
         version = "0.1.0";
-        src = ../burn;
+        src = ../.;
+
+        # sourceRoot = "./burn";
+        # Horrible hack
+        prePatch = ''
+          cd burn
+        '';
 
         cargoLock = {
           lockFile = ../burn/Cargo.lock;
