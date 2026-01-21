@@ -5,6 +5,7 @@
 
 pub mod binary_ops;
 pub mod plane;
+pub mod reduction_ops;
 pub mod tiles;
 pub mod unary_ops;
 pub mod util;

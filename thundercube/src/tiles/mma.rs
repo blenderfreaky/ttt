@@ -25,7 +25,7 @@ fn swizzle(row: usize, vec_col: usize, mask: usize) -> usize {
 ///
 /// 'offset_m/n' are the base offsets (in Lines) for the sub-tile this thread processes.
 #[cube]
-pub fn mma<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
+pub fn mma_offset<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
     c: &mut Rt<F, CM, CN>,
     a: &St<F, K, AM>,
     b: &St<F, K, BN>,

@@ -58,6 +58,31 @@ macro_rules! impl_binary_convenience_fns {
     };
 }
 
+macro_rules! impl_broadcast_convenience_fns {
+    {
+        for $ty:ty;
+        $(
+            $name:ident<$t:ident>($dst:ident, $src:ident) => $body:expr;
+        )+
+    }
+    => {
+        ::paste::paste! {
+            $(
+                #[cube]
+                impl<$t: Float, R: Dim, C: Dim> $ty<$t, R, C> {
+                    pub fn [<$name:snake _row>](&mut self, row: &Rv<$t, C>) {
+                        self.apply_row_broadcast::<[<$name Op>]>([<$name Op>], row);
+                    }
+
+                    pub fn [<$name:snake _col>](&mut self, col: &Rv<$t, R>) {
+                        self.apply_col_broadcast::<[<$name Op>]>([<$name Op>], col);
+                    }
+                }
+            )+
+        }
+    };
+}
+
 macro_rules! with_binary_ops {
     ($callback:path ; $($($arg:tt)+)?) => {
         $callback! {
@@ -79,6 +104,7 @@ macro_rules! with_binary_ops {
 with_binary_ops!(impl_binary_ops;);
 with_binary_ops!(impl_binary_convenience_fns; for Rt);
 with_binary_ops!(impl_binary_convenience_fns; for St);
+with_binary_ops!(impl_broadcast_convenience_fns; for Rt);
 
 #[cfg(test)]
 mod tests {
@@ -224,6 +250,130 @@ mod tests {
                 {
                     for i in 0..output.len() {
                         output[i] = F::from_f64(a[i].into_f64().powf(b[i].into_f64()));
+                    }
+                }
+            );
+        }
+    }
+
+    const ROWS: usize = 8;
+    const COLS: usize = 8;
+
+    macro_rules! generate_row_broadcast_kernel {
+        ($name:ident, $method:ident) => {
+            #[cube(launch)]
+            fn $name<F: Float + CubeElement>(
+                a: &Array<Line<F>>,
+                row: &Array<Line<F>>,
+                output: &mut Array<Line<F>>,
+            ) {
+                let mut rt_a = Rt::<F, D8, D8>::new();
+                let mut rv_row = Rv::<F, D8>::new();
+                rt_a.copy_from_array(a);
+                rv_row.copy_from_array(row);
+                rt_a.$method(&rv_row);
+                rt_a.copy_to_array(output);
+            }
+        };
+    }
+
+    macro_rules! generate_col_broadcast_kernel {
+        ($name:ident, $method:ident) => {
+            #[cube(launch)]
+            fn $name<F: Float + CubeElement>(
+                a: &Array<Line<F>>,
+                col: &Array<Line<F>>,
+                output: &mut Array<Line<F>>,
+            ) {
+                let mut rt_a = Rt::<F, D8, D8>::new();
+                let mut rv_col = Rv::<F, D8>::new();
+                rt_a.copy_from_array(a);
+                rv_col.copy_from_array(col);
+                rt_a.$method(&rv_col);
+                rt_a.copy_to_array(output);
+            }
+        };
+    }
+
+    generate_row_broadcast_kernel!(test_add_row_kernel, add_row);
+    generate_row_broadcast_kernel!(test_mul_row_kernel, mul_row);
+    generate_col_broadcast_kernel!(test_add_col_kernel, add_col);
+    generate_col_broadcast_kernel!(test_mul_col_kernel, mul_col);
+
+    // ==================== BROADCAST TESTS ====================
+
+    test_kernel! {
+        #[test]
+        fn test_add_row() for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let row: Array = [COLS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_add_row_kernel(a(), row(), output()) for (1, 1, 1) @ (1),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() + row[c].into_f64());
+                        }
+                    }
+                }
+            );
+        }
+
+        #[test]
+        fn test_mul_row() for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let row: Array = [COLS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_mul_row_kernel(a(), row(), output()) for (1, 1, 1) @ (1),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() * row[c].into_f64());
+                        }
+                    }
+                }
+            );
+        }
+
+        #[test]
+        fn test_add_col() for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let col: Array = [ROWS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_add_col_kernel(a(), col(), output()) for (1, 1, 1) @ (1),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() + col[r].into_f64());
+                        }
+                    }
+                }
+            );
+        }
+
+        #[test]
+        fn test_mul_col() for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let col: Array = [ROWS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_mul_col_kernel(a(), col(), output()) for (1, 1, 1) @ (1),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() * col[r].into_f64());
+                        }
                     }
                 }
             );

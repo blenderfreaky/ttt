@@ -40,6 +40,7 @@ pub fn transpose_4<F: Float>(
     (c0, c1, c2, c3)
 }
 
+// CubeCL doesn't let us do lined_array[2][1] = 3
 #[cube]
 pub fn write_into_line<F: Float>(one_slice: SliceMut<Line<F>>, idx: usize, val: F) {
     ReinterpretSliceMut::<F, F>::new(one_slice, LINE_SIZE).write(idx, val);

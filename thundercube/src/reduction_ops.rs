@@ -1,0 +1,167 @@
+use crate::prelude::*;
+use crate::tiles::Dim;
+use cubecl::prelude::*;
+
+#[cube]
+pub trait ReductionOp<F: Float> {
+    fn identity() -> Line<F>;
+    fn combine(a: Line<F>, b: Line<F>) -> Line<F>;
+    fn finalize(line: Line<F>) -> F;
+}
+
+macro_rules! impl_reduction_ops {
+    {
+    $(
+        $name:ident<$t:ident> {
+            identity => $identity:expr;
+            combine($a:ident, $b:ident) => $combine:expr;
+            finalize($line:ident) => $finalize:expr;
+        }
+    )+
+    } => {
+    $(
+        ::paste::paste! {
+            #[derive(CubeType)]
+            pub struct [<$name Op>];
+
+            impl From<[<$name Op>]> for [<$name OpExpand>] {
+                fn from(_: [<$name Op>]) -> Self {
+                    [<$name OpExpand>] {}
+                }
+            }
+
+            #[cube]
+            impl<$t: Float> ReductionOp<$t> for [<$name Op>] {
+                fn identity() -> Line<$t> {
+                    $identity
+                }
+
+                fn combine($a: Line<$t>, $b: Line<$t>) -> Line<$t> {
+                    $combine
+                }
+
+                fn finalize($line: Line<$t>) -> $t {
+                    $finalize
+                }
+            }
+        }
+    )+
+    };
+}
+
+macro_rules! impl_reduction_convenience_fns {
+    {
+        for $ty:ty;
+        $(
+            $name:ident<$t:ident> {
+                identity => $identity:expr;
+                combine($a:ident, $b:ident) => $combine:expr;
+                finalize($line:ident) => $finalize:expr;
+            }
+        )+
+    }
+    => {
+        ::paste::paste! {
+            $(
+                #[cube]
+                impl<$t: Float, R: Dim, C: Dim> $ty<$t, R, C> {
+                    pub fn [<$name:snake _rows>](&self) -> Rv<$t, R> {
+                        self.reduce_rows::<[<$name Op>]>()
+                    }
+
+                    pub fn [<$name:snake _cols>](&self) -> Rv<$t, C> {
+                        self.reduce_cols::<[<$name Op>]>()
+                    }
+                }
+            )+
+        }
+    };
+}
+
+macro_rules! with_reduction_ops {
+    ($callback:path ; $($($arg:tt)+)?) => {
+        $callback! {
+            $($($arg)+;)?
+
+            Sum<F> {
+                identity => Line::<F>::empty(LINE_SIZE).fill(F::new(0.0));
+                combine(a, b) => a + b;
+                finalize(line) => line[0] + line[1] + line[2] + line[3];
+            }
+        }
+    };
+}
+
+with_reduction_ops!(impl_reduction_ops;);
+with_reduction_ops!(impl_reduction_convenience_fns; for Rt);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::TestFloat;
+
+    const ROWS: usize = 8;
+    const COLS: usize = 8;
+
+    #[cube(launch)]
+    fn test_sum_rows_kernel<F: Float + CubeElement>(
+        input: &Array<Line<F>>,
+        output: &mut Array<Line<F>>,
+    ) {
+        let mut rt = Rt::<F, D8, D8>::new();
+        rt.copy_from_array(input);
+        let result = rt.sum_rows();
+        result.copy_to_array(output);
+    }
+
+    #[cube(launch)]
+    fn test_sum_cols_kernel<F: Float + CubeElement>(
+        input: &Array<Line<F>>,
+        output: &mut Array<Line<F>>,
+    ) {
+        let mut rt = Rt::<F, D8, D8>::new();
+        rt.copy_from_array(input);
+        let result = rt.sum_cols();
+        result.copy_to_array(output);
+    }
+
+    test_kernel! {
+        #[test]
+        fn test_sum_rows() for F in all {
+            let input: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS];
+
+            assert_eq!(
+                test_sum_rows_kernel(input(), output()) for (1, 1, 1) @ (1),
+                {
+                    for r in 0..ROWS {
+                        let mut sum = 0.0;
+                        for c in 0..COLS {
+                            sum += input[r * COLS + c].into_f64();
+                        }
+                        output[r] = F::from_f64(sum);
+                    }
+                }
+            );
+        }
+
+        #[test]
+        fn test_sum_cols() for F in all {
+            let input: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let output: Array = [COLS];
+
+            assert_eq!(
+                test_sum_cols_kernel(input(), output()) for (1, 1, 1) @ (1),
+                {
+                    for c in 0..COLS {
+                        let mut sum = 0.0;
+                        for r in 0..ROWS {
+                            sum += input[r * COLS + c].into_f64();
+                        }
+                        output[c] = F::from_f64(sum);
+                    }
+                }
+            );
+        }
+    }
+}

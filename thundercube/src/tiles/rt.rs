@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use cubecl::prelude::*;
 
-use crate::{binary_ops::*, prelude::*, unary_ops::*};
+use crate::{binary_ops::*, prelude::*, reduction_ops::*, unary_ops::*};
 
 use super::dim::Dim;
 
@@ -58,6 +58,36 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
         }
     }
 
+    pub fn apply_row_broadcast<O: BinaryOp<F>>(&mut self, op: O, row: &Rv<F, C>) {
+        #[unroll]
+        for r in 0..R::VALUE {
+            #[unroll]
+            for c in 0..C::LINES {
+                let idx = r * comptime!(C::LINES) + c;
+                self.data[idx] = op.apply(self.data[idx], row.data[c]);
+            }
+        }
+    }
+
+    pub fn apply_col_broadcast<O: BinaryOp<F>>(&mut self, op: O, col: &Rv<F, R>) {
+        #[unroll]
+        for r_line in 0..R::LINES {
+            let col_gathered = col.data[r_line];
+
+            #[unroll]
+            for i in 0..LINE_SIZE {
+                let row = r_line * LINE_SIZE + i;
+                let broadcast = Line::<F>::empty(LINE_SIZE).fill(col_gathered[i]);
+
+                #[unroll]
+                for c in 0..C::LINES {
+                    let idx = row * comptime!(C::LINES) + c;
+                    self.data[idx] = op.apply(self.data[idx], broadcast);
+                }
+            }
+        }
+    }
+
     pub fn copy_from_array(&mut self, array: &Array<Line<F>>) {
         #[unroll]
         for i in 0..self.len {
@@ -71,6 +101,45 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
             array[i] = self.data[i];
         }
     }
+
+    pub fn reduce_rows<O: ReductionOp<F>>(&self) -> Rv<F, R> {
+        let mut result = Rv::<F, R>::new();
+
+        #[unroll]
+        for r_line in 0..R::LINES {
+            let mut out_line = Line::<F>::empty(LINE_SIZE);
+
+            #[unroll]
+            for i in 0..LINE_SIZE {
+                let r = r_line * LINE_SIZE + i;
+
+                let mut acc = O::identity();
+                #[unroll]
+                for c_line in 0..C::LINES {
+                    acc = O::combine(acc, self.data[r * comptime!(C::LINES) + c_line]);
+                }
+                out_line[i] = O::finalize(acc);
+            }
+            result.data[r_line] = out_line;
+        }
+        result
+    }
+
+    pub fn reduce_cols<O: ReductionOp<F>>(&self) -> Rv<F, C> {
+        let mut result = Rv::<F, C>::new();
+
+        #[unroll]
+        for c_line in 0..C::LINES {
+            let mut acc = O::identity();
+
+            #[unroll]
+            for r in 0..R::VALUE {
+                acc = O::combine(acc, self.data[r * comptime!(C::LINES) + c_line]);
+            }
+            result.data[c_line] = acc;
+        }
+        result
+    }
 }
 
 impl<F: Float, R: Dim, C: Dim> Default for Rt<F, R, C> {
@@ -78,6 +147,3 @@ impl<F: Float, R: Dim, C: Dim> Default for Rt<F, R, C> {
         Self::new()
     }
 }
-
-pub type RowVec<F, C> = Rt<F, super::dim::D1, C>;
-pub type ColVec<F, R> = Rt<F, R, super::dim::D1>;

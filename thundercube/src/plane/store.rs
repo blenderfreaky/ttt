@@ -6,6 +6,49 @@ use crate::{
 };
 use cubecl::prelude::*;
 
+/// Cooperatively stores per-thread register tiles into shared memory.
+///
+/// Each thread stores its Rt to a sub-region of St determined by UNIT_POS.
+/// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
+/// layout for bank-conflict-free access.
+///
+/// # Type Parameters
+/// * `R, C` - Register tile dimensions
+/// * `SR, SC` - Shared memory tile dimensions (must be multiples of R, C)
+#[cube]
+pub fn store_rt_to_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
+    rt_mem: &Rt<F, R, C>,
+    s_mem: &mut St<F, SR, SC>,
+) {
+    let tiles_per_row = SC::VALUE / C::VALUE;
+    let tile_idx = UNIT_POS as usize;
+    let tile_row = tile_idx / tiles_per_row;
+    let tile_col = tile_idx % tiles_per_row;
+
+    let offset_row = tile_row * R::VALUE;
+    let offset_col_vec = tile_col * C::LINES;
+
+    let rt_rows = R::VALUE;
+    let num_c_vecs = C::LINES;
+    let s_stride = SC::LINES;
+    let mask = s_stride - 1;
+
+    #[unroll]
+    for row in 0..rt_rows {
+        let s_row = offset_row + row;
+
+        #[unroll]
+        for cv in 0..num_c_vecs {
+            let s_col_vec = offset_col_vec + cv;
+            let phys_col = swizzle(s_row, s_col_vec, mask);
+            let s_idx = s_row * s_stride + phys_col;
+
+            let rt_idx = row * num_c_vecs + cv;
+            s_mem.data[s_idx] = rt_mem.data[rt_idx];
+        }
+    }
+}
+
 /// Cooperatively stores a shared memory tile to global memory without transposing.
 ///
 /// All threads in the workgroup participate, each storing multiple `Line<F>` vectors

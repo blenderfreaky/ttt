@@ -1,6 +1,49 @@
 use crate::{plane::swizzle, prelude::*, tiles::Dim, util::transpose_4};
 use cubecl::prelude::*;
 
+/// Cooperatively loads from shared memory into per-thread register tiles.
+///
+/// Each thread loads its Rt from a sub-region of St determined by UNIT_POS.
+/// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
+/// layout for bank-conflict-free access.
+///
+/// # Type Parameters
+/// * `R, C` - Register tile dimensions
+/// * `SR, SC` - Shared memory tile dimensions (must be multiples of R, C)
+#[cube]
+pub fn load_rt_from_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
+    s_mem: &St<F, SR, SC>,
+    rt_mem: &mut Rt<F, R, C>,
+) {
+    let tiles_per_row = SC::VALUE / C::VALUE;
+    let tile_idx = UNIT_POS as usize;
+    let tile_row = tile_idx / tiles_per_row;
+    let tile_col = tile_idx % tiles_per_row;
+
+    let offset_row = tile_row * R::VALUE;
+    let offset_col_vec = tile_col * C::LINES;
+
+    let rt_rows = R::VALUE;
+    let num_c_vecs = C::LINES;
+    let s_stride = SC::LINES;
+    let mask = s_stride - 1;
+
+    #[unroll]
+    for row in 0..rt_rows {
+        let s_row = offset_row + row;
+
+        #[unroll]
+        for cv in 0..num_c_vecs {
+            let s_col_vec = offset_col_vec + cv;
+            let phys_col = swizzle(s_row, s_col_vec, mask);
+            let s_idx = s_row * s_stride + phys_col;
+
+            let rt_idx = row * num_c_vecs + cv;
+            rt_mem.data[rt_idx] = s_mem.data[s_idx];
+        }
+    }
+}
+
 /// Cooperatively loads a tile from global memory into shared memory without transposing.
 ///
 /// All threads in the workgroup participate, each loading multiple `Line<F>` vectors

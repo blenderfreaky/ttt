@@ -105,6 +105,9 @@ macro_rules! with_unary_ops {
 
             Neg<F>(x) => neg(x);
 
+            Sqrt<F>(x) => Line::<F>::sqrt(x);
+            Powf<F>(x, f) => Line::<F>::powf(x, f);
+
             Exp<F>(x) => Line::<F>::exp(x);
             Log<F>(x) => Line::<F>::ln(x);
 
@@ -233,6 +236,8 @@ mod tests {
     generate_kernel!(test_add_kernel, add_scalar, add_val);
     generate_kernel!(test_mul_kernel, mul_scalar, mul_val);
     generate_kernel!(test_div_kernel, div_scalar, div_val);
+    generate_kernel!(test_sqrt_kernel, sqrt);
+    generate_kernel!(test_powf_kernel, powf, powf_val);
     generate_kernel!(test_exp_kernel, exp);
     generate_kernel!(test_log_kernel, log);
     generate_kernel!(test_gelu_kernel, gelu);
@@ -374,6 +379,41 @@ mod tests {
                 {
                     for i in 0..output.len() {
                         output[i] = F::from_f64(input[i].into_f64() / val);
+                    }
+                }
+            );
+        }
+
+        #[test]
+        fn test_sqrt() for F in all {
+            let input: Array = [LINE_SIZE * LINE_SIZE] as Uniform(0.0, 10.0);
+            let output: Array = [LINE_SIZE * LINE_SIZE];
+
+            assert_eq!(
+                test_sqrt_kernel(input(), output()) for (1, 1, 1) @ (1),
+                {
+                    for i in 0..output.len() {
+                        output[i] = F::from_f64(input[i].into_f64().sqrt());
+                    }
+                }
+            );
+        }
+
+        #[test_case(1.0)]
+        #[test_case(2.0)]
+        #[test_case(1.5)]
+        #[test_case(0.5)]
+        #[test_case(-1.3)]
+        #[test_case(0.0)]
+        fn test_powf(exp: f64) for F in all {
+            let input: Array = [LINE_SIZE * LINE_SIZE] as Uniform(0.0, 10.0);
+            let output: Array = [LINE_SIZE * LINE_SIZE];
+
+            assert_eq!(
+                test_powf_kernel(input(), output(), scalar(F::from_f64(exp))) for (1, 1, 1) @ (1),
+                {
+                    for i in 0..output.len() {
+                        output[i] = F::from_f64(input[i].into_f64().powf(exp));
                     }
                 }
             );
