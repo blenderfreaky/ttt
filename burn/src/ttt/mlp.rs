@@ -18,11 +18,11 @@ use super::{
 
 #[derive(Module, Debug)]
 pub struct TTTMLP<B: Backend> {
-    /// First layer weight: [num_heads, head_dim, 4*head_dim]
+    /// First layer weight: [num_heads, head_dim, mlp_dim]
     pub w1_init: Param<Tensor<B, 3>>,
-    /// First layer bias: [num_heads, 4*head_dim]
+    /// First layer bias: [num_heads, mlp_dim]
     pub b1_init: Param<Tensor<B, 2>>,
-    /// Second layer weight: [num_heads, 4*head_dim, head_dim]
+    /// Second layer weight: [num_heads, mlp_dim, head_dim]
     pub w2_init: Param<Tensor<B, 3>>,
     /// Second layer bias: [num_heads, head_dim]
     pub b2_init: Param<Tensor<B, 2>>,
@@ -32,11 +32,11 @@ pub struct TTTMLP<B: Backend> {
 
 #[derive(Module, Debug)]
 pub struct TTTMLPState<B: Backend> {
-    /// First layer weight: [batch_size, num_heads, head_dim, 4*head_dim]
+    /// First layer weight: [batch_size, num_heads, head_dim, mlp_dim]
     pub w1: Tensor<B, 4>,
-    /// First layer bias: [batch_size, num_heads, 4*head_dim]
+    /// First layer bias: [batch_size, num_heads, mlp_dim]
     pub b1: Tensor<B, 3>,
-    /// Second layer weight: [batch_size, num_heads, 4*head_dim, head_dim]
+    /// Second layer weight: [batch_size, num_heads, mlp_dim, head_dim]
     pub w2: Tensor<B, 4>,
     /// Second layer bias: [batch_size, num_heads, head_dim]
     pub b2: Tensor<B, 3>,
@@ -65,7 +65,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
         let len = global_config.hidden_size;
         let head_dim = global_config.head_dim();
-        let mlp_dim = 4 * head_dim;
+        let mlp_dim = global_config.mlp_expansion_factor * head_dim;
 
         Self {
             w1_init: config.initializer.init_with(

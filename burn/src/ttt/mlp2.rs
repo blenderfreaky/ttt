@@ -75,7 +75,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP2<B> {
     fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
         let len = global_config.hidden_size;
         let head_dim = global_config.head_dim();
-        let mlp_dim = 4 * head_dim;
+        let mlp_dim = global_config.mlp_expansion_factor * head_dim;
 
         Self {
             w1_init: config.initializer.init_with(

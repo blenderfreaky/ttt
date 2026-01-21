@@ -129,6 +129,9 @@ pub struct TTTConfig {
     /// Maximum sequence length for absolute position embeddings
     #[config(default = 2048)]
     pub max_seq_len: usize,
+    /// MLP expansion factor (hidden_dim = expansion_factor * head_dim)
+    #[config(default = 4)]
+    pub mlp_expansion_factor: usize,
 }
 
 impl TTTConfig {
