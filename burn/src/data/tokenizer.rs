@@ -45,7 +45,7 @@ impl Tokenizer {
 
 impl Default for Tokenizer {
     fn default() -> Self {
-        Self::local()
+        Self::gpt2()
     }
 }
 
