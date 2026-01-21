@@ -17,6 +17,8 @@ pub struct Rt<F: Float, R: Dim, C: Dim> {
     len: usize,
 }
 
+pub type Rv<F, L> = Rt<F, L, D1>;
+
 impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     pub const ROWS: usize = R::VALUE;
     pub const COLS: usize = C::VALUE;

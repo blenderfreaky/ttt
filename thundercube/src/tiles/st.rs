@@ -17,6 +17,8 @@ pub struct St<F: Float, R: Dim, C: Dim> {
     len: usize,
 }
 
+pub type Sv<F, L> = St<F, L, D1>;
+
 impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     pub const ROWS: usize = R::VALUE;
     pub const COLS: usize = C::VALUE;
