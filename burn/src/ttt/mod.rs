@@ -117,7 +117,7 @@ pub struct TTTConfig {
     #[config(default = 24)]
     pub num_hidden_layers: usize,
     // #[config(default = 32000)]
-    #[config(default = 50257)]
+    #[config(default = 8192)]
     pub vocab_size: usize,
     /// The type of TTT layer to use
     #[config(default = "TTTLayerType::Linear")]
