@@ -8,6 +8,7 @@ pub mod backend;
 pub mod linear;
 mod linear_backward;
 mod linear_forward;
+mod linear_forward_tile;
 
 /// Marker type for fused TTT layers.
 /// TTTInnerModel is implemented using a fused kernel,
