@@ -129,6 +129,10 @@ struct TrainArgs {
     /// Output directory
     #[arg(long, default_value = "./artifacts")]
     out: String,
+
+    /// Use pre-tokenized dataset (faster, recommended)
+    #[arg(long, default_value = "true")]
+    pretokenized: bool,
 }
 
 impl InnerModel {
@@ -193,6 +197,7 @@ fn main() {
         Commands::Train(args) => {
             let artifact_dir = args.out.clone();
             let inner_model = args.inner;
+            let pretokenized = args.pretokenized;
             let config = args.into_config();
 
             println!("Training TTT text generation model...");
@@ -210,9 +215,21 @@ fn main() {
                 "Sequence length: {}, Samples: {}",
                 config.max_seq_len, config.train_samples
             );
+            println!(
+                "Pre-tokenized: {} (use --no-pretokenized to disable)",
+                pretokenized
+            );
 
             let device = Default::default();
-            training::train_dataset::<TrainingBackend>(&device, config, &artifact_dir);
+            if pretokenized {
+                training::train_dataset_pretokenized::<TrainingBackend>(
+                    &device,
+                    &config,
+                    &artifact_dir,
+                );
+            } else {
+                training::train_dataset::<TrainingBackend>(&device, &config, &artifact_dir);
+            }
         }
         Commands::Generate {
             artifact_dir,

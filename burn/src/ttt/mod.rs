@@ -34,7 +34,7 @@ pub type TrainingBackend = burn::backend::Autodiff<
 pub type CpuBackend = burn::backend::NdArray;
 
 /// TTT Layer Type variants
-#[derive(Config, Debug, PartialEq)]
+#[derive(Config, Debug, PartialEq, Copy)]
 pub enum TTTLayerType {
     Linear,
     LinearAdam,
@@ -43,6 +43,30 @@ pub enum TTTLayerType {
     MLP3,
     MLP4,
     FusedLinear,
+}
+
+#[macro_export]
+macro_rules! dispatch_ttt_layer_type {
+    ($f:ident :: < $backend:ident, $ty:expr, $($other:ty),+ > ($($args:expr),* $(,)?)) => {
+        match $ty {
+            TTTLayerType::Linear => $f::<$backend, $crate::ttt::linear::TTTLinear<$backend>, $($other),+>($($args),*),
+            TTTLayerType::LinearAdam => {
+                $f::<$backend, $crate::ttt::linear_adam::TTTLinearAdam<$backend>, $($other),+>($($args),*)
+            }
+            TTTLayerType::MLP => $f::<$backend, $crate::ttt::mlp::TTTMLP<$backend>, $($other),+>($($args),*),
+            TTTLayerType::MLP2 => $f::<$backend, $crate::ttt::mlp2::TTTMLP2<$backend>, $($other),+>($($args),*),
+            TTTLayerType::MLP3 => $f::<$backend, $crate::ttt::mlp3::TTTMLP3<$backend>, $($other),+>($($args),*),
+            TTTLayerType::MLP4 => $f::<$backend, $crate::ttt::mlp4::TTTMLP4<$backend>, $($other),+>($($args),*),
+            TTTLayerType::FusedLinear => $f::<
+                $backend,
+                $crate::ttt::cubecl_kernels::Fused<
+                    $backend,
+                    $crate::ttt::linear::TTTLinear<$backend>,
+                >,
+                $($other),+
+            >($($args),*),
+        }
+    };
 }
 
 #[derive(Config, Debug, PartialEq)]
