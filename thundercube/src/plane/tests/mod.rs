@@ -1,2 +1,2 @@
-mod mma; // TODO: fix macro syntax errors
+mod mma;
 mod rw;

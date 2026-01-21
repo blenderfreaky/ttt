@@ -19,6 +19,7 @@ pub const LINE_SIZE: usize = 4;
 
 pub mod prelude {
     pub use crate::LINE_SIZE;
+    pub use crate::plane;
     #[cfg(test)]
     pub use crate::test_kernel;
     pub use crate::tiles::*;

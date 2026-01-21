@@ -10,6 +10,16 @@ use cubecl::{TestRuntime, prelude::*, server::Handle};
 use half::{bf16, f16};
 use rand::{Rng, rngs::StdRng};
 
+#[macro_export]
+macro_rules! float {
+    ([$($x:tt)*]) => { float!($($x)*) };
+    (all) => { float!(f16, bf16, f32, f64) };
+    ($x:ty) => { $x };
+    ($($x:ty),*) => { $(float!($x)),* };
+    (f16) => { ::half::f16 as f16 };
+    (bf16) => { ::half::bf16 as bf16 };
+}
+
 /// A macro for testing CubeCL GPU kernels by comparing their output against reference implementations.
 ///
 /// # Syntax
@@ -76,7 +86,8 @@ macro_rules! test_kernel {
     $(
         $(#[$attr:meta])*
         fn $name:ident($($args:tt)*)
-            for $tname:ident in $([$($float_type:tt),*])? $($all:ident)?
+            for $float_name:ident in $float_ty:tt
+                $($gen_name:ident in [$($gen_opts:tt)+] )*
         {
             $(seed($seed:expr);)?
 
@@ -85,90 +96,69 @@ macro_rules! test_kernel {
             )*
 
             assert_eq!(
-                $kernel:ident ($($kernel_arg_name:ident($($kernel_arg:expr)?)),*) for ($($count:expr),*) @ $($max:ident)? ($($dim:expr),*),
+                $kernel:ident ($($kernel_arg_name:ident($($kernel_arg:expr)?)),* $(,)?) for ($($count:expr),*) @ $($max:ident)? ($($dim:expr),*),
                 $ref:expr $(,)?
             );
         }
     )*
     } => {
     $(
-        // Rewrite into internal tagged format for further processing
         test_kernel! {
-            types: $([$($float_type),*])? $($all)?;
-            type_name: $tname;
-            attrs: $(#[$attr])*;
-            name: $name;
-            args: ($($args)*);
-            seed: ($($seed)?);
-            vars: $(let $var: $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;)*;
-            kernel: $kernel;
-            kernel_args: ($($kernel_arg_name($($kernel_arg)?)),*);
-            count: ($($count),*);
-            dim: $($max)? ($($dim),*);
-            ref: $ref;
+            generics: [
+                $float_name in $float_ty;
+                $($gen_name in [$($gen_opts)+] ;)*
+            ];
+            ctx: {
+                attrs: $(#[$attr])*;
+                name: $name;
+                args: ($($args)*);
+                seed: ($($seed)?);
+                vars: $(let $var: $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;)*;
+                kernel: $kernel;
+                kernel_args: ($($kernel_arg_name($($kernel_arg)?)),*);
+                count: ($($count),*);
+                dim: $($max)? ($($dim),*);
+                ref: $ref;
+            };
         }
     )*
     };
 
-    // ==================== TYPE LIST ITERATION ====================
-    // These arms iterate over the type list, generating one test per type.
-
-    // Base case: empty type list, stop recursion
     {
-        types: [];
-        $($rest:tt)*
+        generics: [
+            $float_name:ident in all;
+            $($gen_name:ident in [$($gen_opts:tt)+] ;)*
+        ];
+        ctx: { $($ctx:tt)+ };
     } => {
-    };
-
-    // `all` expands to the four standard float types
-    {
-        types: all;
-        $($rest:tt)*
-    } => {
-        test_kernel! {
-            types: [::half::bf16 | bf16, ::half::f16 | f16, f32, f64];
-            $($rest)*
+        $crate::cartesian! {
+            test_kernel!($($ctx)+);
+            $float_name in [::half::f16 as f16, ::half::bf16 as bf16, f32, f64];
+            $($gen_name in [$($gen_opts)+] ;)*
         }
     };
 
-    // Type with explicit alias: `Type | alias` (e.g., `::half::f16 | f16`)
     {
-        types: [$t:ty | $tid:ident $(, $($other_types:tt)+)?];
-        $($rest:tt)*
+        generics: [
+            $float_name:ident in $float_ty:tt;
+            $($gen_name:ident in [$($gen_opts:tt)+] ;)*
+        ];
+        ctx: { $($ctx:tt)+ };
     } => {
-        // Generate test for this type
-        test_kernel! {
-            type: $t | $tid;
-            $($rest)*
-        }
-        // Recurse for remaining types
-        test_kernel! {
-            types: [$($($other_types)+)?];
-            $($rest)*
-        }
-    };
-
-    // Type without alias: use the type name as both type and identifier (e.g., `f32`)
-    {
-        types: [$t:tt $(, $($other_types:tt),+)?];
-        $($rest:tt)*
-    } => {
-        test_kernel! {
-            type: $t | $t;
-            $($rest)*
-        }
-        // Recurse for remaining types
-        test_kernel! {
-            types: [$($($other_types),+)?];
-            $($rest)*
+        $crate::cartesian! {
+            test_kernel!($($ctx)+);
+            $float_name in $float_ty;
+            $($gen_name in [$($gen_opts)+] ;)*
         }
     };
 
     // ==================== FUNCTION GENERATION ====================
     // Creates the actual test function with type suffix (e.g., `test_name_f32`)
     {
-        type: $t:tt | $tid:ident;
-        type_name: $tname:ident;
+        types: [
+            $float_name:ident = $float_ty:ty as $float_str:ident;
+            $( $gen_name:ident = $gen_t:ty as $gen_str:ident ; )*
+        ];
         attrs: $(#[$attr:meta])*;
         name: $name:ident;
         args: ($($args:tt)*);
@@ -177,14 +167,19 @@ macro_rules! test_kernel {
         ::paste::paste! {
             $(#[$attr])*
             #[allow(unused_mut)]
-            fn [< $name _ $tid >]($($args)*) {
-                // Create type alias so user can refer to the float type by name
+            fn [< $name _ $float_str $(_ $gen_str:snake)* >]($($args)*) {
+                // Create type aliases so user can refer to the types by name
                 #[allow(dead_code)]
-                type $tname = $t;
+                type $float_name = $float_ty;
+                $(
+                    #[allow(dead_code)]
+                    type $gen_name = $gen_t;
+                )*
                 test_kernel! {
                     @inner
                     name: $name;
-                    type: $t;
+                    float_type: $float_ty;
+                    gen_names: [$($gen_name),*];
                     args: ($($args)*);
                     $($rest)*
                 }
@@ -197,7 +192,8 @@ macro_rules! test_kernel {
     {
         @inner
         name: $name:ident;
-        type: $t:ty;
+        float_type: $t:ty;
+        gen_names: [$($($gen_name:ident),+)?];
         args: ($($args:tt)*);
         seed: ($($seed:expr)?);
         vars: $(let $var:ident: $vty:tt = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;)*;
@@ -228,7 +224,7 @@ macro_rules! test_kernel {
 
             // 3. Launch the kernel
             println!("Launching kernel");
-            $kernel::launch::<$t, cubecl::TestRuntime>(
+            $kernel::launch::<$t $(, $($gen_name),*)?, cubecl::TestRuntime>(
                 &client,
                 CubeCount::Static($(($count) as u32),*),
                 test_kernel!{ @dim(client) $($max)? ($($dim),*) },
@@ -321,6 +317,132 @@ macro_rules! test_kernel {
             println!("Comparing {}", stringify!($var));
             let [< $var _kernel_data >] = $crate::test_utils::download(&$client, $handle);
             $crate::test_utils::slices_eq(&[< $var _kernel_data >], &$var, stringify!($var))
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! cartesian {
+    // ==================== PUBLIC API ====================
+    // Usage:
+    // cartesian!(
+    //     callback!(context);
+    //     Name in [Type, Type as Alias];
+    //     Name2 in [Type];
+    // )
+    //
+    // Callback format:
+    // callback!(
+    //     types: [
+    //         Name = Type as Alias;
+    //         Name2 = Type;
+    //     ];
+    //     context
+    // )
+    {
+        $callback:ident ! ( $($ctx:tt)* ) ;
+        $( $name:ident in [ $($opts:tt)+ ] ; )+
+    } => {
+        $crate::cartesian! {
+            @step_product
+            ctx: { $callback ! ( $($ctx)* ) };     // Callback info
+            stack: { };                            // Accumulated (Name, Type, Alias)
+            rest: { $( $name in [ $($opts)+ ] ),+ }; // Remaining dimensions
+        }
+    };
+
+    // ==================== STEP 1: PRODUCT (Depth) ====================
+    // Branching: Are there more dimensions to process?
+
+    // Case A: No more dimensions. We are at a leaf node. Run the callback.
+    {
+        @step_product
+        ctx: { $callback:ident ! ( $($ctx:tt)* ) };
+        stack: { $( { $n:ident, $t:ty, $a:ident } )* };
+        rest: {};
+    } => {
+        $callback! {
+            types:   [ $( $n = $t as $a ; )* ];
+            $($ctx)*
+        }
+    };
+
+    // Case B: More dimensions exist. Pop the first one and iterate over its options.
+    {
+        @step_product
+        ctx: { $callback:ident ! ( $($ctx:tt)* ) };
+        stack: { $($stack:tt)* };
+        rest: { $name:ident in [ $($opts:tt)+ ] $(, $($tail:tt)*)? };
+    } => {
+        $crate::cartesian! {
+            @step_iter
+            ctx: { $callback ! ( $($ctx)* ) };
+            stack: { $($stack)* };
+            rest: { $($($tail)*)? };  // Save the tail for the next recursion
+            current_dim: $name;
+            opts: [ $($opts)+ ];  // The options to iterate horizontally
+        }
+    };
+
+    // ==================== STEP 2: ITER (Breadth) ====================
+    // Looping Logic: Iterate over options for the *current* dimension.
+
+    // Base Case: No more options. Stop this branch.
+    {
+        @step_iter
+        ctx: $ctx:tt;
+        stack: $stack:tt;
+        rest: $rest:tt;
+        current_dim: $dim:ident;
+        opts: [];
+        $($resttt:tt)*
+    } => {};
+
+    // Option Type A: `Type as Alias` (Explicit naming)
+    {
+        @step_iter
+        ctx: $ctx:tt;
+        stack: { $($stack:tt)* };
+        rest: $rest:tt;
+        current_dim: $dim:ident;
+        opts: [ $t:ty as $a:tt $(, $($next_opts:tt)*)? ]; // Match "Type as Alias"
+    } => {
+        // 1. Recurse DOWN (Product) with this option added to stack
+        $crate::cartesian! {
+            @step_product
+            ctx: $ctx;
+            stack: { $($stack)* { $dim, $t, $a } }; // Push
+            rest: $rest;
+        }
+        // 2. Recurse SIDEWAYS (Iter) to handle the remaining options
+        $crate::cartesian! {
+            @step_iter
+            ctx: $ctx;
+            stack: { $($stack)* };
+            rest: $rest;
+            current_dim: $dim;
+            opts: [ $($($next_opts)*)? ];
+        }
+    };
+
+    // Option Type B: `Type` (Implicit naming: Alias = Type)
+    // Matches if the option is just a single identifier or path
+    {
+        @step_iter
+        ctx: $ctx:tt;
+        stack: $stack:tt;
+        rest: $rest:tt;
+        current_dim: $dim:ident;
+        opts: [ $t:ident $(, $($next_opts:tt)*)? ]; // Match single identifier
+    } => {
+        // Normalize to "Type as Type" and delegate to Type A
+        $crate::cartesian! {
+            @step_iter
+            ctx: $ctx;
+            stack: $stack;
+            rest: $rest;
+            current_dim: $dim;
+            opts: [ $t as $t $(, $($next_opts)*)? ];
         }
     };
 }
@@ -471,7 +593,7 @@ impl TestFloat for bf16 {
 }
 
 // These tests are for testing the macro, not any actual CubeCL code
-#[cfg(false)]
+#[cfg(true)]
 mod test_macro_tests {
     use test_case::{test_case, test_matrix};
 
@@ -551,8 +673,8 @@ mod test_macro_tests {
             assert_eq!(
                 noop(x()) for (1, 1, 1) @ max(1),
                 {
-                    for f in 0..n {
-                        x[f] = F::from_int(f as i64);
+                    for (i, x) in x.iter_mut().enumerate() {
+                        *x = F::from_int(i as i64);
                     }
                 }
             );
