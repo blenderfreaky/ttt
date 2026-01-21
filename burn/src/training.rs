@@ -108,6 +108,7 @@ fn run_training<
     config: &TTTTrainingConfig,
     pad_token: usize,
     artifact_dir: &str,
+    resume_epoch: Option<usize>,
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
     <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
@@ -116,13 +117,15 @@ fn run_training<
             Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
-    // Store untrained model for debugging purposes
-    DefaultRecorder::new()
-        .record(
-            model.clone().into_record(),
-            format!("{artifact_dir}/model").into(),
-        )
-        .unwrap();
+    // Store untrained model for debugging purposes (skip when resuming)
+    if resume_epoch.is_none() {
+        DefaultRecorder::new()
+            .record(
+                model.clone().into_record(),
+                format!("{artifact_dir}/model").into(),
+            )
+            .unwrap();
+    }
 
     println!("Creating data loaders...");
     let dataloader_train = DataLoaderBuilder::new(batcher.clone())
@@ -154,7 +157,7 @@ fn run_training<
         .init()
         .expect("Failed to initialize Noam LR scheduler");
 
-    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
+    let mut training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
         .metric_train(PerplexityMetric::new())
         .metric_valid(PerplexityMetric::new())
         .metric_train_numeric(AccuracyMetric::new().with_pad_token(pad_token))
@@ -166,6 +169,10 @@ fn run_training<
         .grads_accumulation(config.grad_accumulation)
         .num_epochs(config.num_epochs)
         .summary();
+
+    if let Some(epoch) = resume_epoch {
+        training = training.checkpoint(epoch);
+    }
 
     if config.dry_run {
         println!(
@@ -197,6 +204,7 @@ fn train_with_inner<
     dataset_test: D,
     config: &TTTTrainingConfig,
     artifact_dir: &str,
+    resume_epoch: Option<usize>,
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
     <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
@@ -230,6 +238,7 @@ fn train_with_inner<
         config,
         pad_token,
         artifact_dir,
+        resume_epoch,
     );
 }
 
@@ -237,6 +246,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
     artifact_dir: &str,
+    resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
 {
@@ -254,6 +264,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
         dataset_test,
         config,
         artifact_dir,
+        resume_epoch,
     ));
 
     println!("Training completed! Artifacts saved to: {artifact_dir}");
@@ -271,6 +282,7 @@ fn train_with_inner_pretokenized<
     config: &TTTTrainingConfig,
     artifact_dir: &str,
     pad_token: usize,
+    resume_epoch: Option<usize>,
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
     <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
@@ -301,6 +313,7 @@ fn train_with_inner_pretokenized<
         config,
         pad_token,
         artifact_dir,
+        resume_epoch,
     );
 }
 
@@ -314,6 +327,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
     artifact_dir: &str,
+    resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
 {
@@ -345,6 +359,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
         config,
         artifact_dir,
         pad_token,
+        resume_epoch,
     ));
 
     println!("Training completed! Artifacts saved to: {artifact_dir}");

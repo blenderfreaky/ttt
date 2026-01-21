@@ -6,6 +6,7 @@ pub mod text_generation;
 pub mod training;
 pub mod ttt;
 
+use burn::config::Config;
 use burn::optim::AdamConfig;
 use training::TTTTrainingConfig;
 use ttt::{TTTConfig, TTTLayerType, TrainingBackend};
@@ -142,6 +143,10 @@ struct TrainArgs {
     /// If set, don't perform any training, just setup
     #[arg(long, default_value = "false")]
     dry_run: bool,
+
+    /// Resume training from a checkpoint directory (same as artifact dir)
+    #[arg(long)]
+    resume: Option<String>,
 }
 
 impl InnerModel {
@@ -169,6 +174,22 @@ impl ModelSize {
             ModelSize::B1 => TTTConfig::default_1b(),
         }
     }
+}
+
+/// Find the latest checkpoint epoch in the given artifact directory
+fn find_latest_checkpoint(artifact_dir: &str) -> Option<usize> {
+    let checkpoint_dir = std::path::Path::new(artifact_dir).join("checkpoint");
+    std::fs::read_dir(checkpoint_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_prefix("model-")?
+                .strip_suffix(".mpk")?
+                .parse()
+                .ok()
+        })
+        .max()
 }
 
 impl TrainArgs {
@@ -206,14 +227,37 @@ fn main() {
 
     match cli.command {
         Commands::Train(args) => {
-            let artifact_dir = args.out.clone();
-            let inner_model = args.inner;
             let pretokenized = args.pretokenized;
-            let config = args.into_config();
+            let resume_dir = args.resume.clone();
+
+            // Determine config and artifact_dir based on whether we're resuming
+            let (config, artifact_dir, resume_epoch) = if let Some(ref resume_dir) = resume_dir {
+                // Load config from resume directory
+                let config_path = format!("{resume_dir}/config.json");
+                let mut config = TTTTrainingConfig::load(&config_path)
+                    .unwrap_or_else(|e| panic!("Failed to load config from {config_path}: {e}"));
+
+                // Allow --epochs to override for training additional epochs
+                if args.epochs != 10 {
+                    // 10 is the default
+                    config.num_epochs = args.epochs;
+                }
+
+                // Find latest checkpoint
+                let resume_epoch = find_latest_checkpoint(resume_dir)
+                    .unwrap_or_else(|| panic!("No checkpoint found in {resume_dir}/checkpoint/"));
+
+                println!("Resuming training from epoch {resume_epoch}");
+                (config, resume_dir.clone(), Some(resume_epoch))
+            } else {
+                let artifact_dir = args.out.clone();
+                let config = args.into_config();
+                (config, artifact_dir, None)
+            };
 
             println!("Training TTT text generation model...");
             println!("Artifacts will be saved to: {artifact_dir}");
-            println!("Inner model: {inner_model:?}");
+            println!("Layer type: {:?}", config.ttt_config.layer_type);
             println!(
                 "Model size: {} hidden, {} layers",
                 config.ttt_config.hidden_size, config.ttt_config.num_hidden_layers
@@ -237,9 +281,15 @@ fn main() {
                     &device,
                     &config,
                     &artifact_dir,
+                    resume_epoch,
                 );
             } else {
-                training::train_dataset::<TrainingBackend>(&device, &config, &artifact_dir);
+                training::train_dataset::<TrainingBackend>(
+                    &device,
+                    &config,
+                    &artifact_dir,
+                    resume_epoch,
+                );
             }
         }
         Commands::Generate {
