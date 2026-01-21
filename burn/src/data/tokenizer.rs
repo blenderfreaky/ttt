@@ -17,29 +17,89 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
-    fn gpt2() -> Self {
-        let tokenizer = HfTokenizer::from_pretrained("gpt2", None).unwrap();
-
-        // GPT-2 doesn't have a pad token by default, so we use eos as pad
-        let eos_token_id = tokenizer.token_to_id("<|endoftext|>").unwrap() as usize;
-
+    /// Creates a new Tokenizer with explicit token IDs.
+    pub fn new(
+        tokenizer: HfTokenizer,
+        pad_token_id: usize,
+        eos_token_id: usize,
+        bos_token_id: usize,
+    ) -> Self {
         Self {
             tokenizer,
-            pad_token_id: eos_token_id, // Use EOS as PAD for GPT-2
+            pad_token_id,
             eos_token_id,
-            bos_token_id: eos_token_id, // GPT-2 uses same token for BOS/EOS
+            bos_token_id,
         }
     }
 
-    fn local() -> Self {
-        let tokenizer = HfTokenizer::from_file("../../ttt-embedding/tinystories-8k.json").unwrap();
+    /// Load a tokenizer from either a HuggingFace model name or a local file path.
+    ///
+    /// - If the path exists on disk, loads from file
+    /// - Otherwise, treats as a HuggingFace model name (e.g., "gpt2", "EleutherAI/gpt-neox-20b")
+    ///
+    /// Tries to automatically detect special tokens (specialized tokens first, generic fallbacks last).
+    pub fn load(
+        identifier: &str,
+        pad_token: Option<&str>,
+        eos_token: Option<&str>,
+        bos_token: Option<&str>,
+    ) -> Self {
+        let path = std::path::Path::new(identifier);
+        let tokenizer = if path.exists() {
+            HfTokenizer::from_file(identifier)
+                .unwrap_or_else(|e| panic!("Failed to load tokenizer from file '{identifier}': {e}"))
+        } else {
+            HfTokenizer::from_pretrained(identifier, None)
+                .unwrap_or_else(|e| panic!("Failed to load tokenizer '{identifier}': {e}"))
+        };
+
+        Self::from_hf_tokenizer(tokenizer, pad_token, eos_token, bos_token)
+    }
+
+    /// Create from an already-loaded HuggingFace tokenizer with auto-detection of special tokens.
+    /// Tries specialized tokens first, then falls back to generic ones.
+    pub fn from_hf_tokenizer(
+        tokenizer: HfTokenizer,
+        pad_token: Option<&str>,
+        eos_token: Option<&str>,
+        bos_token: Option<&str>,
+    ) -> Self {
+        // Try specialized tokens first, generic fallbacks last
+        let eos_candidates = ["<eos>", "</s>", "[EOS]", "<|endoftext|>"];
+        let bos_candidates = ["<bos>", "<s>", "[BOS]", "<|endoftext|>"];
+        let pad_candidates = ["<pad>", "[PAD]", "</s>", "<|endoftext|>"];
+
+        let eos_token_id = eos_token
+            .and_then(|t| tokenizer.token_to_id(t))
+            .or_else(|| eos_candidates.iter().find_map(|t| tokenizer.token_to_id(t)))
+            .expect("Could not find EOS token") as usize;
+
+        let bos_token_id = bos_token
+            .and_then(|t| tokenizer.token_to_id(t))
+            .or_else(|| bos_candidates.iter().find_map(|t| tokenizer.token_to_id(t)))
+            .unwrap_or(eos_token_id as u32) as usize;
+
+        let pad_token_id = pad_token
+            .and_then(|t| tokenizer.token_to_id(t))
+            .or_else(|| pad_candidates.iter().find_map(|t| tokenizer.token_to_id(t)))
+            .unwrap_or(eos_token_id as u32) as usize;
 
         Self {
-            pad_token_id: tokenizer.token_to_id("<pad>").unwrap() as usize,
-            eos_token_id: tokenizer.token_to_id("<eos>").unwrap() as usize,
-            bos_token_id: tokenizer.token_to_id("<bos>").unwrap() as usize,
             tokenizer,
+            pad_token_id,
+            eos_token_id,
+            bos_token_id,
         }
+    }
+
+    /// GPT-2 tokenizer (vocab_size: 50257)
+    pub fn gpt2() -> Self {
+        Self::load("gpt2", None, None, None)
+    }
+
+    /// GPT-NeoX-20B tokenizer (vocab_size: 50432)
+    pub fn gpt_neox_20b() -> Self {
+        Self::load("EleutherAI/gpt-neox-20b", None, None, None)
     }
 }
 

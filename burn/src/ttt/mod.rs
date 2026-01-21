@@ -114,8 +114,8 @@ pub struct TTTConfig {
     pub swi_glu_mlp_intermediate_size: usize,
     #[config(default = 24)]
     pub num_hidden_layers: usize,
-    // #[config(default = 32000)]
-    #[config(default = 50257)]
+    /// Vocabulary size - must match the tokenizer's vocab_size.
+    /// No default: must be explicitly set to avoid tokenizer/model mismatch.
     pub vocab_size: usize,
     /// The type of TTT layer to use
     #[config(default = "TTTLayerType::Linear")]
@@ -228,8 +228,8 @@ impl TTTConfig {
     // }
 
     #[must_use]
-    pub fn default_12m() -> Self {
-        Self::new()
+    pub fn default_12m(vocab_size: usize) -> Self {
+        Self::new(vocab_size)
             .with_hidden_size(256)
             .with_token_size(256)
             .with_swi_glu_mlp_intermediate_size(512)
@@ -238,8 +238,8 @@ impl TTTConfig {
     }
 
     #[must_use]
-    pub fn default_60m() -> Self {
-        Self::new()
+    pub fn default_60m(vocab_size: usize) -> Self {
+        Self::new(vocab_size)
             .with_hidden_size(512)
             .with_token_size(512)
             .with_swi_glu_mlp_intermediate_size(768)
@@ -248,8 +248,8 @@ impl TTTConfig {
     }
 
     #[must_use]
-    pub fn default_125m() -> Self {
-        Self::new()
+    pub fn default_125m(vocab_size: usize) -> Self {
+        Self::new(vocab_size)
             .with_hidden_size(768)
             .with_token_size(768)
             .with_swi_glu_mlp_intermediate_size(2048)
@@ -258,8 +258,8 @@ impl TTTConfig {
     }
 
     #[must_use]
-    pub fn default_350m() -> Self {
-        Self::new()
+    pub fn default_350m(vocab_size: usize) -> Self {
+        Self::new(vocab_size)
             .with_hidden_size(1024)
             .with_token_size(1024)
             .with_swi_glu_mlp_intermediate_size(2736)
@@ -268,8 +268,8 @@ impl TTTConfig {
     }
 
     #[must_use]
-    pub fn default_760m() -> Self {
-        Self::new()
+    pub fn default_760m(vocab_size: usize) -> Self {
+        Self::new(vocab_size)
             .with_hidden_size(1536)
             .with_token_size(1536)
             .with_swi_glu_mlp_intermediate_size(4096)
@@ -278,8 +278,8 @@ impl TTTConfig {
     }
 
     #[must_use]
-    pub fn default_1b() -> Self {
-        Self::new()
+    pub fn default_1b(vocab_size: usize) -> Self {
+        Self::new(vocab_size)
             .with_hidden_size(2048)
             .with_token_size(2048)
             .with_swi_glu_mlp_intermediate_size(5504)

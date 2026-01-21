@@ -225,13 +225,16 @@ mod tests {
 
     use super::*;
 
+    /// GPT-2 vocab size for testing
+    const TEST_VOCAB_SIZE: usize = 50257;
+
     type Inner = Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>;
 
     #[test]
     fn forward_inference_doesnt_crash() {
         let device = Default::default();
 
-        let model_config = TTTTextGenerationConfig::new_testing(TTTConfig::default_125m());
+        let model_config = TTTTextGenerationConfig::new_testing(TTTConfig::default_125m(TEST_VOCAB_SIZE));
         let vocab_size = model_config.ttt_config.vocab_size;
         let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
 
@@ -252,7 +255,7 @@ mod tests {
         let device = Default::default();
 
         // Use smaller config for faster test
-        let ttt_config = TTTConfig::default_12m();
+        let ttt_config = TTTConfig::default_12m(TEST_VOCAB_SIZE);
         let vocab_size = ttt_config.vocab_size;
         let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
         let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);

@@ -8,8 +8,14 @@ pub mod ttt;
 
 use burn::config::Config;
 use burn::optim::AdamConfig;
+use data::{Tokenizer, TokenizerTrait};
 use training::TTTTrainingConfig;
 use ttt::{TTTConfig, TTTLayerType, TrainingBackend};
+
+/// Load a tokenizer from a HuggingFace model name or local file path.
+fn load_tokenizer(identifier: &str) -> Tokenizer {
+    Tokenizer::load(identifier, None, None, None)
+}
 
 #[derive(Parser)]
 #[command(
@@ -31,11 +37,17 @@ enum Commands {
         artifact_dir: String,
         /// The prompt to generate from
         prompt: String,
+        /// Tokenizer: HuggingFace model name (e.g., "gpt2", "EleutherAI/gpt-neox-20b") or local file path
+        #[arg(long, default_value = "gpt2")]
+        tokenizer: String,
     },
     /// Interactive generation session
     Interactive {
         /// Artifact directory containing the trained model
         artifact_dir: String,
+        /// Tokenizer: HuggingFace model name (e.g., "gpt2", "EleutherAI/gpt-neox-20b") or local file path
+        #[arg(long, default_value = "gpt2")]
+        tokenizer: String,
     },
 }
 
@@ -84,6 +96,10 @@ enum ModelSize {
 
 #[derive(Parser)]
 struct TrainArgs {
+    /// Tokenizer: HuggingFace model name (e.g., "gpt2", "EleutherAI/gpt-neox-20b") or local file path
+    #[arg(long, default_value = "gpt2")]
+    tokenizer: String,
+
     /// Inner model type
     #[arg(long, default_value = "fused-linear")]
     inner: InnerModel,
@@ -164,14 +180,14 @@ impl InnerModel {
 }
 
 impl ModelSize {
-    fn to_ttt_config(self) -> TTTConfig {
+    fn to_ttt_config(self, vocab_size: usize) -> TTTConfig {
         match self {
-            ModelSize::M12 => TTTConfig::default_12m(),
-            ModelSize::M60 => TTTConfig::default_60m(),
-            ModelSize::M125 => TTTConfig::default_125m(),
-            ModelSize::M350 => TTTConfig::default_350m(),
-            ModelSize::M760 => TTTConfig::default_760m(),
-            ModelSize::B1 => TTTConfig::default_1b(),
+            ModelSize::M12 => TTTConfig::default_12m(vocab_size),
+            ModelSize::M60 => TTTConfig::default_60m(vocab_size),
+            ModelSize::M125 => TTTConfig::default_125m(vocab_size),
+            ModelSize::M350 => TTTConfig::default_350m(vocab_size),
+            ModelSize::M760 => TTTConfig::default_760m(vocab_size),
+            ModelSize::B1 => TTTConfig::default_1b(vocab_size),
         }
     }
 }
@@ -193,10 +209,10 @@ fn find_latest_checkpoint(artifact_dir: &str) -> Option<usize> {
 }
 
 impl TrainArgs {
-    fn into_config(self) -> TTTTrainingConfig {
+    fn into_config(self, vocab_size: usize) -> TTTTrainingConfig {
         let ttt_config = self
             .size
-            .to_ttt_config()
+            .to_ttt_config(vocab_size)
             .with_layer_type(self.inner.to_layer_type())
             .with_mini_batch_size(self.mini_batch_size)
             .with_base_lr(self.ttt_base_lr)
@@ -229,6 +245,8 @@ fn main() {
         Commands::Train(args) => {
             let pretokenized = args.pretokenized;
             let resume_dir = args.resume.clone();
+            let tokenizer_name = args.tokenizer.clone();
+            let tokenizer = load_tokenizer(&tokenizer_name);
 
             // Determine config and artifact_dir based on whether we're resuming
             let (config, artifact_dir, resume_epoch) = if let Some(ref resume_dir) = resume_dir {
@@ -251,12 +269,13 @@ fn main() {
                 (config, resume_dir.clone(), Some(resume_epoch))
             } else {
                 let artifact_dir = args.out.clone();
-                let config = args.into_config();
+                let config = args.into_config(tokenizer.vocab_size());
                 (config, artifact_dir, None)
             };
 
             println!("Training TTT text generation model...");
             println!("Artifacts will be saved to: {artifact_dir}");
+            println!("Tokenizer: {tokenizer_name} (vocab_size: {})", tokenizer.vocab_size());
             println!("Layer type: {:?}", config.ttt_config.layer_type);
             println!(
                 "Model size: {} hidden, {} layers",
@@ -281,6 +300,7 @@ fn main() {
                     &device,
                     &config,
                     &artifact_dir,
+                    tokenizer,
                     resume_epoch,
                 );
             } else {
@@ -288,6 +308,7 @@ fn main() {
                     &device,
                     &config,
                     &artifact_dir,
+                    tokenizer,
                     resume_epoch,
                 );
             }
@@ -295,10 +316,12 @@ fn main() {
         Commands::Generate {
             artifact_dir,
             prompt,
+            tokenizer,
         } => {
             let device = Default::default();
+            let tokenizer = load_tokenizer(&tokenizer);
 
-            match inference::generate::<TrainingBackend>(&artifact_dir, device, &prompt) {
+            match inference::generate::<TrainingBackend>(&artifact_dir, device, &prompt, tokenizer) {
                 Ok(generated) => {
                     println!("Prompt: {}", prompt);
                     println!("Generated: {}", generated);
@@ -308,10 +331,11 @@ fn main() {
                 }
             }
         }
-        Commands::Interactive { artifact_dir } => {
+        Commands::Interactive { artifact_dir, tokenizer } => {
             let device = Default::default();
+            let tokenizer = load_tokenizer(&tokenizer);
 
-            match inference::interactive::<TrainingBackend>(&artifact_dir, device) {
+            match inference::interactive::<TrainingBackend>(&artifact_dir, device, tokenizer) {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error starting interactive session: {}", e);

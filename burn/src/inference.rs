@@ -18,18 +18,20 @@ pub struct TTTTextGenerator<B: Backend, Inner> {
 }
 
 impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
-    /// Load a trained model from artifacts directory
+    /// Load a trained model from artifacts directory with a specific tokenizer
     pub fn load_from_artifacts(
         artifact_dir: &str,
         device: B::Device,
+        tokenizer: Tokenizer,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let config: TTTTrainingConfig =
             TTTTrainingConfig::load(format!("{artifact_dir}/config.json"))?;
 
-        let tokenizer = Arc::new(Tokenizer::default());
+        let tokenizer = Arc::new(tokenizer);
 
+        // vocab_size is already set in the saved config
         let model_config = TTTTextGenerationConfig {
-            ttt_config: config.ttt_config.with_vocab_size(tokenizer.vocab_size()),
+            ttt_config: config.ttt_config,
             pad_token: tokenizer.pad_token(),
         };
 
@@ -192,8 +194,9 @@ pub fn generate<B: Backend>(
     artifact_dir: &str,
     device: B::Device,
     prompt: &str,
+    tokenizer: Tokenizer,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let generator = TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device)?;
+    let generator = TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device, tokenizer)?;
     Ok(generator.generate_text(prompt, 50, 0.8, Some(40)))
 }
 
@@ -201,8 +204,9 @@ pub fn generate<B: Backend>(
 pub fn interactive<B: Backend>(
     artifact_dir: &str,
     device: B::Device,
+    tokenizer: Tokenizer,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let generator = TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device)?;
+    let generator = TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device, tokenizer)?;
     generator.interactive_session();
     Ok(())
 }
@@ -219,7 +223,7 @@ mod tests {
 
         let tokenizer = Arc::new(Tokenizer::default());
         let model_config =
-            TTTTextGenerationConfig::from_tokenizer(TTTConfig::default_12m(), &*tokenizer);
+            TTTTextGenerationConfig::from_tokenizer(TTTConfig::default_12m(tokenizer.vocab_size()), &*tokenizer);
         let model = model_config.init::<GpuBackend, TTTLinear<GpuBackend>>(&device);
 
         let generator = TTTTextGenerator::new(model, tokenizer, device);

@@ -204,6 +204,7 @@ fn train_with_inner<
     dataset_test: D,
     config: &TTTTrainingConfig,
     artifact_dir: &str,
+    tokenizer: Tokenizer,
     resume_epoch: Option<usize>,
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
@@ -213,13 +214,12 @@ fn train_with_inner<
             Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
-    let tokenizer = Arc::new(Tokenizer::default());
+    let tokenizer = Arc::new(tokenizer);
     let batcher = TextGenerationBatcher::new(tokenizer.clone(), config.max_seq_len);
 
     std::fs::create_dir_all(artifact_dir).unwrap();
     config.save(format!("{artifact_dir}/config.json")).unwrap();
 
-    assert_eq!(config.ttt_config.vocab_size, tokenizer.vocab_size());
     let model_config = TTTTextGenerationConfig {
         ttt_config: config.ttt_config.clone(),
         pad_token: tokenizer.pad_token(),
@@ -246,6 +246,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
     artifact_dir: &str,
+    tokenizer: Tokenizer,
     resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
@@ -255,6 +256,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     let dataset_test = TextDataset::test();
 
     println!("Starting TTT text generation training...");
+    println!("Tokenizer vocab size: {}", tokenizer.vocab_size());
     let ttt_type = config.ttt_config.layer_type;
     println!("Layer type: {ttt_type:?}");
 
@@ -264,6 +266,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
         dataset_test,
         config,
         artifact_dir,
+        tokenizer,
         resume_epoch,
     ));
 
@@ -327,13 +330,12 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
     artifact_dir: &str,
+    tokenizer: Tokenizer,
     resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
 {
-    println!("Loading tokenizer...");
-    let tokenizer = Tokenizer::default();
-    assert_eq!(config.ttt_config.vocab_size, tokenizer.vocab_size());
+    println!("Tokenizer vocab size: {}", tokenizer.vocab_size());
     let pad_token = tokenizer.pad_token();
 
     println!("Loading pre-tokenized datasets...");
