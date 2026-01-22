@@ -1,15 +1,15 @@
-//! Parameter sweep test to narrow down dimension-dependent bugs.
+//! Parameter sweep validation tests.
 //!
-//! This test runs the Python reference validation with various parameter combinations,
-//! then runs the Rust validation and reports which combinations pass/fail.
+//! These tests run the Python reference validation with various parameter combinations,
+//! then run the Rust validation to verify correctness across different configurations.
 //!
-//! Run with: cargo test --test validate_sweep -- --nocapture --ignored
+//! Tests are parameterized using test_case macros and will fail if validation fails.
 
 use std::process::Command;
+use test_case::test_case;
 
-/// A parameter configuration to test
-#[derive(Debug, Clone)]
-struct Config {
+/// Run Python validation data generation with given config, returns success status.
+fn generate_validation_data(
     b: usize,
     l: usize,
     h: usize,
@@ -60,32 +60,33 @@ impl Config {
 
 /// Run Python validation data generation with given config
 fn run_python_validation_data_generation(cfg: &Config) -> bool {
+) -> Result<(), String> {
     let mut args = vec![
         "-m".to_string(),
         "reference.validate".to_string(),
         "--B".to_string(),
-        cfg.b.to_string(),
+        b.to_string(),
         "--L".to_string(),
-        cfg.l.to_string(),
+        l.to_string(),
         "--H".to_string(),
-        cfg.h.to_string(),
+        h.to_string(),
         "--D".to_string(),
-        cfg.d.to_string(),
+        d.to_string(),
         "--mini_batch_size".to_string(),
-        cfg.mini_batch_size.to_string(),
+        mini_batch_size.to_string(),
         "--seed".to_string(),
-        cfg.seed.to_string(),
+        seed.to_string(),
         "--conv_kernel".to_string(),
-        cfg.conv_kernel.to_string(),
+        conv_kernel.to_string(),
     ];
 
-    if cfg.use_gate {
+    if use_gate {
         args.push("--use_gate".to_string());
     } else {
         args.push("--no-use_gate".to_string());
     }
 
-    if cfg.pre_conv {
+    if pre_conv {
         args.push("--pre_conv".to_string());
     } else {
         args.push("--no-pre_conv".to_string());
@@ -107,244 +108,128 @@ fn run_python_validation_data_generation(cfg: &Config) -> bool {
         .args(&args)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("Failed to run Python validation data generation");
+        .map_err(|e| format!("Failed to run Python: {e}"))?;
 
-    output.status.success()
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Python validation generation failed: {stderr}"))
+    }
 }
 
-/// Run Rust validation tests (the existing validate_full tests)
-fn run_rust_validate() -> (bool, String) {
+/// Run Rust validation tests, returns success status with error details on failure.
+fn run_rust_validation() -> Result<(), String> {
     let output = Command::new("cargo")
-        .args([
-            "test",
-            "--test",
-            "validate_full",
-            "--",
-            "--nocapture",
-            // "test_block_forward",
-        ])
+        .args(["test", "--test", "validate_full", "--", "--nocapture"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .expect("Failed to run Rust validation");
+        .map_err(|e| format!("Failed to run cargo test: {e}"))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}\n{}", stdout, stderr);
-
-    // Extract max_diff from output if present
-    // let max_diff = combined
-    //     .lines()
-    //     .find(|line| line.contains("max_diff="))
-    //     .map(|s| s.to_string())
-    //     .unwrap_or_default();
-    let max_diff = if output.status.success() {
-        String::new()
+    if output.status.success() {
+        Ok(())
     } else {
-        combined
-    };
-
-    (output.status.success(), max_diff)
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("Validation failed:\n{stdout}\n{stderr}"))
+    }
 }
 
-#[test]
-#[ignore] // Run explicitly with: cargo test --test validate_sweep -- --ignored --nocapture
-fn sweep_dimensions() {
-    println!("\n========================================");
-    println!("Parameter Sweep Test");
-    println!("========================================\n");
+/// Run a single validation sweep with the given parameters.
+fn run_sweep(
+    b: usize,
+    l: usize,
+    h: usize,
+    d: usize,
+    mini_batch_size: usize,
+    seed: usize,
+    use_gate: bool,
+    conv_kernel: usize,
+    pre_conv: bool,
+) {
+    // Generate validation data
+    generate_validation_data(b, l, h, d, mini_batch_size, seed, use_gate, conv_kernel, pre_conv)
+        .expect("Failed to generate validation data");
 
-    // Test configurations - vary one parameter at a time from working baseline
-    // Default: use_gate=true, conv_kernel=4, pre_conv=true (most complex)
-    let configs = vec![
-        // Baseline (known working)
-        Config::new(2, 16, 4, 16, 16, 42),
-        // Vary H (num_heads)
-        Config::new(2, 16, 2, 16, 16, 42),
-        Config::new(2, 16, 3, 16, 16, 42),
-        Config::new(2, 16, 5, 16, 16, 42),
-        Config::new(2, 16, 6, 16, 16, 42),
-        Config::new(2, 16, 8, 16, 16, 42),
-        // Vary D (head_dim)
-        Config::new(2, 16, 4, 8, 16, 42),
-        Config::new(2, 16, 4, 12, 16, 42),
-        Config::new(2, 16, 4, 14, 16, 42),
-        Config::new(2, 16, 4, 20, 16, 42),
-        Config::new(2, 16, 4, 32, 16, 42),
-        // Vary L (seq_len) with matching mini_batch
-        Config::new(2, 8, 4, 16, 8, 42),
-        Config::new(2, 24, 4, 16, 24, 42),
-        Config::new(2, 32, 4, 16, 32, 42),
-        // Vary B (batch_size)
-        Config::new(1, 16, 4, 16, 16, 42),
-        Config::new(3, 16, 4, 16, 16, 42),
-        Config::new(4, 16, 4, 16, 16, 42),
-        // Multiple mini-batches
-        Config::new(2, 32, 4, 16, 16, 42), // 2 mini-batches
-        Config::new(2, 48, 4, 16, 16, 42), // 3 mini-batches
-        // Combined variations (potential failure cases)
-        Config::new(2, 16, 5, 8, 16, 42), // H=5, D=8 (failed before)
-        Config::new(3, 20, 5, 8, 10, 42), // Similar to failed block test
-        Config::new(2, 24, 6, 12, 12, 42), // Similar to failed layer test
-        // Vary conv_kernel (with gate and pre_conv on)
-        Config::new(2, 16, 4, 16, 16, 42).with_flags(true, 2, true),
-        Config::new(2, 16, 4, 16, 16, 42).with_flags(true, 8, true),
-        // Without gate (baseline comparison)
-        Config::new(2, 16, 4, 16, 16, 42).with_flags(false, 4, true),
-        Config::new(2, 16, 4, 16, 16, 42).with_flags(false, 4, false),
-        // Without pre_conv (baseline comparison)
-        Config::new(2, 16, 4, 16, 16, 42).with_flags(true, 4, false),
-        // Complex combos with flags
-        Config::new(2, 32, 4, 16, 16, 42).with_flags(true, 8, true), // 2 mini-batches, large conv
-        Config::new(2, 16, 6, 12, 16, 42).with_flags(true, 2, true), // different H/D, small conv
-        // share_qk variations
-        Config::new(2, 16, 4, 16, 16, 42).with_share_qk(false),
-        Config::new(2, 16, 4, 16, 16, 42).with_share_qk(false).with_flags(false, 4, true),
-        // tie_word_embeddings variations
-        Config::new(2, 16, 4, 16, 16, 42).with_tie_word_embeddings(false),
-        Config::new(2, 16, 4, 16, 16, 42).with_share_qk(false).with_tie_word_embeddings(false),
-    ];
-
-    let mut results = Vec::new();
-
-    for cfg in &configs {
-        print!(
-            "Testing B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}, share_qk={}, tie_embed={}",
-            cfg.b,
-            cfg.l,
-            cfg.h,
-            cfg.d,
-            cfg.mini_batch_size,
-            cfg.seed,
-            cfg.use_gate,
-            cfg.conv_kernel,
-            cfg.pre_conv,
-            cfg.share_qk,
-            cfg.tie_word_embeddings
-        );
-
-        // Generate Python reference data
-        if !run_python_validation_data_generation(cfg) {
-            println!("PYTHON FAILED");
-            results.push((cfg.clone(), false, "Python failed".to_string()));
-            continue;
-        }
-
-        // Run Rust validation
-        let (passed, details) = run_rust_validate();
-        if passed {
-            println!("PASS");
-        } else {
-            println!("FAIL - {}", details);
-        }
-        results.push((cfg.clone(), passed, details));
-    }
-
-    // Summary
-    println!("\n========================================");
-    println!("Summary");
-    println!("========================================\n");
-
-    let passed_count = results.iter().filter(|(_, p, _)| *p).count();
-    let failed_count = results.len() - passed_count;
-
-    println!("Passed: {}/{}", passed_count, results.len());
-    println!("Failed: {}/{}", failed_count, results.len());
-
-    if failed_count > 0 {
-        println!("\nFailed configurations:");
-        for (cfg, passed, details) in &results {
-            if !passed {
-                println!(
-                    "  B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}, share_qk={}, tie_embed={} - {}",
-                    cfg.b,
-                    cfg.l,
-                    cfg.h,
-                    cfg.d,
-                    cfg.mini_batch_size,
-                    cfg.seed,
-                    cfg.use_gate,
-                    cfg.conv_kernel,
-                    cfg.pre_conv,
-                    cfg.share_qk,
-                    cfg.tie_word_embeddings,
-                    details
-                );
-            }
-        }
-    }
-
-    println!("\nPassed configurations:");
-    for (cfg, passed, _) in &results {
-        if *passed {
-            println!(
-                "  B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}, share_qk={}, tie_embed={}",
-                cfg.b,
-                cfg.l,
-                cfg.h,
-                cfg.d,
-                cfg.mini_batch_size,
-                cfg.seed,
-                cfg.use_gate,
-                cfg.conv_kernel,
-                cfg.pre_conv,
-                cfg.share_qk,
-                cfg.tie_word_embeddings
-            );
-        }
-    }
-
-    // Don't fail the test - just report results
-    println!("\n(This test reports results but does not fail)");
+    // Run Rust validation
+    run_rust_validation().expect("Rust validation failed");
 }
 
-#[test]
+// ============================================================================
+// Dimension sweep tests
+// ============================================================================
+
+// Baseline configuration
+#[test_case(2, 16, 4, 16, 16, 42; "baseline")]
+// Vary batch size
+#[test_case(1, 16, 4, 16, 16, 42; "batch_1")]
+#[test_case(3, 16, 4, 16, 16, 42; "batch_3")]
+#[test_case(4, 16, 4, 16, 16, 42; "batch_4")]
+// Vary num_heads
+#[test_case(2, 16, 2, 16, 16, 42; "heads_2")]
+#[test_case(2, 16, 3, 16, 16, 42; "heads_3")]
+#[test_case(2, 16, 5, 16, 16, 42; "heads_5")]
+#[test_case(2, 16, 6, 16, 16, 42; "heads_6")]
+#[test_case(2, 16, 8, 16, 16, 42; "heads_8")]
+// Vary head_dim
+#[test_case(2, 16, 4, 8, 16, 42; "head_dim_8")]
+#[test_case(2, 16, 4, 12, 16, 42; "head_dim_12")]
+#[test_case(2, 16, 4, 20, 16, 42; "head_dim_20")]
+#[test_case(2, 16, 4, 32, 16, 42; "head_dim_32")]
+// Vary sequence length with matching mini_batch
+#[test_case(2, 8, 4, 16, 8, 42; "seq_8")]
+#[test_case(2, 24, 4, 16, 24, 42; "seq_24")]
+#[test_case(2, 32, 4, 16, 32, 42; "seq_32")]
+// Multiple mini-batches
+#[test_case(2, 32, 4, 16, 16, 42; "mini_batches_2")]
+#[test_case(2, 48, 4, 16, 16, 42; "mini_batches_3")]
+#[ignore] // Run with: cargo test --test validate_sweep -- --ignored
+fn sweep_dimensions(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) {
+    run_sweep(b, l, h, d, mini_batch_size, seed, true, 4, true);
+}
+
+// ============================================================================
+// Feature flag sweep tests
+// ============================================================================
+
+#[test_case(true, 4, true; "all_features")]
+#[test_case(false, 4, true; "no_gate")]
+#[test_case(true, 4, false; "no_pre_conv")]
+#[test_case(false, 4, false; "minimal")]
+#[test_case(true, 2, true; "conv_kernel_2")]
+#[test_case(true, 8, true; "conv_kernel_8")]
 #[ignore]
-fn sweep_h_only() {
-    println!("\n========================================");
-    println!("H (num_heads) Sweep");
-    println!("========================================\n");
-
-    // Keep everything else constant, vary only H
-    for h in 1..=8 {
-        let cfg = Config::new(2, 16, h, 16, 16, 42);
-        print!("H={} ... ", h);
-
-        if !run_python_validation_data_generation(&cfg) {
-            println!("PYTHON FAILED");
-            continue;
-        }
-
-        let (passed, details) = run_rust_validate();
-        if passed {
-            println!("PASS");
-        } else {
-            println!("FAIL - {}", details);
-        }
-    }
+fn sweep_features(use_gate: bool, conv_kernel: usize, pre_conv: bool) {
+    run_sweep(2, 16, 4, 16, 16, 42, use_gate, conv_kernel, pre_conv);
 }
 
-#[test]
+// ============================================================================
+// Combined variation tests (potential edge cases)
+// ============================================================================
+
+// Tests with default flags (gate=true, conv=4, pre_conv=true)
+#[test_case(2, 16, 5, 8, 16, 42; "h5_d8")]
+#[test_case(3, 20, 5, 8, 10, 42; "complex_1")]
+#[test_case(2, 24, 6, 12, 12, 42; "complex_2")]
 #[ignore]
-fn sweep_d_only() {
-    println!("\n========================================");
-    println!("D (head_dim) Sweep - must be even");
-    println!("========================================\n");
+fn sweep_combined(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) {
+    run_sweep(b, l, h, d, mini_batch_size, seed, true, 4, true);
+}
 
-    // Keep everything else constant, vary only D (must be even)
-    for d in [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 32] {
-        let cfg = Config::new(2, 16, 4, d, 16, 42);
-        print!("D={} ... ", d);
-
-        if !run_python_validation_data_generation(&cfg) {
-            println!("PYTHON FAILED");
-            continue;
-        }
-
-        let (passed, details) = run_rust_validate();
-        if passed {
-            println!("PASS");
-        } else {
-            println!("FAIL - {}", details);
-        }
-    }
+// Tests with non-default flags
+#[test_case(2, 32, 4, 16, 16, 42, true, 8, true; "multi_batch_large_conv")]
+#[test_case(2, 16, 6, 12, 16, 42, true, 2, true; "varied_dims_small_conv")]
+#[ignore]
+fn sweep_combined_with_flags(
+    b: usize,
+    l: usize,
+    h: usize,
+    d: usize,
+    mini_batch_size: usize,
+    seed: usize,
+    use_gate: bool,
+    conv_kernel: usize,
+    pre_conv: bool,
+) {
+    run_sweep(b, l, h, d, mini_batch_size, seed, use_gate, conv_kernel, pre_conv);
 }

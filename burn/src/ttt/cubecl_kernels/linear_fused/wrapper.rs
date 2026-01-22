@@ -88,6 +88,8 @@ mod tests {
     use burn_backend::Backend;
     use std::sync::Arc;
 
+    // Note: A similar function `compare_tensors` exists in tests/validate_full.rs for
+    // integration tests. This version uses rtol+atol and panics on failure.
     fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
         assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match");
 
