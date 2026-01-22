@@ -4,10 +4,10 @@ use cubecl::prelude::*;
 
 use crate::{binary_ops::*, plane::swizzle, prelude::*, unary_ops::*};
 
-use super::dim::Dim;
+use super::dim::{Dim, DimOrOne};
 
 #[derive(CubeType)]
-pub struct St<F: Float, R: Dim, C: Dim> {
+pub struct St<F: Float, R: Dim, C: DimOrOne> {
     pub data: SharedMemory<Line<F>>,
     #[cube(comptime)]
     _phantom: PhantomData<(R, C)>,
@@ -19,7 +19,7 @@ pub struct St<F: Float, R: Dim, C: Dim> {
 
 pub type Sv<F, L> = St<F, L, D1>;
 
-impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
+impl<F: Float, R: Dim, C: DimOrOne> St<F, R, C> {
     pub const ROWS: usize = R::VALUE;
     pub const COLS: usize = C::VALUE;
     pub const SIZE: usize = R::VALUE * C::VALUE;
@@ -34,8 +34,9 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     }
 }
 
+/// General methods for all shared memory tiles (including vectors).
 #[cube]
-impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
+impl<F: Float, R: Dim, C: DimOrOne> St<F, R, C> {
     pub fn new() -> St<F, R, C> {
         St::<F, R, C> {
             data: SharedMemory::new_lined(comptime!(Self::LEN), LINE_SIZE),
@@ -62,6 +63,20 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
         }
     }
 
+    /// Copy contents from another St (cooperative, all threads participate)
+    pub fn copy_from(&mut self, other: &St<F, R, C>) {
+        let num_threads = CUBE_DIM as usize;
+        let tid = UNIT_POS as usize;
+
+        for i in range_stepped(tid, self.len, num_threads) {
+            self.data[i] = other.data[i];
+        }
+    }
+}
+
+/// Matrix-specific methods (require C: Dim, i.e., C != D1).
+#[cube]
+impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     pub fn apply_row_broadcast<O: BinaryOp<F>>(&mut self, op: O, row: &Rv<F, C>) {
         let num_threads = CUBE_DIM as usize;
         let tid = UNIT_POS as usize;
@@ -99,16 +114,6 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
             let broadcast = Line::<F>::empty(LINE_SIZE).fill(col_val);
 
             self.data[s_idx] = op.apply(self.data[s_idx], broadcast);
-        }
-    }
-
-    /// Copy contents from another St (cooperative, all threads participate)
-    pub fn copy_from(&mut self, other: &St<F, R, C>) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
-
-        for i in range_stepped(tid, self.len, num_threads) {
-            self.data[i] = other.data[i];
         }
     }
 
@@ -187,7 +192,7 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     }
 }
 
-impl<F: Float, R: Dim, C: Dim> Default for St<F, R, C> {
+impl<F: Float, R: Dim, C: DimOrOne> Default for St<F, R, C> {
     fn default() -> Self {
         Self::new()
     }

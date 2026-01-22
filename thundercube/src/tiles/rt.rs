@@ -4,10 +4,10 @@ use cubecl::prelude::*;
 
 use crate::{binary_ops::*, prelude::*, reduction_ops::*, unary_ops::*};
 
-use super::dim::Dim;
+use super::dim::{Dim, DimOrOne};
 
 #[derive(CubeType)]
-pub struct Rt<F: Float, R: Dim, C: Dim> {
+pub struct Rt<F: Float, R: Dim, C: DimOrOne> {
     pub data: Array<Line<F>>,
     #[cube(comptime)]
     _phantom: PhantomData<(R, C)>,
@@ -19,7 +19,7 @@ pub struct Rt<F: Float, R: Dim, C: Dim> {
 
 pub type Rv<F, L> = Rt<F, L, D1>;
 
-impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
+impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
     pub const ROWS: usize = R::VALUE;
     pub const COLS: usize = C::VALUE;
     pub const SIZE: usize = R::VALUE * C::VALUE;
@@ -34,8 +34,9 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     }
 }
 
+/// General methods for all register tiles (including vectors).
 #[cube]
-impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
+impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
     pub fn new() -> Rt<F, R, C> {
         Rt::<F, R, C> {
             data: Array::lined(comptime!(Rt::<F, R, C>::size()), LINE_SIZE),
@@ -58,6 +59,24 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
         }
     }
 
+    pub fn copy_from_array(&mut self, array: &Array<Line<F>>) {
+        #[unroll]
+        for i in 0..self.len {
+            self.data[i] = array[i];
+        }
+    }
+
+    pub fn copy_to_array(&self, array: &mut Array<Line<F>>) {
+        #[unroll]
+        for i in 0..self.len {
+            array[i] = self.data[i];
+        }
+    }
+}
+
+/// Matrix-specific methods (require C: Dim, i.e., C != D1).
+#[cube]
+impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     pub fn apply_row_broadcast<O: BinaryOp<F>>(&mut self, op: O, row: &Rv<F, C>) {
         #[unroll]
         for r in 0..R::VALUE {
@@ -85,20 +104,6 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
                     self.data[idx] = op.apply(self.data[idx], broadcast);
                 }
             }
-        }
-    }
-
-    pub fn copy_from_array(&mut self, array: &Array<Line<F>>) {
-        #[unroll]
-        for i in 0..self.len {
-            self.data[i] = array[i];
-        }
-    }
-
-    pub fn copy_to_array(&self, array: &mut Array<Line<F>>) {
-        #[unroll]
-        for i in 0..self.len {
-            array[i] = self.data[i];
         }
     }
 
@@ -142,7 +147,7 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     }
 }
 
-impl<F: Float, R: Dim, C: Dim> Default for Rt<F, R, C> {
+impl<F: Float, R: Dim, C: DimOrOne> Default for Rt<F, R, C> {
     fn default() -> Self {
         Self::new()
     }

@@ -1,0 +1,9 @@
+# CubeCL configuration
+# See: https://burn.dev/books/cubecl/advanced-usage/config.html
+
+[compilation]
+# Enable kernel caching to avoid JIT recompilation
+cache = "target"
+
+[autotune]
+level = "balanced"

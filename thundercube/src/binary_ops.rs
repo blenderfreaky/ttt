@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use crate::tiles::Dim;
+use crate::tiles::{Dim, DimOrOne};
 use cubecl::prelude::*;
 
 #[cube]
@@ -48,7 +48,7 @@ macro_rules! impl_binary_convenience_fns {
         ::paste::paste! {
             $(
                 #[cube]
-                impl<$t: Float, R: Dim, C: Dim> $ty<$t, R, C> {
+                impl<$t: Float, R: Dim, C: DimOrOne> $ty<$t, R, C> {
                     pub fn [<$name:snake>](&mut self, other: &$ty<$t, R, C>) {
                         self.apply_binary_op::<[<$name Op>]>([<$name Op>], other);
                     }

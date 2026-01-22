@@ -13,6 +13,33 @@ rand = { version = "0.9", optional = true }
 [dev-dependencies]
 test-case = "3"
 rand = "0.9"
+criterion = { version = "0.8", features = ["html_reports"] }
+pollster = "0.4"
+
+[[bench]]
+name = "mma"
+harness = false
+required-features = ["test-utils"]
+
+[[bench]]
+name = "load_store"
+harness = false
+required-features = ["test-utils"]
+
+[[bench]]
+name = "elementwise"
+harness = false
+required-features = ["test-utils"]
+
+[[bench]]
+name = "broadcast"
+harness = false
+required-features = ["test-utils"]
+
+[[bench]]
+name = "reduce"
+harness = false
+required-features = ["test-utils"]
 
 [features]
 default = ["hip"]

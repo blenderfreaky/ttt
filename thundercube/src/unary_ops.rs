@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use crate::tiles::Dim;
+use crate::tiles::{Dim, DimOrOne};
 use cubecl::frontend::{Exp, Log, Tanh};
 use cubecl::prelude::*;
 
@@ -69,7 +69,7 @@ macro_rules! impl_convenience_fns {
         ::paste::paste! {
             $(
                 #[cube]
-                impl<$t: Float, R: Dim, C: Dim> $ty<$t, R, C> {
+                impl<$t: Float, R: Dim, C: DimOrOne> $ty<$t, R, C> {
                     pub fn [<$name:snake>](&mut self $(, $state: $t)?) {
                         self.apply_unary_op::
                         <

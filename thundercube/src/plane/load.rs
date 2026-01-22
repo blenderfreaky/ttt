@@ -260,3 +260,64 @@ fn load_safe<F: Float>(g: &Tensor<Line<F>>, base_offset: usize, r: usize, c: usi
         Line::empty(LINE_SIZE).fill(F::from_int(0))
     }
 }
+
+/// Loads a 1D vector from global memory into a shared memory vector (Sv).
+///
+/// For a 1D tensor with shape [L] and LINE_SIZE vectorization, this loads
+/// L/LINE_SIZE Lines into the Sv<F, L> = St<F, L, D1>.
+///
+/// All threads participate cooperatively - each thread loads different Lines.
+///
+/// # Arguments
+/// * `g_mem` - Source 1D tensor of Lines
+/// * `s_mem` - Destination shared memory vector
+/// * `base_offset` - Scalar offset into the source tensor
+#[cube]
+pub fn load_sv_direct<F: Float, L: Dim>(
+    g_mem: &Tensor<Line<F>>,
+    s_mem: &mut Sv<F, L>,
+    base_offset: usize,
+) {
+    let num_lines = L::LINES;
+    let num_threads = CUBE_DIM as usize;
+    let tid = UNIT_POS as usize;
+
+    for i in range_stepped(tid, num_lines, num_threads) {
+        let line_idx = base_offset / LINE_SIZE + i;
+        s_mem.data[i] = g_mem[line_idx];
+    }
+}
+
+/// Loads from shared memory vector (Sv) into register vector (Rv).
+///
+/// For vectors, all threads get the same data (broadcast).
+/// Each thread copies all L/LINE_SIZE Lines.
+#[cube]
+pub fn load_rv_from_sv<F: Float, L: Dim>(s_mem: &Sv<F, L>, r_mem: &mut Rv<F, L>) {
+    #[unroll]
+    for i in 0..L::LINES {
+        r_mem.data[i] = s_mem.data[i];
+    }
+}
+
+/// Loads a 1D vector directly from global memory into a register vector (Rv).
+///
+/// Each thread loads the same data (broadcast). Use for small vectors
+/// where all threads need the same values.
+///
+/// # Arguments
+/// * `g_mem` - Source 1D tensor of Lines
+/// * `r_mem` - Destination register vector
+/// * `base_offset` - Scalar offset into the source tensor
+#[cube]
+pub fn load_rv_direct<F: Float, L: Dim>(
+    g_mem: &Tensor<Line<F>>,
+    r_mem: &mut Rv<F, L>,
+    base_offset: usize,
+) {
+    #[unroll]
+    for i in 0..L::LINES {
+        let line_idx = base_offset / LINE_SIZE + i;
+        r_mem.data[i] = g_mem[line_idx];
+    }
+}
