@@ -1,4 +1,4 @@
-use crate::{plane::swizzle, prelude::*, reduction_ops::*, tiles::Dim, util::sync_planes};
+use crate::{plane::swizzle, prelude::*, reduction_ops::*, tiles::Dim};
 use cubecl::prelude::*;
 
 /// Cooperatively reduces St across rows, producing one value per column.
@@ -90,7 +90,7 @@ pub fn sum_st_rows<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>) -> Rv<F, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::TestFloat;
+    use crate::{test_utils::TestFloat, util::sync_planes};
     use test_case::test_matrix;
 
     const ROWS: usize = 8;

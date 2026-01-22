@@ -1,3 +1,5 @@
+#![allow(non_snake_case)]
+
 use crate::{plane::swizzle, prelude::*, tiles::Dim};
 use cubecl::prelude::*;
 
