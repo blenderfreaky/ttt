@@ -39,13 +39,6 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
         self.inner.init_state(batch_size)
     }
 
-    fn forward_one(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
-        // Single token is just mini-batch with size 1
-        // TODO: Probably wrong
-        debug_assert_eq!(inputs.qkv.xq.shape().dims::<4>()[2], 1);
-        self.forward_mini_batch(state, inputs)
-    }
-
     fn forward_mini_batch(
         &self,
         state: &mut Self::State,

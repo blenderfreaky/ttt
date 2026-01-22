@@ -96,8 +96,6 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
         output
     }
 
-    fn forward_one(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4>;
-
     fn forward_mini_batch(
         &self,
         state: &mut Self::State,

@@ -185,11 +185,6 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP4<B> {
         }
     }
 
-    fn forward_one(&self, state: &mut TTTMLP4State<B>, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
-        debug_assert_eq!(inputs.qkv.xq.shape().dims::<4>()[2], 1);
-        self.forward_mini_batch(state, inputs)
-    }
-
     fn forward_mini_batch(
         &self,
         state: &mut Self::State,
