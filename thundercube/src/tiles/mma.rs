@@ -1,12 +1,5 @@
-use crate::{prelude::*, tiles::Dim};
+use crate::{plane::swizzle, prelude::*, tiles::Dim};
 use cubecl::prelude::*;
-
-/// Swizzle function for bank-conflict-free shared memory access.
-/// Must match the swizzle used in load/store functions.
-#[cube]
-fn swizzle(row: usize, vec_col: usize, mask: usize) -> usize {
-    vec_col ^ (row & mask)
-}
 
 /// C += A * B
 /// Supports arbitrary C-tile sizes (e.g., 8x8, 16x8).
@@ -25,7 +18,7 @@ fn swizzle(row: usize, vec_col: usize, mask: usize) -> usize {
 ///
 /// 'offset_m/n' are the base offsets (in Lines) for the sub-tile this thread processes.
 #[cube]
-pub fn mma_offset<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
+pub fn mma_AtB_rt<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
     c: &mut Rt<F, CM, CN>,
     a: &St<F, K, AM>,
     b: &St<F, K, BN>,
@@ -77,4 +70,15 @@ pub fn mma_offset<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
             }
         }
     }
+}
+
+#[cube]
+pub fn mma_AB_rt<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
+    c: &mut Rt<F, CM, CN>,
+    a: &St<F, AM, K>,
+    b: &St<F, K, BN>,
+    offset_m: usize,
+    offset_n: usize,
+) {
+    todo!()
 }
