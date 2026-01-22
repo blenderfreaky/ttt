@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use cubecl::prelude::*;
-use thundercube::{binary_ops::*, impl_reduction_ops, prelude::*, reduction_ops::*, unary_ops::*, util::index_2d};
+use thundercube::{impl_reduction_ops, prelude::*, reduction_ops::*, util::index_2d};
 
 impl_reduction_ops! {
     SumSq<F> {
@@ -28,6 +28,13 @@ pub struct Inputs<F: Float> {
     pub ln_bias: Tensor<Line<F>>,
 }
 
+#[derive(CubeType, CubeLaunch)]
+pub struct Outputs<F: Float> {
+    pub output: Tensor<Line<F>>,
+    pub weight_out: Tensor<Line<F>>,
+    pub bias_out: Tensor<Line<F>>,
+}
+
 // We use a trait here because
 // inherent assoc types are unstable
 #[cube]
@@ -49,7 +56,9 @@ pub trait ParamsTrait: Send + Sync + 'static {
 
     fn cs_cs_reg() -> Rt<Self::E, Self::CS_Reg, Self::CS_Reg>;
     fn cs_f_reg() -> Rt<Self::E, Self::CS_Reg, Self::F_Reg>;
+    fn f_f_reg() -> Rt<Self::E, Self::F_Reg, Self::F_Reg>;
     fn cs_reg() -> Rv<Self::E, Self::CS_Reg>;
+    fn f_reg() -> Rv<Self::E, Self::F_Reg>;
 }
 
 pub struct Params<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> {
@@ -91,10 +100,66 @@ impl<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> ParamsTrait
     fn cs_f_reg() -> Rt<Self::E, Self::CS_Reg, Self::F_Reg> {
         Rt::new()
     }
+    fn f_f_reg() -> Rt<Self::E, Self::F_Reg, Self::F_Reg> {
+        Rt::new()
+    }
 
     fn cs_reg() -> Rv<Self::E, Self::CS_Reg> {
         Rv::new()
     }
+    fn f_reg() -> Rv<Self::E, Self::F_Reg> {
+        Rv::new()
+    }
+}
+
+/// Computes layer norm forward pass only.
+/// Uses shared memory tiles with plane-level cooperative operations.
+///
+/// Given input `x` of shape [R, C] (R rows, C columns),
+/// and layer norm parameters weight/bias of shape [C]:
+///
+/// Forward:
+///   mean[r] = sum(x[r, :]) / C
+///   var[r] = sum((x[r, :] - mean[r])^2) / C
+///   std[r] = sqrt(var[r] + epsilon)
+///   norm[r, c] = (x[r, c] - mean[r]) / std[r]
+///   out[r, c] = weight[c] * norm[r, c] + bias[c]
+///
+/// # Arguments
+/// * `x` - Input tile [R, C], will be modified to contain the normalized output
+/// * `ln_weight` - Layer norm weight vector [C]
+/// * `ln_bias` - Layer norm bias vector [C]
+/// * `epsilon` - Small constant for numerical stability
+#[cube]
+pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
+    x: &mut St<F, R, C>,
+    ln_weight: &Rv<F, C>,
+    ln_bias: &Rv<F, C>,
+    #[comptime] epsilon: f32,
+) {
+    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+
+    // Step 1: mean = sum_rows(x) / C
+    let mut mean: Rv<F, R> = plane::sum_st_rows(x);
+    mean.mul_scalar(c_inv);
+
+    // Step 2: x -= mean (col broadcast)
+    x.sub_col(&mean);
+
+    // Step 3: var = sum_rows(x^2) / C using SumSqOp
+    let mut std: Rv<F, R> = plane::reduce_st_rows::<F, R, C, SumSqOp>(x);
+    std.mul_scalar(c_inv);
+
+    // Step 4: std = sqrt(var + epsilon)
+    std.add_scalar(F::cast_from(epsilon));
+    std.sqrt();
+
+    // Step 5: x /= std → x now contains norm
+    x.div_col(&std);
+
+    // Step 6: x = weight * x + bias
+    x.mul_row(ln_weight);
+    x.add_row(ln_bias);
 }
 
 /// Computes layer norm forward and L2 loss gradient backpropagated through layer norm.
@@ -198,182 +263,358 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     x.copy_from(temp);
 }
 
-/// Fused TTT-Linear backward pass kernel.
+/// Extract the last row of a shared memory tile into a register vector.
+/// Cooperative: all threads participate, result is broadcast to all.
+#[cube]
+pub fn extract_last_row<F: Float, R: Dim, C: Dim>(st: &St<F, R, C>) -> Rv<F, C> {
+    // The last row is at index R-1
+    // We read it using plane::sum with a mask that selects only that row
+    // Actually, simpler: each thread can just read the last row
+    let mut result = Rv::<F, C>::new();
+    let last_row = R::VALUE - 1;
+    let vec_stride = C::LINES;
+    let mask = vec_stride - 1;
+
+    #[unroll]
+    for c_line in 0..C::LINES {
+        let phys_col = plane::swizzle(last_row, c_line, mask);
+        let s_idx = last_row * vec_stride + phys_col;
+        result.data[c_line] = st.data[s_idx];
+    }
+    result
+}
+
+/// Fused TTT-Linear forward pass kernel.
 ///
 /// Each CUBE handles one (batch, head) pair.
-/// Thread layout: (head_dim, seq_len)
+/// Computes the TTT-Linear forward pass with online weight updates.
+///
+/// Algorithm:
+/// 1. z1 = xk @ W + b
+/// 2. reconstruction_target = xv - xk
+/// 3. grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
+/// 4. eta_matrix = outer(token_eta, ttt_lr_eta).tril()
+/// 5. attn_scores = xq @ xk^T, attn1 = attn_scores.tril()
+/// 6. b1_bar = bias - eta_matrix @ grad_l_wrt_z1
+/// 7. z1_bar = xq @ W - (eta_matrix * attn1) @ grad_l_wrt_z1 + b1_bar
+/// 8. output = xq + layer_norm(z1_bar)
+/// 9. weight_out = weight - (last_eta_col * xk).T @ grad
+/// 10. bias_out = bias - sum_rows(last_eta_col * grad)
 #[cube(launch)]
-pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
+pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     inputs: Inputs<P::E>,
+    outputs: &mut Outputs<P::E>,
     #[comptime] config: FusedTttConfig,
 ) {
-    let B = inputs.xq.shape(0);
-    let NH = inputs.xq.shape(1);
-    let CS = P::CS::VALUE;
-    let F = P::F::VALUE;
-
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;
 
     let epsilon = comptime!(config.epsilon());
 
-    let mut weight_smem = P::f_f_tile();
-    let mut bias_smem = P::f_vec();
+    // === Allocate shared memory tiles ===
 
+    // Weight: [F, F]
+    let mut weight_smem = P::f_f_tile();
+
+    // Q, K transposed for matmuls: [F, CS]
     let mut q_smem = P::f_cs_tile();
     let mut k_smem = P::f_cs_tile();
-    let mut v_smem = P::f_cs_tile();
 
+    // K and V in original layout for layer norm: [CS, F]
+    let mut k_direct_smem = P::cs_f_tile();
+    let mut v_direct_smem = P::cs_f_tile();
+
+    // Eta vectors in shared memory: [CS]
     let mut token_eta_smem = P::cs_vec();
     let mut ttt_lr_eta_smem = P::cs_vec();
 
-    let mut ln_weight_smem = P::f_vec();
-    let mut ln_bias_smem = P::f_vec();
+    // Working tiles
+    let mut z1_smem = P::cs_f_tile();           // z1, then grad_l_wrt_z1 after layer_norm_l2_grad
+    let mut temp_cs_f_smem = P::cs_f_tile();    // Scratch space
+    let mut eta_matrix_smem = P::cs_cs_tile();  // eta outer product (stored transposed)
+    let mut attn_smem = P::cs_cs_tile();        // attention scores
 
-    let mut z1_smem = P::cs_f_tile();
+    // === Load inputs ===
 
-    let mut grad_l_wrt_z1_smem = P::cs_f_tile();
+    let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
+    let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
+    let base_ttt_lr = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
 
-    let mut bias_bar_smem = P::cs_f_tile();
-    let mut z1_bar_smem = P::cs_f_tile();
+    // Load weight [F, F]
+    plane::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
 
-    let mut eta_matrix_smem = P::cs_cs_tile();
+    // Load Q, K transposed [F, CS] for matmuls
+    plane::load_st_transpose(&inputs.xq, &mut q_smem, base_qkv, 0, 0);
+    plane::load_st_transpose(&inputs.xk, &mut k_smem, base_qkv, 0, 0);
 
-    // // why 16?
-    // let mut ln_smem = Sv::<P::E, D16>::new();
+    // Load K, V direct [CS, F] for layer norm operations
+    plane::load_st_direct(&inputs.xk, &mut k_direct_smem, base_qkv, 0, 0);
+    plane::load_st_direct(&inputs.xv, &mut v_direct_smem, base_qkv, 0, 0);
 
-    // let mut matmul_smem = F::cs_f_tile();
-    // let mut b_acc_smem = F::cs_f_tile();
-
-    plane::load_st_direct(
-        &inputs.weight,
-        &mut weight_smem,
-        index_2d(&inputs.weight, batch_idx, head_idx),
-        0,
-        0,
-    );
-    plane::load_st_direct(
-        &inputs.bias,
-        &mut bias_smem,
-        index_2d(&inputs.bias, batch_idx, head_idx),
-        0,
-        0,
-    );
-    plane::load_st_transpose(
-        &inputs.xq,
-        &mut q_smem,
-        index_2d(&inputs.xq, batch_idx, head_idx),
-        0,
-        0,
-    );
-    plane::load_st_transpose(
-        &inputs.xk,
-        &mut k_smem,
-        index_2d(&inputs.xk, batch_idx, head_idx),
-        0,
-        0,
-    );
-    plane::load_st_transpose(
-        &inputs.xv,
-        &mut v_smem,
-        index_2d(&inputs.xv, batch_idx, head_idx),
-        0,
-        0,
-    );
-    plane::load_st_direct(
-        &inputs.token_eta,
-        &mut token_eta_smem,
-        index_2d(&inputs.token_eta, 0, 0),
-        0,
-        0,
-    );
-    plane::load_st_direct(
-        &inputs.ttt_lr_eta,
-        &mut ttt_lr_eta_smem,
-        index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx),
-        0,
-        0,
-    );
-    plane::load_st_direct(
-        &inputs.ln_weight,
-        &mut ln_weight_smem,
-        index_2d(&inputs.ln_weight, 0, head_idx),
-        0,
-        0,
-    );
-    plane::load_st_direct(
-        &inputs.ln_bias,
-        &mut ln_bias_smem,
-        index_2d(&inputs.ln_bias, 0, head_idx),
-        0,
-        0,
-    );
+    // Load eta vectors [CS] - treat as [CS, 1] tiles
+    plane::load_st_direct(&inputs.token_eta, &mut token_eta_smem, 0, 0, 0);
+    plane::load_st_direct(&inputs.ttt_lr_eta, &mut ttt_lr_eta_smem, base_ttt_lr, 0, 0);
 
     sync_plane();
 
-    let cs_cs_reg = P::cs_cs_reg();
-    let cs_f_reg = P::cs_f_reg();
-    // let mut cs_cs_reg_2 = P::cs_cs_reg();
-    let cs_reg = P::cs_reg();
+    // Load bias into register vectors
+    // Each thread loads the portion relevant to its sub-tile
+    let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
 
-    // z1 = x1 @ W + b
-    let mut z1_reg = cs_cs_reg;
+    // Compute thread's column offset for loading bias
+    let threads_n = P::F::VALUE / P::F_Reg::VALUE;
+    let thread_n = (UNIT_POS as usize) % threads_n;
+    let offset_n = thread_n * P::F_Reg::VALUE;
+
+    let mut bias_reg = P::f_reg();
+    plane::load_rt_direct(&inputs.bias, &mut bias_reg, base_bias, 0, offset_n);
+
+    // Load layer norm params into register vectors
+    // Each thread loads the full ln params for use in row broadcasts
+    let base_ln = index_2d(&inputs.ln_weight, 0, head_idx);
+    let mut ln_weight_rv = Rv::<P::E, P::F>::new();
+    let mut ln_bias_rv = Rv::<P::E, P::F>::new();
+    plane::load_rt_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln, 0, 0);
+    plane::load_rt_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln, 0, 0);
+
+    // === Step 1: z1 = xk @ W + b ===
+    // k_smem is [F, CS], weight_smem is [F, F]
+    // mma_AtB: k^T @ W = [CS, F] @ [F, F] = [CS, F]
+    let mut z1_reg = P::cs_f_reg();
     z1_reg.zero();
     plane::mma_AtB(&mut z1_reg, &k_smem, &weight_smem);
 
-    let mut bias_reg = cs_reg;
-    plane::load_rt_from_st(&bias_smem, &mut bias_reg);
-    z1_reg.add_col(&bias_reg);
-    let cs_reg = bias_reg;
+    // Add bias (broadcast along rows)
+    z1_reg.add_row(&bias_reg);
+
     plane::store_rt_to_st(&z1_reg, &mut z1_smem);
-    let cs_cs_reg = z1_reg;
 
-    // reconstruction_target = v - k
-    v_smem.sub(&k_smem);
-    let reconstruction_target = v_smem;
+    sync_plane();
 
-    // TODO: ln grad
+    // === Step 2: reconstruction_target = xv - xk ===
+    // Both are [CS, F], result stored in v_direct_smem
+    v_direct_smem.sub(&k_direct_smem);
+    // v_direct_smem now contains reconstruction_target
 
-    let mut eta_matrix_reg = cs_cs_reg;
+    sync_plane();
 
-    eta_matrix_reg.zero();
-    let mut token_eta_reg = cs_reg;
+    // === Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target) ===
+    // This overwrites z1_smem with the gradient
+    layer_norm_l2_grad::<P::E, P::CS, P::F>(
+        &mut z1_smem,
+        &v_direct_smem,  // reconstruction_target
+        &ln_weight_rv,
+        &ln_bias_rv,
+        &mut temp_cs_f_smem,
+        epsilon,
+    );
+    // z1_smem now contains grad_l_wrt_z1
+
+    sync_plane();
+
+    // === Step 4: eta_matrix = outer(token_eta, ttt_lr_eta).tril() ===
+    // eta[i,j] = token_eta[j] * ttt_lr_eta[i] for j <= i, else 0
+
+    let mut eta_reg = P::cs_cs_reg();
+    eta_reg.zero();
+
+    // Load eta vectors into registers
+    let mut token_eta_reg = P::cs_reg();
+    let mut ttt_lr_eta_reg = P::cs_reg();
     plane::load_rt_from_st(&token_eta_smem, &mut token_eta_reg);
-    // TODO: May be transposed
-    eta_matrix_reg.add_row(&token_eta_reg);
-    let cs_reg = token_eta_reg;
-
-    let mut ttt_lr_eta_reg = cs_reg;
     plane::load_rt_from_st(&ttt_lr_eta_smem, &mut ttt_lr_eta_reg);
-    // TODO: May be transposed
-    eta_matrix_reg.mul_col(&ttt_lr_eta_reg);
-    let cs_reg = ttt_lr_eta_reg;
 
-    plane::store_rt_to_st(&eta_matrix_reg, &mut eta_matrix_smem);
+    // eta[i,j] = token_eta[j] * ttt_lr_eta[i]
+    // token_eta broadcasts along rows: eta[i,j] = token_eta[j]
+    eta_reg.add_row(&token_eta_reg);
+    // Multiply by ttt_lr_eta along cols: eta[i,j] *= ttt_lr_eta[i]
+    eta_reg.mul_col(&ttt_lr_eta_reg);
 
-    // TODO: eta_matrix.tril
+    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
 
-    let mut attn_scores = P::cs_cs_reg();
+    sync_plane();
 
-    // TODO, may need a transpose on one side
-    plane::mma_AtB(&mut attn_scores, &q_smem, &k_smem);
+    // Apply lower triangular mask
+    eta_matrix_smem.tril();
 
-    // TODO: attn_scores.tril
+    sync_plane();
 
-    let mut bias_bar_reg = cs_f_reg;
-    bias_bar_reg.zero();
-    plane::mma_AtB(&mut bias_bar_reg, &eta_matrix_smem, &grad_l_wrt_z1_smem);
-    bias_bar_reg.neg();
+    // === Step 5: attn_scores = xq @ xk^T, attn1 = attn_scores.tril() ===
+    // q_smem [F, CS], k_smem [F, CS]
+    // mma_AtB: q^T @ k = [CS, F] @ [F, CS] = [CS, CS]
+    let mut attn_reg = P::cs_cs_reg();
+    attn_reg.zero();
+    plane::mma_AtB(&mut attn_reg, &q_smem, &k_smem);
 
-    let mut bias_reg = cs_reg;
-    plane::load_rt_from_st(&bias_smem, &mut bias_reg);
-    bias_bar_reg.add_col(&bias_reg);
-    let cs_reg = bias_reg;
+    plane::store_rt_to_st(&attn_reg, &mut attn_smem);
 
-    plane::store_rt_to_st(&bias_bar_reg, &mut bias_bar_smem);
-    let cs_f_reg = bias_bar_reg;
+    sync_plane();
 
-    // let mut z1_bar_reg = cs_f_reg;
+    // Apply lower triangular mask
+    attn_smem.tril();
+
+    sync_plane();
+
+    // === Step 6 & 7: Compute z1_bar ===
+    // b1_bar = bias - eta_matrix @ grad_l_wrt_z1      [CS, F]
+    // z1_bar = xq @ W - (eta_matrix * attn1) @ grad + b1_bar
+
+    // Recompute eta in original (non-transposed) lower triangular form
+    // eta[i,j] = token_eta[j] * ttt_lr_eta[i] for j <= i
+    eta_reg.zero();
+    eta_reg.add_row(&token_eta_reg);  // eta[i,j] = token_eta[j]
+    eta_reg.mul_col(&ttt_lr_eta_reg); // eta[i,j] *= ttt_lr_eta[i]
+    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+
+    sync_plane();
+
+    eta_matrix_smem.tril();
+
+    sync_plane();
+
+    // Compute eta @ grad using mma_AB (eta is [CS, CS], grad is [CS, F])
+    let mut eta_grad_reg = P::cs_f_reg();
+    eta_grad_reg.zero();
+    plane::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
+
+    // Compute eta * attn (elementwise, both lower triangular)
+    eta_matrix_smem.mul(&attn_smem);
+
+    sync_plane();
+
+    // Compute (eta * attn) @ grad using mma_AB
+    let mut eta_attn_grad_reg = P::cs_f_reg();
+    eta_attn_grad_reg.zero();
+    plane::mma_AB(&mut eta_attn_grad_reg, &eta_matrix_smem, &z1_smem);
+
+    // z1_bar = xq @ W
+    let mut z1_bar_reg = P::cs_f_reg();
+    z1_bar_reg.zero();
+    plane::mma_AtB(&mut z1_bar_reg, &q_smem, &weight_smem);
+
+    // z1_bar -= (eta * attn) @ grad
+    z1_bar_reg.sub(&eta_attn_grad_reg);
+
+    // z1_bar += bias (broadcast)
+    z1_bar_reg.add_row(&bias_reg);
+
+    // z1_bar -= eta @ grad
+    z1_bar_reg.sub(&eta_grad_reg);
+
+    // Store z1_bar to shared memory for layer norm
+    plane::store_rt_to_st(&z1_bar_reg, &mut temp_cs_f_smem);
+
+    sync_plane();
+
+    // === Step 8: output = xq + layer_norm(z1_bar) ===
+    layer_norm_forward::<P::E, P::CS, P::F>(
+        &mut temp_cs_f_smem,
+        &ln_weight_rv,
+        &ln_bias_rv,
+        epsilon,
+    );
+    // temp_cs_f_smem now contains z1_bar_normalized
+
+    sync_plane();
+
+    // Add xq (need to load it in [CS, F] layout)
+    // We can reuse k_direct_smem since we're done with it
+    plane::load_st_direct(&inputs.xq, &mut k_direct_smem, base_qkv, 0, 0);
+
+    sync_plane();
+
+    // output = xq + z1_bar_normalized
+    temp_cs_f_smem.add(&k_direct_smem);
+
+    sync_plane();
+
+    // Store output
+    let base_output = index_2d(&outputs.output, batch_idx, head_idx);
+    plane::store_st_direct(&temp_cs_f_smem, &mut outputs.output, base_output, 0, 0);
+
+    // === Step 9 & 10: Weight and bias state updates ===
+    // weight_out = weight - (last_eta_col * xk).T @ grad
+    // bias_out = bias - sum_rows(last_eta_col * grad)
+
+    // Extract last row of eta_matrix (before it was multiplied by attn)
+    // We need to recompute eta since we modified eta_matrix_smem
+    eta_reg.zero();
+    eta_reg.add_row(&token_eta_reg);
+    eta_reg.mul_col(&ttt_lr_eta_reg);
+    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+
+    sync_plane();
+
+    eta_matrix_smem.tril();
+
+    sync_plane();
+
+    // Extract last row of eta as a column vector
+    let last_eta_col: Rv<P::E, P::CS> = extract_last_row(&eta_matrix_smem);
+
+    // Reload k_direct for weight update (we overwrote it with xq earlier)
+    plane::load_st_direct(&inputs.xk, &mut k_direct_smem, base_qkv, 0, 0);
+
+    sync_plane();
+
+    // Scale k by last_eta_col: k_direct[i, :] *= last_eta_col[i]
+    k_direct_smem.mul_col(&last_eta_col);
+
+    sync_plane();
+
+    // weight_update = (scaled_k).T @ grad = [F, CS] @ [CS, F] = [F, F]
+    // Use mma_AtB: k_direct is [CS, F], z1_smem (grad) is [CS, F]
+    // mma_AtB(result, A, B) computes A.T @ B where A is [K, M], B is [K, N]
+    // Here: A = k_direct [CS, F], B = z1_smem [CS, F]
+    // Result = k_direct.T @ z1_smem = [F, CS] @ [CS, F] = [F, F]
+    let mut weight_update_reg = P::f_f_reg();
+    weight_update_reg.zero();
+    plane::mma_AtB(&mut weight_update_reg, &k_direct_smem, &z1_smem);
+
+    // Subtract from weight: weight_out = weight - weight_update
+    // First load weight into temp tile, then subtract and store
+    let mut weight_out_reg = P::f_f_reg();
+    plane::load_rt_from_st(&weight_smem, &mut weight_out_reg);
+    weight_out_reg.sub(&weight_update_reg);
+
+    // Store updated weight
+    plane::store_rt_to_st(&weight_out_reg, &mut weight_smem);
+
+    sync_plane();
+
+    let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
+    plane::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
+
+    // Bias update: bias_out = bias - sum_rows(last_eta_col * grad)
+    // Scale grad by last_eta_col: temp[i, :] = grad[i, :] * last_eta_col[i]
+    temp_cs_f_smem.copy_from(&z1_smem);
+    temp_cs_f_smem.mul_col(&last_eta_col);
+
+    sync_plane();
+
+    // Sum rows to get bias update: [F]
+    let bias_update: Rv<P::E, P::F> = plane::sum_st_cols(&temp_cs_f_smem);
+
+    // Compute bias_out = bias - bias_update
+    // Each thread has its portion of bias in bias_reg
+    // But sum_st_cols gives the full [F] vector to all threads
+    // We need to subtract the corresponding portion
+
+    // Reload original bias into a full shared memory vector for subtraction
+    let mut bias_out_smem = P::f_vec();
+    plane::load_st_direct(&inputs.bias, &mut bias_out_smem, base_bias, 0, 0);
+
+    sync_plane();
+
+    // Subtract bias_update from bias_out_smem
+    // For Sv<E, F> = St<E, F, D1>, we use sub_col since the vector is stored as F rows x 1 col
+    bias_out_smem.sub_col(&bias_update);
+
+    sync_plane();
+
+    // Store updated bias
+    let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
+    plane::store_st_direct(&bias_out_smem, &mut outputs.bias_out, base_bias_out, 0, 0);
 }
 
 #[cfg(test)]
