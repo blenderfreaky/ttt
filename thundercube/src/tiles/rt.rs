@@ -46,28 +46,28 @@ impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
     }
 
     pub fn apply_unary_op<O: UnaryOp<F>>(&mut self, op: O) {
-        #[unroll]
+        #[unroll(self.len <= UNROLL_LIMIT)]
         for i in 0..self.len {
             self.data[i] = op.apply(self.data[i]);
         }
     }
 
     pub fn apply_binary_op<O: BinaryOp<F>>(&mut self, op: O, other: &Rt<F, R, C>) {
-        #[unroll]
+        #[unroll(self.len <= UNROLL_LIMIT)]
         for i in 0..self.len {
             self.data[i] = op.apply(self.data[i], other.data[i]);
         }
     }
 
     pub fn copy_from_array(&mut self, array: &Array<Line<F>>) {
-        #[unroll]
+        #[unroll(self.len <= UNROLL_LIMIT)]
         for i in 0..self.len {
             self.data[i] = array[i];
         }
     }
 
     pub fn copy_to_array(&self, array: &mut Array<Line<F>>) {
-        #[unroll]
+        #[unroll(self.len <= UNROLL_LIMIT)]
         for i in 0..self.len {
             array[i] = self.data[i];
         }
@@ -78,9 +78,9 @@ impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
 #[cube]
 impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     pub fn apply_row_broadcast<O: BinaryOp<F>>(&mut self, op: O, row: &Rv<F, C>) {
-        #[unroll]
+        #[unroll(R::VALUE <= UNROLL_LIMIT)]
         for r in 0..R::VALUE {
-            #[unroll]
+            #[unroll(C::LINES <= UNROLL_LIMIT)]
             for c in 0..C::LINES {
                 let idx = r * comptime!(C::LINES) + c;
                 self.data[idx] = op.apply(self.data[idx], row.data[c]);
@@ -89,7 +89,7 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     }
 
     pub fn apply_col_broadcast<O: BinaryOp<F>>(&mut self, op: O, col: &Rv<F, R>) {
-        #[unroll]
+        #[unroll(R::LINES <= UNROLL_LIMIT)]
         for r_line in 0..R::LINES {
             let col_gathered = col.data[r_line];
 
@@ -98,7 +98,7 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
                 let row = r_line * LINE_SIZE + i;
                 let broadcast = Line::<F>::empty(LINE_SIZE).fill(col_gathered[i]);
 
-                #[unroll]
+                #[unroll(C::LINES <= UNROLL_LIMIT)]
                 for c in 0..C::LINES {
                     let idx = row * comptime!(C::LINES) + c;
                     self.data[idx] = op.apply(self.data[idx], broadcast);
@@ -110,7 +110,7 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     pub fn reduce_rows<O: ReductionOp<F>>(&self) -> Rv<F, R> {
         let mut result = Rv::<F, R>::new();
 
-        #[unroll]
+        #[unroll(R::LINES <= UNROLL_LIMIT)]
         for r_line in 0..R::LINES {
             let mut out_line = Line::<F>::empty(LINE_SIZE);
 
@@ -119,7 +119,7 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
                 let r = r_line * LINE_SIZE + i;
 
                 let mut acc = O::identity();
-                #[unroll]
+                #[unroll(C::LINES <= UNROLL_LIMIT)]
                 for c_line in 0..C::LINES {
                     acc = O::combine(acc, self.data[r * comptime!(C::LINES) + c_line]);
                 }
@@ -133,11 +133,11 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
     pub fn reduce_cols<O: ReductionOp<F>>(&self) -> Rv<F, C> {
         let mut result = Rv::<F, C>::new();
 
-        #[unroll]
+        #[unroll(C::LINES <= UNROLL_LIMIT)]
         for c_line in 0..C::LINES {
             let mut acc = O::identity();
 
-            #[unroll]
+            #[unroll(R::VALUE <= UNROLL_LIMIT)]
             for r in 0..R::VALUE {
                 acc = O::combine(acc, self.data[r * comptime!(C::LINES) + c_line]);
             }

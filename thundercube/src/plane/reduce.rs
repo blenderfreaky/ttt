@@ -18,7 +18,7 @@ pub fn reduce_st_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 
     let mut result = Rv::<F, C>::new();
 
-    #[unroll]
+    #[unroll(C::LINES <= UNROLL_LIMIT)]
     for c_line in 0..C::LINES {
         // Each thread accumulates strided rows for this column
         let mut acc = O::identity();
@@ -50,7 +50,7 @@ pub fn reduce_st_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 
     let mut result = Rv::<F, R>::new();
 
-    #[unroll]
+    #[unroll(R::LINES <= UNROLL_LIMIT)]
     for r_line in 0..R::LINES {
         let mut out_line = Line::<F>::empty(LINE_SIZE);
 

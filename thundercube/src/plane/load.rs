@@ -28,11 +28,11 @@ pub fn load_rt_from_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     let s_stride = SC::LINES;
     let mask = s_stride - 1;
 
-    #[unroll]
+    #[unroll(R::VALUE <= UNROLL_LIMIT)]
     for row in 0..rt_rows {
         let s_row = offset_row + row;
 
-        #[unroll]
+        #[unroll(C::LINES <= UNROLL_LIMIT)]
         for cv in 0..num_c_vecs {
             let s_col_vec = offset_col_vec + cv;
             let phys_col = swizzle(s_row, s_col_vec, mask);
@@ -187,10 +187,10 @@ pub fn load_rt_direct<F: Float, R: Dim, C: Dim>(
     let num_cols = g_mem.shape(rank - 1);
     let row_stride = g_mem.stride(rank - 2);
 
-    #[unroll]
+    #[unroll(R::VALUE <= UNROLL_LIMIT)]
     for row in 0..rt_rows {
         let g_r = g_offset_row + row;
-        #[unroll]
+        #[unroll(C::LINES <= UNROLL_LIMIT)]
         for nl in 0..num_n_vecs {
             let g_c = g_offset_col + nl * LINE_SIZE;
             let rt_idx = row * num_n_vecs + nl;
@@ -294,7 +294,7 @@ pub fn load_sv_direct<F: Float, L: Dim>(
 /// Each thread copies all L/LINE_SIZE Lines.
 #[cube]
 pub fn load_rv_from_sv<F: Float, L: Dim>(s_mem: &Sv<F, L>, r_mem: &mut Rv<F, L>) {
-    #[unroll]
+    #[unroll(L::LINES <= UNROLL_LIMIT)]
     for i in 0..L::LINES {
         r_mem.data[i] = s_mem.data[i];
     }
@@ -315,7 +315,7 @@ pub fn load_rv_direct<F: Float, L: Dim>(
     r_mem: &mut Rv<F, L>,
     base_offset: usize,
 ) {
-    #[unroll]
+    #[unroll(L::LINES <= UNROLL_LIMIT)]
     for i in 0..L::LINES {
         let line_idx = base_offset / LINE_SIZE + i;
         r_mem.data[i] = g_mem[line_idx];

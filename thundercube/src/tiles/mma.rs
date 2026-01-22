@@ -43,7 +43,7 @@ pub fn mma_AtB_rt<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
     let b_mask = b_stride - 1;
 
     for k in 0..k_dim {
-        #[unroll]
+        #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
         for nl in 0..num_n_vecs {
             // B-Vector: row k, column (offset_n + nl) in Lines
             let b_col = offset_n + nl;
@@ -51,7 +51,7 @@ pub fn mma_AtB_rt<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
             let b_idx = k * b_stride + b_phys_col;
             let b_vec = b.data[b_idx];
 
-            #[unroll]
+            #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
             for ml in 0..num_m_vecs {
                 // A-Vector: row k, column (offset_m + ml) in Lines
                 let a_col = offset_m + ml;
@@ -118,7 +118,7 @@ pub fn mma_AB_rt<F: Float, CM: Dim, CN: Dim, AM: Dim, K: Dim, BN: Dim>(
         let k_elem = k % LINE_SIZE;
 
         // For each output column (vectorized)
-        #[unroll]
+        #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
         for nl in 0..num_n_vecs {
             // B[k, n]: row k, column (offset_n + nl) in Lines
             let b_col = offset_n + nl;
@@ -127,7 +127,7 @@ pub fn mma_AB_rt<F: Float, CM: Dim, CN: Dim, AM: Dim, K: Dim, BN: Dim>(
             let b_vec = b.data[b_idx];
 
             // For each output row (vectorized)
-            #[unroll]
+            #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
             for ml in 0..num_m_vecs {
                 #[unroll]
                 for mi in 0..LINE_SIZE {

@@ -33,11 +33,11 @@ pub fn store_rt_to_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     let s_stride = SC::LINES;
     let mask = s_stride - 1;
 
-    #[unroll]
+    #[unroll(R::VALUE <= UNROLL_LIMIT)]
     for row in 0..rt_rows {
         let s_row = offset_row + row;
 
-        #[unroll]
+        #[unroll(C::LINES <= UNROLL_LIMIT)]
         for cv in 0..num_c_vecs {
             let s_col_vec = offset_col_vec + cv;
             let phys_col = swizzle(s_row, s_col_vec, mask);
@@ -189,11 +189,11 @@ pub fn store_rt_direct<F: Float, R: Dim, C: Dim>(
     let num_cols = g_mem.shape(rank - 1);
     let row_stride = g_mem.stride(rank - 2);
 
-    #[unroll]
+    #[unroll(R::VALUE <= UNROLL_LIMIT)]
     for row in 0..rt_rows {
         let g_r = g_offset_row + row;
         if g_r < num_rows {
-            #[unroll]
+            #[unroll(C::LINES <= UNROLL_LIMIT)]
             for nl in 0..num_n_vecs {
                 let g_c = g_offset_col + nl * LINE_SIZE;
                 if g_c < num_cols {
@@ -308,7 +308,7 @@ pub fn store_rv_direct<F: Float, L: Dim>(
 ) {
     // Only one thread needs to write (all have same data)
     if UNIT_POS == 0 {
-        #[unroll]
+        #[unroll(L::LINES <= UNROLL_LIMIT)]
         for i in 0..L::LINES {
             let line_idx = base_offset / LINE_SIZE + i;
             g_mem[line_idx] = r_mem.data[i];
