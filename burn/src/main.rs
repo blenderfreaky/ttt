@@ -10,7 +10,7 @@ use burn::config::Config;
 use burn::optim::AdamConfig;
 use data::{Tokenizer, TokenizerTrait};
 use training::TTTTrainingConfig;
-use ttt::{TTTConfig, TTTLayerType, TrainingBackend};
+use ttt::{PositionEncodingType, TTTConfig, TTTLayerType, TrainingBackend};
 
 /// Load a tokenizer from a HuggingFace model name or local file path.
 fn load_tokenizer(identifier: &str) -> Tokenizer {
@@ -71,6 +71,27 @@ enum InnerModel {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, Default)]
+enum PosEncoding {
+    /// Rotary Position Embeddings applied to Q/K
+    #[default]
+    Rope,
+    /// No position encoding
+    None,
+    /// Learned absolute position embeddings
+    Absolute,
+}
+
+impl PosEncoding {
+    fn to_pos_encoding_type(self) -> PositionEncodingType {
+        match self {
+            PosEncoding::Rope => PositionEncodingType::RoPE,
+            PosEncoding::None => PositionEncodingType::None,
+            PosEncoding::Absolute => PositionEncodingType::Absolute,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, Default)]
 enum ModelSize {
     // -- custom --
     /// 20M parameter model
@@ -103,6 +124,10 @@ struct TrainArgs {
     /// Inner model type
     #[arg(long, default_value = "fused-linear")]
     inner: InnerModel,
+
+    /// Position encoding type
+    #[arg(long, default_value = "rope")]
+    pos_encoding: PosEncoding,
 
     /// Model size
     #[arg(long, default_value = "tiny")]
@@ -218,6 +243,7 @@ impl TrainArgs {
             .size
             .to_ttt_config(vocab_size)
             .with_layer_type(self.inner.to_layer_type())
+            .with_pos_encoding(self.pos_encoding.to_pos_encoding_type())
             .with_mini_batch_size(self.mini_batch_size)
             .with_base_lr(self.ttt_base_lr)
             .with_max_seq_len(self.seq_len)
