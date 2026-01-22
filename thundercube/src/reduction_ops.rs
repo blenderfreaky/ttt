@@ -4,11 +4,28 @@ use cubecl::prelude::*;
 
 #[cube]
 pub trait ReductionOp<F: Float> {
+    /// Identity element as a Line (e.g., all zeros for sum)
     fn identity() -> Line<F>;
+    /// Combine two Lines element-wise
     fn combine(a: Line<F>, b: Line<F>) -> Line<F>;
+    /// Reduce a Line to a scalar
     fn finalize(line: Line<F>) -> F;
+    /// Plane-level (warp) reduction of a scalar, broadcasts result to all threads
+    fn plane_reduce(val: F) -> F;
 }
 
+/// Plane-level reduction of a Line (reduces each lane separately across threads)
+#[cube]
+pub fn plane_reduce_line<F: Float, O: ReductionOp<F>>(line: Line<F>) -> Line<F> {
+    let mut result = Line::<F>::empty(LINE_SIZE);
+    result[0] = O::plane_reduce(line[0]);
+    result[1] = O::plane_reduce(line[1]);
+    result[2] = O::plane_reduce(line[2]);
+    result[3] = O::plane_reduce(line[3]);
+    result
+}
+
+#[macro_export]
 macro_rules! impl_reduction_ops {
     {
     $(
@@ -16,6 +33,7 @@ macro_rules! impl_reduction_ops {
             identity => $identity:expr;
             combine($a:ident, $b:ident) => $combine:expr;
             finalize($line:ident) => $finalize:expr;
+            plane_reduce($val:ident) => $plane_reduce:expr;
         }
     )+
     } => {
@@ -43,6 +61,10 @@ macro_rules! impl_reduction_ops {
                 fn finalize($line: Line<$t>) -> $t {
                     $finalize
                 }
+
+                fn plane_reduce($val: $t) -> $t {
+                    $plane_reduce
+                }
             }
         }
     )+
@@ -57,6 +79,7 @@ macro_rules! impl_reduction_convenience_fns {
                 identity => $identity:expr;
                 combine($a:ident, $b:ident) => $combine:expr;
                 finalize($line:ident) => $finalize:expr;
+                plane_reduce($val:ident) => $plane_reduce:expr;
             }
         )+
     }
@@ -87,6 +110,7 @@ macro_rules! with_reduction_ops {
                 identity => Line::<F>::empty(LINE_SIZE).fill(F::new(0.0));
                 combine(a, b) => a + b;
                 finalize(line) => line[0] + line[1] + line[2] + line[3];
+                plane_reduce(val) => plane_sum(val);
             }
         }
     };

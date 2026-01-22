@@ -105,11 +105,13 @@ with_binary_ops!(impl_binary_ops;);
 with_binary_ops!(impl_binary_convenience_fns; for Rt);
 with_binary_ops!(impl_binary_convenience_fns; for St);
 with_binary_ops!(impl_broadcast_convenience_fns; for Rt);
+with_binary_ops!(impl_broadcast_convenience_fns; for St);
 
 #[cfg(test)]
 mod tests {
     use crate::binary_ops::*;
     use crate::test_utils::TestFloat;
+    use test_case::test_matrix;
 
     macro_rules! generate_binary_kernel {
         ($name:ident, $method:ident) => {
@@ -368,6 +370,133 @@ mod tests {
 
             assert_eq!(
                 test_mul_col_kernel(a(), col(), output()) for (1, 1, 1) @ (1),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() * col[r].into_f64());
+                        }
+                    }
+                }
+            );
+        }
+    }
+
+    // ==================== ST BROADCAST TESTS ====================
+
+    macro_rules! generate_st_row_broadcast_kernel {
+        ($name:ident, $method:ident) => {
+            #[cube(launch)]
+            fn $name<F: Float + CubeElement>(
+                a: &Tensor<Line<F>>,
+                row: &Array<Line<F>>,
+                output: &mut Tensor<Line<F>>,
+            ) {
+                let mut st = St::<F, D8, D8>::new();
+                let mut rv_row = Rv::<F, D8>::new();
+
+                rv_row.copy_from_array(row);
+                crate::plane::load_st_direct(a, &mut st, 0, 0, 0);
+
+                st.$method(&rv_row);
+
+                crate::plane::store_st_direct(&st, output, 0, 0, 0);
+            }
+        };
+    }
+
+    macro_rules! generate_st_col_broadcast_kernel {
+        ($name:ident, $method:ident) => {
+            #[cube(launch)]
+            fn $name<F: Float + CubeElement>(
+                a: &Tensor<Line<F>>,
+                col: &Array<Line<F>>,
+                output: &mut Tensor<Line<F>>,
+            ) {
+                let mut st = St::<F, D8, D8>::new();
+                let mut rv_col = Rv::<F, D8>::new();
+
+                rv_col.copy_from_array(col);
+                crate::plane::load_st_direct(a, &mut st, 0, 0, 0);
+
+                st.$method(&rv_col);
+
+                crate::plane::store_st_direct(&st, output, 0, 0, 0);
+            }
+        };
+    }
+
+    generate_st_row_broadcast_kernel!(test_st_add_row_kernel, add_row);
+    generate_st_row_broadcast_kernel!(test_st_mul_row_kernel, mul_row);
+    generate_st_col_broadcast_kernel!(test_st_add_col_kernel, add_col);
+    generate_st_col_broadcast_kernel!(test_st_mul_col_kernel, mul_col);
+
+    test_kernel! {
+        #[test_matrix([1, 4, 32, 64])]
+        fn test_st_add_row(threads: usize) for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let row: Array = [COLS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_st_add_row_kernel(a(), row(), output()) for (1, 1, 1) @ (threads),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() + row[c].into_f64());
+                        }
+                    }
+                }
+            );
+        }
+
+        #[test_matrix([1, 4, 32, 64])]
+        fn test_st_mul_row(threads: usize) for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let row: Array = [COLS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_st_mul_row_kernel(a(), row(), output()) for (1, 1, 1) @ (threads),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() * row[c].into_f64());
+                        }
+                    }
+                }
+            );
+        }
+
+        #[test_matrix([1, 4, 32, 64])]
+        fn test_st_add_col(threads: usize) for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let col: Array = [ROWS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_st_add_col_kernel(a(), col(), output()) for (1, 1, 1) @ (threads),
+                {
+                    for r in 0..ROWS {
+                        for c in 0..COLS {
+                            let idx = r * COLS + c;
+                            output[idx] = F::from_f64(a[idx].into_f64() + col[r].into_f64());
+                        }
+                    }
+                }
+            );
+        }
+
+        #[test_matrix([1, 4, 32, 64])]
+        fn test_st_mul_col(threads: usize) for F in all {
+            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let col: Array = [ROWS] as Uniform(-10.0, 10.0);
+            let output: Array = [ROWS * COLS];
+
+            assert_eq!(
+                test_st_mul_col_kernel(a(), col(), output()) for (1, 1, 1) @ (threads),
                 {
                     for r in 0..ROWS {
                         for c in 0..COLS {

@@ -10,9 +10,9 @@ pub mod tiles;
 pub mod unary_ops;
 pub mod util;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 #[macro_use]
-mod test_utils;
+pub mod test_utils;
 
 // We could parametrize this
 // but right now it's not worth the effort

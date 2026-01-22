@@ -2,6 +2,22 @@ use cubecl::{prelude::*, std::ReinterpretSliceMut};
 
 use crate::LINE_SIZE;
 
+/// Synchronizes at least within a plane (warp).
+/// Uses `sync_plane()` on CUDA (lighter weight), falls back to `sync_cube()` on other backends.
+#[cfg(feature = "cuda")]
+#[cube]
+pub fn sync_planes() {
+    sync_plane();
+}
+
+/// Synchronizes at least within a plane (warp).
+/// Uses `sync_plane()` on CUDA (lighter weight), falls back to `sync_cube()` on other backends.
+#[cfg(not(feature = "cuda"))]
+#[cube]
+pub fn sync_planes() {
+    sync_cube();
+}
+
 // This is ugly, but it works
 // CubeCL doesn't like [Line<F>; LINE_SIZE]
 // so we have to do this monstrosity

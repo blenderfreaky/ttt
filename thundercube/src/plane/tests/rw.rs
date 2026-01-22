@@ -61,8 +61,8 @@ fn rw_rt_st<F: Float, TileM: Dim, TileN: Dim, RtM: Dim, RtN: Dim>(
 }
 
 test_kernel! {
-    #[test_matrix([4, 32], [4, 32])]
-    fn test_rw_direct(rows: usize, cols: usize) for
+    #[test_matrix([4, 32], [4, 32], [1, 4, 32, 64])]
+    fn test_rw_direct(rows: usize, cols: usize, threads: usize) for
         F in all
         TileM in [D4]
         TileN in [D4]
@@ -71,15 +71,15 @@ test_kernel! {
         let output: Tensor = [rows, cols];
 
         assert_eq!(
-            rw_direct(input(), output()) for (rows/TileM::VALUE, cols/TileN::VALUE, 1) @ max(1),
+            rw_direct(input(), output()) for (rows/TileM::VALUE, cols/TileN::VALUE, 1) @ (threads),
             {
                 output.copy_from_slice(&input);
             }
         );
     }
 
-    #[test_matrix([4, 32], [4, 32])]
-    fn test_rw_transpose(rows: usize, cols: usize) for
+    #[test_matrix([4, 32], [4, 32], [1, 4, 32, 64])]
+    fn test_rw_transpose(rows: usize, cols: usize, threads: usize) for
         F in all
         TileM in [D4]
         TileN in [D4]
@@ -88,13 +88,14 @@ test_kernel! {
         let output: Tensor = [rows, cols];
 
         assert_eq!(
-            rw_transpose(input(), output()) for (rows/TileM::VALUE, cols/TileN::VALUE, 1) @ max(1),
+            rw_transpose(input(), output()) for (rows/TileM::VALUE, cols/TileN::VALUE, 1) @ (threads),
             {
                 output.copy_from_slice(&input);
             }
         );
     }
 
+    // Thread count fixed: must equal (TileM/RtM) * (TileN/RtN) for Rt<->St mapping
     #[test_matrix([4, 16], [4, 16])]
     fn test_rw_rt_st(rows: usize, cols: usize) for
         F in all
