@@ -111,10 +111,156 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
             self.data[i] = other.data[i];
         }
     }
+
+    /// Zero elements above the diagonal (keep lower triangular).
+    /// For element (r, c): keep if c <= r, zero if c > r.
+    /// Cooperative: all threads participate.
+    pub fn tril(&mut self) {
+        let num_threads = CUBE_DIM as usize;
+        let tid = UNIT_POS as usize;
+
+        let vec_stride = C::LINES;
+        let mask = vec_stride - 1;
+        let zero = F::new(0.0);
+
+        for i in range_stepped(tid, R::VALUE * vec_stride, num_threads) {
+            let r = i / vec_stride;
+            let c_line = i % vec_stride;
+            let phys_col = swizzle(r, c_line, mask);
+            let s_idx = r * vec_stride + phys_col;
+
+            let mut line = self.data[s_idx];
+
+            let c_base = c_line * LINE_SIZE;
+            if c_base + 0 > r {
+                line[0] = zero;
+            }
+            if c_base + 1 > r {
+                line[1] = zero;
+            }
+            if c_base + 2 > r {
+                line[2] = zero;
+            }
+            if c_base + 3 > r {
+                line[3] = zero;
+            }
+
+            self.data[s_idx] = line;
+        }
+    }
+
+    /// Zero elements below the diagonal (keep upper triangular).
+    /// For element (r, c): keep if c >= r, zero if c < r.
+    /// Cooperative: all threads participate.
+    pub fn triu(&mut self) {
+        let num_threads = CUBE_DIM as usize;
+        let tid = UNIT_POS as usize;
+
+        let vec_stride = C::LINES;
+        let mask = vec_stride - 1;
+        let zero = F::new(0.0);
+
+        for i in range_stepped(tid, R::VALUE * vec_stride, num_threads) {
+            let r = i / vec_stride;
+            let c_line = i % vec_stride;
+            let phys_col = swizzle(r, c_line, mask);
+            let s_idx = r * vec_stride + phys_col;
+
+            let mut line = self.data[s_idx];
+
+            let c_base = c_line * LINE_SIZE;
+            if c_base + 0 < r {
+                line[0] = zero;
+            }
+            if c_base + 1 < r {
+                line[1] = zero;
+            }
+            if c_base + 2 < r {
+                line[2] = zero;
+            }
+            if c_base + 3 < r {
+                line[3] = zero;
+            }
+
+            self.data[s_idx] = line;
+        }
+    }
 }
 
 impl<F: Float, R: Dim, C: Dim> Default for St<F, R, C> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::TestFloat;
+    use crate::util::sync_planes;
+
+    const SIZE: usize = 8;
+
+    #[cube(launch)]
+    fn test_tril_kernel<F: Float + CubeElement>(
+        input: &Array<Line<F>>,
+        output: &mut Array<Line<F>>,
+    ) {
+        let mut st = St::<F, D8, D8>::new();
+
+        // Load input into St (with swizzle)
+        let tid = UNIT_POS as usize;
+        let num_threads = CUBE_DIM as usize;
+        let vec_stride = D8::LINES;
+        let mask = vec_stride - 1;
+
+        for i in range_stepped(tid, D8::VALUE * vec_stride, num_threads) {
+            let r = i / vec_stride;
+            let c_line = i % vec_stride;
+            let phys_col = swizzle(r, c_line, mask);
+            let s_idx = r * vec_stride + phys_col;
+            st.data[s_idx] = input[i];
+        }
+
+        sync_planes();
+
+        st.tril();
+
+        sync_planes();
+
+        // Read back from St (with swizzle)
+        for i in range_stepped(tid, D8::VALUE * vec_stride, num_threads) {
+            let r = i / vec_stride;
+            let c_line = i % vec_stride;
+            let phys_col = swizzle(r, c_line, mask);
+            let s_idx = r * vec_stride + phys_col;
+            output[i] = st.data[s_idx];
+        }
+    }
+
+    test_kernel! {
+        #[test]
+        fn test_tril() for F in all {
+            let input: Array = [SIZE * SIZE] as Uniform(-10.0, 10.0);
+            let output: Array = [SIZE * SIZE];
+
+            assert_eq!(
+                test_tril_kernel(input(), output()) for (1, 1, 1) @ (32),
+                {
+                    for r in 0..SIZE {
+                        for c in 0..SIZE {
+                            let idx = r * SIZE + c;
+                            if c <= r {
+                                // Lower triangular: keep original value
+                                output[idx] = input[idx];
+                            } else {
+                                // Upper triangular: zero
+                                output[idx] = F::from_f64(0.0);
+                            }
+                        }
+                    }
+                }
+            );
+        }
     }
 }
