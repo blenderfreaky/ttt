@@ -434,9 +434,9 @@ mod tests {
     test_kernel! {
         #[test_matrix([1, 4, 32, 64])]
         fn test_st_add_row(threads: usize) for F in all {
-            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let a: Tensor = [ROWS, COLS] as Uniform(-10.0, 10.0);
             let row: Array = [COLS] as Uniform(-10.0, 10.0);
-            let output: Array = [ROWS * COLS];
+            let output: Tensor = [ROWS, COLS];
 
             assert_eq!(
                 test_st_add_row_kernel(a(), row(), output()) for (1, 1, 1) @ (threads),
@@ -453,9 +453,9 @@ mod tests {
 
         #[test_matrix([1, 4, 32, 64])]
         fn test_st_mul_row(threads: usize) for F in all {
-            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let a: Tensor = [ROWS, COLS] as Uniform(-10.0, 10.0);
             let row: Array = [COLS] as Uniform(-10.0, 10.0);
-            let output: Array = [ROWS * COLS];
+            let output: Tensor = [ROWS, COLS];
 
             assert_eq!(
                 test_st_mul_row_kernel(a(), row(), output()) for (1, 1, 1) @ (threads),
@@ -472,9 +472,9 @@ mod tests {
 
         #[test_matrix([1, 4, 32, 64])]
         fn test_st_add_col(threads: usize) for F in all {
-            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let a: Tensor = [ROWS, COLS] as Uniform(-10.0, 10.0);
             let col: Array = [ROWS] as Uniform(-10.0, 10.0);
-            let output: Array = [ROWS * COLS];
+            let output: Tensor = [ROWS, COLS];
 
             assert_eq!(
                 test_st_add_col_kernel(a(), col(), output()) for (1, 1, 1) @ (threads),
@@ -491,9 +491,9 @@ mod tests {
 
         #[test_matrix([1, 4, 32, 64])]
         fn test_st_mul_col(threads: usize) for F in all {
-            let a: Array = [ROWS * COLS] as Uniform(-10.0, 10.0);
+            let a: Tensor = [ROWS, COLS] as Uniform(-10.0, 10.0);
             let col: Array = [ROWS] as Uniform(-10.0, 10.0);
-            let output: Array = [ROWS * COLS];
+            let output: Tensor = [ROWS, COLS];
 
             assert_eq!(
                 test_st_mul_col_kernel(a(), col(), output()) for (1, 1, 1) @ (threads),
