@@ -1,15 +1,16 @@
 use burn::tensor::{backend::Backend, ops::FloatTensor};
 use burn_cubecl::tensor::CubeTensor;
 use burn_cubecl::{CubeRuntime, FloatElement};
+use std::fmt::Debug;
 
 use super::bundle::TensorBundle;
 
 /// Trait for defining fused CubeCL kernels.
 ///
 /// `N` is the number of inputs, `M` is the number of outputs.
-pub trait FusedKernel<const N: usize, const M: usize>: 'static + Copy {
-    type Inputs<T>: TensorBundle<T, N>;
-    type Outputs<T>: TensorBundle<T, M>;
+pub trait FusedKernel<const N: usize, const M: usize>: 'static + Send + Debug + Clone {
+    type Inputs<T: Debug + Clone + Send>: TensorBundle<T, N>;
+    type Outputs<T: Debug + Clone + Send>: TensorBundle<T, M>;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: Self::Inputs<CubeTensor<R>>,

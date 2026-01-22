@@ -129,7 +129,7 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon: f64::from(epsilon),
-            ..crate::ttt::TTTConfig::new()
+            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
 
@@ -289,7 +289,7 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
-            ..crate::ttt::TTTConfig::new()
+            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
 
@@ -455,7 +455,7 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
-            ..crate::ttt::TTTConfig::new()
+            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
 

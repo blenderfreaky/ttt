@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 use burn::{
     config::Config,
     module::{Ignored, Module},
@@ -18,12 +19,12 @@ use super::{
 // but impls enforce it
 //   Inner: TTTInnerModel<B>
 #[derive(Module, Debug)]
-pub struct TTTBlockWithSeq<B: Backend, Inner> {
+pub struct TTTBlockWithSeq<B: FusedTttBackend, Inner> {
     pub block: TTTBlock<B>,
     pub inner: Inner,
 }
 
-impl<B: Backend, Inner: TTTInnerModel<B>> TTTBlockWithSeq<B, Inner> {
+impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTBlockWithSeq<B, Inner> {
     pub fn forward(
         &self,
         input: Tensor<B, 3>,
@@ -39,7 +40,7 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTBlockWithSeq<B, Inner> {
 }
 
 #[derive(Module, Debug)]
-pub struct TTTBlock<B: Backend> {
+pub struct TTTBlock<B: FusedTttBackend> {
     pub layer_idx: usize,
     pub conv: Option<(CausalConv<B>, RmsNorm<B>)>,
     pub config: Ignored<Arc<TTTConfig>>,
@@ -56,7 +57,7 @@ pub struct TTTBlockConfig {
 }
 
 impl TTTBlockConfig {
-    pub fn init<B: Backend>(self, device: &B::Device) -> TTTBlock<B> {
+    pub fn init<B: FusedTttBackend>(self, device: &B::Device) -> TTTBlock<B> {
         TTTBlock {
             layer_idx: self.layer_idx,
             conv: if self.ttt_config.conv_before_ttt {
@@ -83,7 +84,7 @@ impl TTTBlockConfig {
         }
     }
 
-    pub fn init_with_inner<B: Backend, Inner: TTTInnerModel<B>>(
+    pub fn init_with_inner<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
         self,
         inner: Inner,
         device: &B::Device,
@@ -93,7 +94,7 @@ impl TTTBlockConfig {
     }
 }
 
-impl<B: Backend> TTTBlock<B> {
+impl<B: FusedTttBackend> TTTBlock<B> {
     pub fn forward<Inner: TTTInnerModel<B>>(
         &self,
         input: Tensor<B, 3>,

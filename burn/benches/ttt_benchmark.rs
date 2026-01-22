@@ -30,7 +30,7 @@ use paste::paste;
 use ttt::data::TrainingTextGenerationBatch;
 use ttt::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 use ttt::ttt::TTTConfig;
-use ttt::ttt::cubecl_kernels::Fused;
+use ttt::ttt::cubecl_kernels::{Fused, FusedTttBackend};
 use ttt::ttt::layer::{Qkv, TTTInnerModel, TTTInputsInner};
 use ttt::ttt::linear::TTTLinear;
 use ttt::ttt::linear_adam::TTTLinearAdam;
@@ -96,7 +96,7 @@ impl BenchConfig {
     }
 
     pub fn to_ttt_config(&self, vocab_size: usize) -> TTTConfig {
-        TTTConfig::new()
+        TTTConfig::new(vocab_size)
             .with_token_size(self.hidden_size)
             .with_hidden_size(self.hidden_size)
             .with_num_heads(self.num_heads)
@@ -104,7 +104,6 @@ impl BenchConfig {
             .with_swi_glu_mlp_intermediate_size(self.mlp_intermediate)
             .with_mini_batch_size(self.mini_batch_size)
             .with_conv_before_ttt(false)
-            .with_vocab_size(vocab_size)
     }
 
     pub fn head_dim(&self) -> usize {
@@ -290,7 +289,7 @@ fn bench_inner_backward<B: burn::tensor::backend::AutodiffBackend, Inner: TTTInn
 }
 
 /// Benchmark full model forward pass
-fn bench_full_forward<B: BackendTrait, Inner: TTTInnerModel<B>>(
+fn bench_full_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     c: &mut Criterion,
     config: &BenchConfig,
     params: &RuntimeParams,
@@ -325,7 +324,7 @@ fn bench_full_forward<B: BackendTrait, Inner: TTTInnerModel<B>>(
 }
 
 /// Benchmark full model backward pass (forward + backward)
-fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend, Inner: TTTInnerModel<B>>(
+fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend + FusedTttBackend, Inner: TTTInnerModel<B>>(
     c: &mut Criterion,
     config: &BenchConfig,
     params: &RuntimeParams,

@@ -5,10 +5,11 @@ use burn_cubecl::ops::numeric::empty_device;
 use burn_cubecl::tensor::CubeTensor;
 use burn_cubecl::{CubeRuntime, FloatElement};
 use cubek::reduce::components::instructions::ReduceOperationConfig;
+use std::fmt::Debug;
 
+use crate::ttt::cubecl_kernels::FusedTttConfig;
 use crate::ttt::cubecl_kernels::bundle::TensorBundle;
 use crate::ttt::cubecl_kernels::kernel::FusedKernel;
-use crate::ttt::cubecl_kernels::FusedTttConfig;
 use crate::ttt::cubecl_kernels::linear_backward::launch_fused_ttt_backward;
 use crate::ttt::cubecl_kernels::linear_forward::launch_fused_ttt_forward;
 
@@ -19,7 +20,11 @@ fn empty_like<R: CubeRuntime, F: FloatElement>(
     template: &CubeTensor<R>,
     shape: impl Into<Shape>,
 ) -> CubeTensor<R> {
-    empty_device::<R, F>(template.client.clone(), template.device.clone(), shape.into())
+    empty_device::<R, F>(
+        template.client.clone(),
+        template.device.clone(),
+        shape.into(),
+    )
 }
 
 /// Reduce sum over batch dimension (dim 0) and reshape to remove that dimension.
@@ -37,11 +42,19 @@ fn reduce_sum_batch<R: CubeRuntime>(
     .expect("reduce_dim failed");
 
     let output_shape = output_shape.into();
-    let strides = output_shape.dims.iter().rev().scan(1, |acc, &d| {
-        let s = *acc;
-        *acc *= d;
-        Some(s)
-    }).collect::<Vec<_>>().into_iter().rev().collect();
+    let strides = output_shape
+        .dims
+        .iter()
+        .rev()
+        .scan(1, |acc, &d| {
+            let s = *acc;
+            *acc *= d;
+            Some(s)
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
 
     CubeTensor::new(
         reduced.client,
@@ -150,8 +163,8 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
 }
 
 impl FusedKernel<9, 3> for TttKernel {
-    type Inputs<T> = TttInputs<T>;
-    type Outputs<T> = TttOutputs<T>;
+    type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
+    type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,

@@ -17,6 +17,7 @@ mod linear_forward_tile;
 pub mod ttt;
 
 // Re-export commonly used items
+pub use backend::FusedTttBackend;
 pub use bundle::TensorBundle;
 pub use kernel::{FusedKernel, FusedKernelBackend};
 pub use ttt::{TttInputs, TttKernel, TttOutputs, fused_ttt_forward};

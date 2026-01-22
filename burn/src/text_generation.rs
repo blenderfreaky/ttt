@@ -1,3 +1,4 @@
+use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 use crate::{
     data::{TokenizerTrait, TrainingTextGenerationBatch},
     ttt::{TTTConfig, layer::TTTInnerModel, lm::TTTModel},
@@ -18,7 +19,7 @@ pub struct TTTTextGenerationConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct TTTTextGenerationModel<B: Backend, Inner> {
+pub struct TTTTextGenerationModel<B: FusedTttBackend, Inner> {
     pub ttt_model: TTTModel<B, Inner>,
     pub pad_token: usize,
 }
@@ -42,7 +43,7 @@ impl TTTTextGenerationConfig {
     }
 
     /// Initialize with standard TTTLinear
-    pub fn init<B: Backend, Inner: TTTInnerModel<B>>(
+    pub fn init<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
         self,
         device: &B::Device,
     ) -> TTTTextGenerationModel<B, Inner> {
@@ -57,7 +58,7 @@ impl TTTTextGenerationConfig {
     }
 }
 
-impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inner> {
+impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inner> {
     pub fn forward_training(
         &self,
         item: TrainingTextGenerationBatch<B>,
@@ -195,7 +196,8 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inner> {
     }
 }
 
-impl<B: AutodiffBackend, Inner: TTTInnerModel<B>> TrainStep for TTTTextGenerationModel<B, Inner>
+impl<B: AutodiffBackend + FusedTttBackend, Inner: TTTInnerModel<B>> TrainStep
+    for TTTTextGenerationModel<B, Inner>
 where
     Self: AutodiffModule<B>,
 {
@@ -210,7 +212,9 @@ where
     }
 }
 
-impl<B: Backend, Inner: TTTInnerModel<B>> InferenceStep for TTTTextGenerationModel<B, Inner> {
+impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
+    for TTTTextGenerationModel<B, Inner>
+{
     type Input = TrainingTextGenerationBatch<B>;
     type Output = ClassificationOutput<B>;
 
@@ -234,7 +238,8 @@ mod tests {
     fn forward_inference_doesnt_crash() {
         let device = Default::default();
 
-        let model_config = TTTTextGenerationConfig::new_testing(TTTConfig::default_125m(TEST_VOCAB_SIZE));
+        let model_config =
+            TTTTextGenerationConfig::new_testing(TTTConfig::default_125m(TEST_VOCAB_SIZE));
         let vocab_size = model_config.ttt_config.vocab_size;
         let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
 

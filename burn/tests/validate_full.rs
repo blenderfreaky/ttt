@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ttt::ttt::{
-    TTTConfig,
+    TTTConfig, TEST_VOCAB_SIZE,
     layer::{Qkv, TTTInnerModel, TTTInputsInner},
     linear::{TTTLinear, TTTLinearConfig, TTTLinearState},
     mlp::{TTTMLP, TTTMLPConfig, TTTMLPState},
@@ -434,7 +434,7 @@ fn test_ttt_inner_model() {
 
     let hidden_size = num_heads * head_dim;
     let config = Arc::new(
-        TTTConfig::new()
+        TTTConfig::new(TEST_VOCAB_SIZE)
             .with_token_size(hidden_size)
             .with_hidden_size(hidden_size)
             .with_num_heads(num_heads)
@@ -532,7 +532,7 @@ fn test_ttt_mlp_inner_model() {
 
     let hidden_size = num_heads * head_dim;
     let config = Arc::new(
-        TTTConfig::new()
+        TTTConfig::new(TEST_VOCAB_SIZE)
             .with_token_size(hidden_size)
             .with_hidden_size(hidden_size)
             .with_num_heads(num_heads)
@@ -690,7 +690,7 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     };
 
     let config = Arc::new(
-        TTTConfig::new()
+        TTTConfig::new(TEST_VOCAB_SIZE)
             .with_token_size(hidden_size)
             .with_hidden_size(hidden_size)
             .with_num_heads(num_heads)
@@ -871,7 +871,7 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     let learnable_token_idx: Tensor<GpuBackend, 1> = loader.get_tensor("learnable_token_idx");
 
     let config = Arc::new(
-        TTTConfig::new()
+        TTTConfig::new(TEST_VOCAB_SIZE)
             .with_token_size(hidden_size)
             .with_hidden_size(hidden_size)
             .with_num_heads(num_heads)
@@ -1024,8 +1024,7 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     println!("    final_norm_weight: {:?}", final_norm_weight.dims());
 
     let config = Arc::new(
-        TTTConfig::new()
-            .with_vocab_size(vocab_size)
+        TTTConfig::new(vocab_size)
             .with_token_size(hidden_size)
             .with_hidden_size(hidden_size)
             .with_num_heads(num_heads)

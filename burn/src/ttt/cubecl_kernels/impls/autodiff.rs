@@ -1,14 +1,18 @@
 use burn::backend::autodiff::{
+    Autodiff, NodeId,
     checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
     grads::Gradients,
     ops::{Backward, Ops, OpsKind},
-    Autodiff, NodeID,
 };
-use burn::tensor::{backend::Backend, ops::FloatTensor};
+use burn::tensor::FloatDType;
+use burn::tensor::backend::Backend;
+use burn::tensor::ops::FloatTensor;
 use burn_backend::Shape;
+use burn_backend::TensorMetadata;
 
 use crate::ttt::cubecl_kernels::bundle::TensorBundle;
 use crate::ttt::cubecl_kernels::kernel::{FusedKernel, FusedKernelBackend};
+use std::fmt::Debug;
 
 /// Backward op for a specific output index.
 /// Each output is tracked separately and runs the backward kernel independently.
@@ -23,12 +27,12 @@ impl<K, const N: usize, const M: usize, B> Backward<B, N> for OutputBackwardOp<K
 where
     K: FusedKernel<N, M>,
     B: FusedKernelBackend<K, N, M>,
-    B::FloatTensorPrimitive: Clone,
+    B::FloatTensorPrimitive: Send,
 {
     type State = (
         K::Inputs<B::FloatTensorPrimitive>,
-        [Vec<usize>; M],     // Output shapes for creating zeros
-        [Option<NodeID>; N], // Input node IDs for gradient registration
+        [(Vec<usize>, FloatDType); M], // Output shapes for creating zeros
+        [Option<NodeId>; N],           // Input node IDs for gradient registration
     );
 
     fn backward(
@@ -49,7 +53,11 @@ where
             if i == self.output_idx {
                 grad_output.clone()
             } else {
-                B::float_zeros(Shape::from(output_shapes[i].clone()), &device)
+                B::float_zeros(
+                    Shape::from(output_shapes[i].0.clone()),
+                    &device,
+                    output_shapes[i].1,
+                )
             }
         });
         let grad_outputs = K::Outputs::from_array(grad_outputs_arr);
@@ -60,7 +68,11 @@ where
         let grad_inputs = B::backward(saved_inputs, grad_outputs);
 
         // Register gradients for all tracked parents (accumulates if called multiple times)
-        for (grad, node_id) in grad_inputs.into_array().into_iter().zip(input_node_ids.iter()) {
+        for (grad, node_id) in grad_inputs
+            .into_array()
+            .into_iter()
+            .zip(input_node_ids.iter())
+        {
             if let Some(id) = node_id {
                 grads.register::<B>(*id, grad);
             }
@@ -78,8 +90,7 @@ where
     fn forward(inputs: K::Inputs<FloatTensor<Self>>) -> K::Outputs<FloatTensor<Self>> {
         let input_arr = inputs.into_array();
         let nodes_array: [_; N] = input_arr.each_ref().map(|t| t.node.clone());
-        let input_node_ids: [Option<NodeID>; N] =
-            nodes_array.each_ref().map(|n| n.as_ref().map(|n| n.id));
+        let input_node_ids: [Option<NodeId>; N] = nodes_array.each_ref().map(|n| Some(n.id));
         let primitives: [_; N] = input_arr.map(|t| t.primitive.clone());
 
         let inner_inputs = K::Inputs::from_array(primitives.clone());
@@ -87,8 +98,12 @@ where
         let output_primitives: [_; M] = outputs.into_array();
 
         // Save output shapes for creating zeros in backward
-        let output_shapes: [Vec<usize>; M] =
-            std::array::from_fn(|i| output_primitives[i].shape().dims.to_vec());
+        let output_shapes: [_; M] = std::array::from_fn(|i| {
+            (
+                output_primitives[i].shape().dims.to_vec(),
+                output_primitives[i].dtype().into(),
+            )
+        });
 
         // Save inputs for backward (shared by all outputs)
         let saved_inputs = K::Inputs::from_array(primitives);

@@ -35,6 +35,9 @@ pub type TrainingBackend = burn::backend::Autodiff<
 // Reference CPU backend for tests
 pub type CpuBackend = burn::backend::NdArray;
 
+/// Default vocab size for tests (GPT-2 tokenizer size)
+pub const TEST_VOCAB_SIZE: usize = 50257;
+
 /// TTT Layer Type variants
 #[derive(Config, Debug, PartialEq, Copy)]
 pub enum TTTLayerType {

@@ -1,14 +1,21 @@
+use std::fmt::Debug;
+
 /// Generic trait for tensor bundles with a fixed number of elements.
 ///
 /// `N` is the number of tensors in the bundle.
-pub trait TensorBundle<T, const N: usize>: Sized {
-    type Mapped<U>: TensorBundle<U, N>;
+pub trait TensorBundle<T: Debug + Clone + Send, const N: usize>:
+    Sized + Clone + Send + Debug
+{
+    type Mapped<U: Debug + Clone + Send>: TensorBundle<U, N>;
 
-    fn map<U>(self, f: impl FnMut(T) -> U) -> Self::Mapped<U>;
+    fn map<U: Debug + Clone + Send>(self, f: impl FnMut(T) -> U) -> Self::Mapped<U>;
     fn into_array(self) -> [T; N];
     fn from_array(arr: [T; N]) -> Self;
 
-    fn try_map<U, E>(self, mut f: impl FnMut(T) -> Result<U, E>) -> Result<Self::Mapped<U>, E> {
+    fn try_map<U: Debug + Clone + Send, E: Debug + Clone + Send>(
+        self,
+        mut f: impl FnMut(T) -> Result<U, E>,
+    ) -> Result<Self::Mapped<U>, E> {
         let arr = self.into_array();
         let results: Result<Vec<U>, E> = arr.into_iter().map(|t| f(t)).collect();
         let results_arr: [U; N] = results?.try_into().ok().unwrap();
@@ -49,10 +56,10 @@ macro_rules! tensor_bundle {
             )*)?
         }
 
-        impl<T> $crate::ttt::cubecl_kernels::TensorBundle<T, $n> for $name<T> {
-            type Mapped<U> = $name<U>;
+        impl<T: std::fmt::Debug + Clone + Send> $crate::ttt::cubecl_kernels::TensorBundle<T, $n> for $name<T> {
+            type Mapped<U: std::fmt::Debug + Clone + Send> = $name<U>;
 
-            fn map<U>(self, mut f: impl FnMut(T) -> U) -> $name<U> {
+            fn map<U: std::fmt::Debug + Clone + Send>(self, mut f: impl FnMut(T) -> U) -> $name<U> {
                 $name {
                     $first_field: f(self.$first_field),
                     $($field: f(self.$field),)*

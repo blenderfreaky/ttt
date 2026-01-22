@@ -1,3 +1,4 @@
+use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 use crate::{
     data::{Tokenizer, TokenizerTrait},
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
@@ -11,13 +12,13 @@ use burn::{
 };
 use std::sync::Arc;
 
-pub struct TTTTextGenerator<B: Backend, Inner> {
+pub struct TTTTextGenerator<B: FusedTttBackend, Inner> {
     model: TTTTextGenerationModel<B, Inner>,
     tokenizer: Arc<dyn TokenizerTrait>,
     device: B::Device,
 }
 
-impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
+impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
     /// Load a trained model from artifacts directory with a specific tokenizer
     pub fn load_from_artifacts(
         artifact_dir: &str,
@@ -49,7 +50,7 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
     }
 }
 
-impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
+impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
     pub fn new(
         model: TTTTextGenerationModel<B, Inner>,
         tokenizer: Arc<dyn TokenizerTrait>,
@@ -190,23 +191,25 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
 }
 
 /// Quick text generation with default settings
-pub fn generate<B: Backend>(
+pub fn generate<B: FusedTttBackend>(
     artifact_dir: &str,
     device: B::Device,
     prompt: &str,
     tokenizer: Tokenizer,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let generator = TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device, tokenizer)?;
+    let generator =
+        TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device, tokenizer)?;
     Ok(generator.generate_text(prompt, 50, 0.8, Some(40)))
 }
 
 /// Quick interactive session
-pub fn interactive<B: Backend>(
+pub fn interactive<B: FusedTttBackend>(
     artifact_dir: &str,
     device: B::Device,
     tokenizer: Tokenizer,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let generator = TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device, tokenizer)?;
+    let generator =
+        TTTTextGenerator::<B, TTTLinear<B>>::load_from_artifacts(artifact_dir, device, tokenizer)?;
     generator.interactive_session();
     Ok(())
 }
@@ -222,8 +225,10 @@ mod tests {
         let device = Default::default();
 
         let tokenizer = Arc::new(Tokenizer::default());
-        let model_config =
-            TTTTextGenerationConfig::from_tokenizer(TTTConfig::default_12m(tokenizer.vocab_size()), &*tokenizer);
+        let model_config = TTTTextGenerationConfig::from_tokenizer(
+            TTTConfig::default_12m(tokenizer.vocab_size()),
+            &*tokenizer,
+        );
         let model = model_config.init::<GpuBackend, TTTLinear<GpuBackend>>(&device);
 
         let generator = TTTTextGenerator::new(model, tokenizer, device);

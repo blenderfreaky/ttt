@@ -1,11 +1,11 @@
-use std::sync::Arc;
-
+use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 use burn::{
     module::{Ignored, Module},
     nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     prelude::Backend,
     tensor::{Int, Tensor},
 };
+use std::sync::Arc;
 
 use super::{
     PositionEncodingType, TTTConfig,
@@ -14,7 +14,7 @@ use super::{
 };
 
 #[derive(Module, Debug)]
-pub struct TTTModel<B: Backend, Inner> {
+pub struct TTTModel<B: FusedTttBackend, Inner> {
     pub config: Ignored<Arc<TTTConfig>>,
     pub embedding: Embedding<B>,
     /// Optional absolute position embeddings (only present when pos_encoding is Absolute)
@@ -28,7 +28,7 @@ pub struct TTTModel<B: Backend, Inner> {
 }
 
 impl TTTConfig {
-    pub fn init_with_inner_model<B: Backend, Inner: TTTInnerModel<B>>(
+    pub fn init_with_inner_model<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
         self: &Arc<Self>,
         inner_config: &Arc<Inner::Config>,
         device: &B::Device,
@@ -87,7 +87,7 @@ impl TTTConfig {
     }
 }
 
-impl<B: Backend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
+impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
     /// Initialize fresh states for all layers
     pub fn init_states(&self, batch_size: usize) -> Vec<Inner::State> {
         self.layers

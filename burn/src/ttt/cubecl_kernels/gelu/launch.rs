@@ -2,6 +2,7 @@ use burn_cubecl::kernel::into_contiguous;
 use burn_cubecl::ops::numeric::empty_device;
 use burn_cubecl::tensor::CubeTensor;
 use burn_cubecl::{CubeRuntime, FloatElement};
+use std::fmt::Debug;
 
 use crate::ttt::cubecl_kernels::gelu_tanh::{
     launch_gelu_bwd_forward, launch_gelu_tanh, launch_gelu_tanh_backward,
@@ -24,8 +25,8 @@ fn empty_like<R: CubeRuntime, F: FloatElement>(template: &CubeTensor<R>) -> Cube
 
 // GELU tanh forward kernel
 impl FusedKernel<1, 1> for GeluTanhKernel {
-    type Inputs<T> = GeluInput<T>;
-    type Outputs<T> = GeluOutput<T>;
+    type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
+    type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
@@ -59,8 +60,8 @@ impl FusedKernel<1, 1> for GeluTanhKernel {
 
 // GELU backward derivative forward kernel (computes gelu'(x))
 impl FusedKernel<1, 1> for GeluBwdKernel {
-    type Inputs<T> = GeluInput<T>;
-    type Outputs<T> = GeluOutput<T>;
+    type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
+    type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
@@ -68,7 +69,11 @@ impl FusedKernel<1, 1> for GeluBwdKernel {
         let input = into_contiguous(inputs.input);
         let output = empty_like::<R, F>(&input);
 
-        launch_gelu_bwd_forward::<R, F>(&input.client, input.as_handle_ref(), output.as_handle_ref());
+        launch_gelu_bwd_forward::<R, F>(
+            &input.client,
+            input.as_handle_ref(),
+            output.as_handle_ref(),
+        );
 
         GeluOutput { output }
     }
@@ -94,8 +99,8 @@ impl FusedKernel<1, 1> for GeluBwdKernel {
 
 // GELU tanh backward kernel (for second-order gradients)
 impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
-    type Inputs<T> = GeluInput<T>;
-    type Outputs<T> = GeluOutput<T>;
+    type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
+    type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
@@ -104,7 +109,11 @@ impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
         let input = into_contiguous(inputs.input);
         let output = empty_like::<R, F>(&input);
 
-        launch_gelu_bwd_forward::<R, F>(&input.client, input.as_handle_ref(), output.as_handle_ref());
+        launch_gelu_bwd_forward::<R, F>(
+            &input.client,
+            input.as_handle_ref(),
+            output.as_handle_ref(),
+        );
 
         GeluOutput { output }
     }
@@ -130,8 +139,8 @@ impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
 
 // GELU tanh backward-backward kernel (third-order not supported)
 impl FusedKernel<1, 1> for GeluTanhBackwardBackwardKernel {
-    type Inputs<T> = GeluInput<T>;
-    type Outputs<T> = GeluOutput<T>;
+    type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
+    type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,

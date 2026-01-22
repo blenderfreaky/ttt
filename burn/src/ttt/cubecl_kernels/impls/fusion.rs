@@ -5,6 +5,7 @@ use burn_fusion::{
     Fusion, FusionBackend, NoOp, client::GlobalFusionClient, stream::OperationStreams,
 };
 
+use crate::ttt::cubecl_kernels::TensorBundle;
 use crate::ttt::cubecl_kernels::kernel::{FusedKernel, FusedKernelBackend};
 
 fn fusion_in<B: FusionBackend>(tensor: FloatTensor<Fusion<B>>) -> FloatTensor<B> {
@@ -42,12 +43,21 @@ where
     B: FusedKernelBackend<K, N, M> + FusionBackend,
     K::Inputs<FloatTensor<Self>>: HasClient<B>,
     K::Outputs<FloatTensor<Self>>: HasClient<B>,
+    // Mapped<U> -> K::Inputs/Outputs<U> conversions (trivially satisfied since Mapped<U> = Self<U>)
+    <K::Inputs<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>, N>>::Mapped<FloatTensor<B>>:
+        Into<K::Inputs<FloatTensor<B>>>,
+    <K::Outputs<FloatTensor<B>> as TensorBundle<FloatTensor<B>, M>>::Mapped<FloatTensor<Self>>:
+        Into<K::Outputs<FloatTensor<Self>>>,
+    <K::Outputs<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>, M>>::Mapped<FloatTensor<B>>:
+        Into<K::Outputs<FloatTensor<B>>>,
+    <K::Inputs<FloatTensor<B>> as TensorBundle<FloatTensor<B>, N>>::Mapped<FloatTensor<Self>>:
+        Into<K::Inputs<FloatTensor<Self>>>,
 {
     fn forward(inputs: K::Inputs<FloatTensor<Self>>) -> K::Outputs<FloatTensor<Self>> {
         let client = inputs.client().clone();
-        let inner_inputs = inputs.map(|t| fusion_in::<B>(t));
+        let inner_inputs = inputs.map(|t| fusion_in::<B>(t)).into();
         let outputs = B::forward(inner_inputs);
-        outputs.map(|t| fusion_out::<B>(t, &client))
+        outputs.map(|t| fusion_out::<B>(t, &client)).into()
     }
 
     fn backward(
@@ -55,9 +65,9 @@ where
         grad_outputs: K::Outputs<FloatTensor<Self>>,
     ) -> K::Inputs<FloatTensor<Self>> {
         let client = inputs.client().clone();
-        let inner_inputs = inputs.map(|t| fusion_in::<B>(t));
-        let inner_grad_outputs = grad_outputs.map(|t| fusion_in::<B>(t));
+        let inner_inputs = inputs.map(|t| fusion_in::<B>(t)).into();
+        let inner_grad_outputs = grad_outputs.map(|t| fusion_in::<B>(t)).into();
         let grads = B::backward(inner_inputs, inner_grad_outputs);
-        grads.map(|t| fusion_out::<B>(t, &client))
+        grads.map(|t| fusion_out::<B>(t, &client)).into()
     }
 }

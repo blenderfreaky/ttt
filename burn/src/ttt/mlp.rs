@@ -9,13 +9,16 @@ use burn::{
 
 use super::{
     TTTConfig,
-    cubecl_kernels::backend::{FusedTttBackend, api::{gelu_bwd, gelu_tanh}},
+    cubecl_kernels::backend::{
+        FusedTttBackend,
+        api::{gelu_bwd, gelu_tanh},
+    },
     layer::{TTTInnerModel, TTTInputsInner},
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
 };
 
 #[derive(Module, Debug)]
-pub struct TTTMLP<B: Backend> {
+pub struct TTTMLP<B: FusedTttBackend> {
     /// First layer weight: [num_heads, head_dim, mlp_dim]
     pub w1_init: Param<Tensor<B, 3>>,
     /// First layer bias: [num_heads, mlp_dim]
@@ -29,7 +32,7 @@ pub struct TTTMLP<B: Backend> {
 }
 
 #[derive(Module, Debug)]
-pub struct TTTMLPState<B: Backend> {
+pub struct TTTMLPState<B: FusedTttBackend> {
     /// First layer weight: [batch_size, num_heads, head_dim, mlp_dim]
     pub w1: Tensor<B, 4>,
     /// First layer bias: [batch_size, num_heads, mlp_dim]

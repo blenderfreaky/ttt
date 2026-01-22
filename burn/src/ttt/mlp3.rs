@@ -9,7 +9,10 @@ use burn::{
 
 use super::{
     TTTConfig,
-    cubecl_kernels::backend::{FusedTttBackend, api::{gelu_bwd, gelu_tanh}},
+    cubecl_kernels::backend::{
+        FusedTttBackend,
+        api::{gelu_bwd, gelu_tanh},
+    },
     layer::{TTTInnerModel, TTTInputsInner},
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
 };
@@ -17,7 +20,7 @@ use super::{
 /// MLP with 3 hidden layers (4 weight layers total)
 /// input(D) -> hidden1(4D) -> hidden2(4D) -> hidden3(4D) -> output(D)
 #[derive(Module, Debug)]
-pub struct TTTMLP3<B: Backend> {
+pub struct TTTMLP3<B: FusedTttBackend> {
     /// First layer weight: [num_heads, head_dim, 4*head_dim]
     pub w1_init: Param<Tensor<B, 3>>,
     /// First layer bias: [num_heads, 4*head_dim]
@@ -39,7 +42,7 @@ pub struct TTTMLP3<B: Backend> {
 }
 
 #[derive(Module, Debug)]
-pub struct TTTMLP3State<B: Backend> {
+pub struct TTTMLP3State<B: FusedTttBackend> {
     pub w1: Tensor<B, 4>,
     pub b1: Tensor<B, 3>,
     pub w2: Tensor<B, 4>,
