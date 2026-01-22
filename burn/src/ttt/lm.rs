@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use burn::{
     module::{Ignored, Module},
-    nn::{Embedding, EmbeddingConfig, Initializer, RmsNorm, RmsNormConfig},
+    nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     prelude::Backend,
     tensor::{Int, Tensor},
 };
@@ -21,6 +21,10 @@ pub struct TTTModel<B: Backend, Inner> {
     pub position_embedding: Option<Embedding<B>>,
     pub layers: Vec<TTTBlockWithSeq<B, Inner>>,
     pub norm: RmsNorm<B>,
+    /// Optional separate lm_head (only present when tie_word_embeddings is false).
+    /// When None, uses tied embedding weights via matmul.
+    /// When Some, uses separate Linear layer (more performant, single kernel call).
+    pub lm_head: Option<Linear<B>>,
 }
 
 impl TTTConfig {
@@ -56,12 +60,29 @@ impl TTTConfig {
             .collect();
         let norm = RmsNormConfig::new(self.hidden_size).init(device);
 
+        // When tie_word_embeddings=false, use separate lm_head (more performant)
+        // When tie_word_embeddings=true, lm_head is None and we use tied embedding weights
+        let lm_head = if self.tie_word_embeddings {
+            None
+        } else {
+            Some(
+                LinearConfig::new(self.hidden_size, self.vocab_size)
+                    .with_bias(false)
+                    .with_initializer(Initializer::Normal {
+                        mean: 0.0,
+                        std: 0.02,
+                    })
+                    .init(device),
+            )
+        };
+
         TTTModel {
             config: Ignored(self.clone()),
             embedding,
             position_embedding,
             layers,
             norm,
+            lm_head,
         }
     }
 }
@@ -114,12 +135,18 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
 
         hidden_states = self.norm.forward(hidden_states);
 
-        // Output projection using tied embedding weights
-        // Embedding weight is [vocab_size, hidden_size], we need [1, hidden_size, vocab_size] for matmul
-        let weight = self.embedding.weight.val(); // [vocab_size, hidden_size]
-        let weight = weight.unsqueeze_dim::<3>(0); // [1, vocab_size, hidden_size]
-        let weight = weight.permute([0, 2, 1]); // [1, hidden_size, vocab_size]
-        hidden_states = hidden_states.matmul(weight);
+        // Output projection: use lm_head if available (more performant), otherwise tied embedding weights
+        hidden_states = if let Some(lm_head) = &self.lm_head {
+            // Separate lm_head: single optimized kernel call
+            lm_head.forward(hidden_states)
+        } else {
+            // Tied embedding weights: matmul with transposed embedding
+            // Embedding weight is [vocab_size, hidden_size], we need [1, hidden_size, vocab_size] for matmul
+            let weight = self.embedding.weight.val(); // [vocab_size, hidden_size]
+            let weight = weight.unsqueeze_dim::<3>(0); // [1, vocab_size, hidden_size]
+            let weight = weight.permute([0, 2, 1]); // [1, hidden_size, vocab_size]
+            hidden_states.matmul(weight)
+        };
 
         hidden_states
     }

@@ -5,6 +5,7 @@ use burn::prelude::*;
 use crate::ttt::layer::TTTInnerModel;
 
 pub mod backend;
+pub mod gelu_tanh;
 pub mod linear;
 mod linear_backward;
 mod linear_forward;

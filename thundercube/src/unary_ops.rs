@@ -139,7 +139,7 @@ fn neg<F: Float>(x: Line<F>) -> Line<F> {
 }
 
 #[cube]
-fn gelu<F: Float>(x: Line<F>) -> Line<F> {
+pub fn gelu<F: Float>(x: Line<F>) -> Line<F> {
     let sqrt_2_over_pi = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(GELU_SQRT_2_OVER_PI));
     let coeff = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(GELU_COEFF));
     let half = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(0.5f32));
@@ -151,7 +151,7 @@ fn gelu<F: Float>(x: Line<F>) -> Line<F> {
 }
 
 #[cube]
-fn gelu_bwd<F: Float>(x: Line<F>) -> Line<F> {
+pub fn gelu_bwd<F: Float>(x: Line<F>) -> Line<F> {
     let sqrt_2_over_pi = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(GELU_SQRT_2_OVER_PI));
     let coeff = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(GELU_COEFF));
     let half = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(0.5f32));
@@ -168,7 +168,7 @@ fn gelu_bwd<F: Float>(x: Line<F>) -> Line<F> {
 }
 
 #[cube]
-fn gelu_bwd_bwd<F: Float>(x: Line<F>) -> Line<F> {
+pub fn gelu_bwd_bwd<F: Float>(x: Line<F>) -> Line<F> {
     let sqrt_2_over_pi = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(GELU_SQRT_2_OVER_PI));
     let coeff = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(GELU_COEFF));
     let one = Line::<F>::empty(LINE_SIZE).fill(F::cast_from(1.0f32));

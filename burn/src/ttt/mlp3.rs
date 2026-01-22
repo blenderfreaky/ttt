@@ -4,14 +4,12 @@ use burn::{
     config::Config,
     module::{Ignored, Module, Param},
     nn::Initializer,
-    prelude::Backend,
-    tensor::{Tensor, activation::gelu, s},
+    tensor::{Tensor, s},
 };
-
-use crate::ttt::util::gelu_bwd;
 
 use super::{
     TTTConfig,
+    cubecl_kernels::backend::{FusedTttBackend, api::{gelu_bwd, gelu_tanh}},
     layer::{TTTInnerModel, TTTInputsInner},
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
 };
@@ -64,7 +62,7 @@ impl Default for TTTMLP3Config {
     }
 }
 
-impl<B: Backend> TTTInnerModel<B> for TTTMLP3<B> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for TTTMLP3<B> {
     type Config = TTTMLP3Config;
     type State = TTTMLP3State<B>;
 
@@ -173,13 +171,13 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP3<B> {
         let x1 = qkv.xk.clone();
 
         let z1 = x1.clone().matmul(state.w1.clone()) + state.b1.clone().unsqueeze_dim(2);
-        let x2 = gelu(z1.clone());
+        let x2 = gelu_tanh(z1.clone());
 
         let z2 = x2.clone().matmul(state.w2.clone()) + state.b2.clone().unsqueeze_dim(2);
-        let x3 = gelu(z2.clone());
+        let x3 = gelu_tanh(z2.clone());
 
         let z3 = x3.clone().matmul(state.w3.clone()) + state.b3.clone().unsqueeze_dim(2);
-        let x4 = gelu(z3.clone());
+        let x4 = gelu_tanh(z3.clone());
 
         let z4 = x4.clone().matmul(state.w4.clone()) + state.b4.clone().unsqueeze_dim(2);
 
@@ -209,7 +207,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP3<B> {
         let z1_bar = qkv.xq.clone().matmul(state.w1.clone())
             - (eta_batch.clone() * attn1).matmul(grad_l_wrt_z1.clone())
             + b1_bar;
-        let x2_bar = gelu(z1_bar);
+        let x2_bar = gelu_tanh(z1_bar);
 
         let attn2 = x2_bar.clone().matmul(x2.clone().transpose()).tril(0);
         let b2_bar =
@@ -217,7 +215,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP3<B> {
         let z2_bar = x2_bar.matmul(state.w2.clone())
             - (eta_batch.clone() * attn2).matmul(grad_l_wrt_z2.clone())
             + b2_bar;
-        let x3_bar = gelu(z2_bar);
+        let x3_bar = gelu_tanh(z2_bar);
 
         let attn3 = x3_bar.clone().matmul(x3.clone().transpose()).tril(0);
         let b3_bar =
@@ -225,7 +223,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP3<B> {
         let z3_bar = x3_bar.matmul(state.w3.clone())
             - (eta_batch.clone() * attn3).matmul(grad_l_wrt_z3.clone())
             + b3_bar;
-        let x4_bar = gelu(z3_bar);
+        let x4_bar = gelu_tanh(z3_bar);
 
         let attn4 = x4_bar.clone().matmul(x4.clone().transpose()).tril(0);
         let b4_bar =

@@ -1,7 +1,24 @@
 use burn::tensor::{backend::Backend, ops::FloatTensor};
 use burn_fusion::FusionBackend;
 
-pub trait FusedTttBackend: Backend {
+pub trait GeluTanhBackend: Backend {
+    fn gelu_tanh_forward(input: FloatTensor<Self>) -> FloatTensor<Self>;
+
+    /// Computes d/dx gelu(x) directly (used in TTT MLP forward pass).
+    fn gelu_bwd_forward(input: FloatTensor<Self>) -> FloatTensor<Self>;
+
+    fn gelu_tanh_backward(
+        input: FloatTensor<Self>,
+        grad_output: FloatTensor<Self>,
+    ) -> FloatTensor<Self>;
+
+    fn gelu_tanh_backward_backward(
+        input: FloatTensor<Self>,
+        grad_output: FloatTensor<Self>,
+    ) -> FloatTensor<Self>;
+}
+
+pub trait FusedTttBackend: Backend + GeluTanhBackend {
     /// Returns (output, updated_weight, updated_bias)
     fn fused_ttt_forward(
         xq: FloatTensor<Self>,
@@ -42,7 +59,7 @@ pub trait FusedTttBackend: Backend {
 }
 
 pub mod cube_impl {
-    use super::{FloatTensor, FusedTttBackend};
+    use super::{FloatTensor, FusedTttBackend, GeluTanhBackend};
     use burn_backend::Shape;
     use burn_cubecl::kernel::into_contiguous;
     use burn_cubecl::kernel::reduce::{KernelReduceStrategy, reduce_dim};
@@ -52,8 +69,90 @@ pub mod cube_impl {
     use cubek::reduce::components::instructions::ReduceOperationConfig;
 
     use crate::ttt::cubecl_kernels::FusedTttConfig;
+    use crate::ttt::cubecl_kernels::gelu_tanh::{
+        launch_gelu_bwd_forward, launch_gelu_tanh, launch_gelu_tanh_backward,
+        launch_gelu_tanh_backward_backward,
+    };
     use crate::ttt::cubecl_kernels::linear_backward::launch_fused_ttt_backward;
     use crate::ttt::cubecl_kernels::linear_forward::launch_fused_ttt_forward;
+
+    impl<R: CubeRuntime, F: FloatElement, I: IntElement, BT: BoolElement> GeluTanhBackend
+        for CubeBackend<R, F, I, BT>
+    {
+        fn gelu_tanh_forward(input: FloatTensor<Self>) -> FloatTensor<Self> {
+            let input = into_contiguous(input);
+            let output = empty_device::<R, F>(
+                input.client.clone(),
+                input.device.clone(),
+                input.shape.clone(),
+            );
+
+            launch_gelu_tanh::<R, F>(&input.client, input.as_handle_ref(), output.as_handle_ref());
+
+            output
+        }
+
+        fn gelu_bwd_forward(input: FloatTensor<Self>) -> FloatTensor<Self> {
+            let input = into_contiguous(input);
+            let output = empty_device::<R, F>(
+                input.client.clone(),
+                input.device.clone(),
+                input.shape.clone(),
+            );
+
+            launch_gelu_bwd_forward::<R, F>(
+                &input.client,
+                input.as_handle_ref(),
+                output.as_handle_ref(),
+            );
+
+            output
+        }
+
+        fn gelu_tanh_backward(
+            input: FloatTensor<Self>,
+            grad_output: FloatTensor<Self>,
+        ) -> FloatTensor<Self> {
+            let input = into_contiguous(input);
+            let grad_output = into_contiguous(grad_output);
+            let grad_input = empty_device::<R, F>(
+                input.client.clone(),
+                input.device.clone(),
+                input.shape.clone(),
+            );
+
+            launch_gelu_tanh_backward::<R, F>(
+                &input.client,
+                input.as_handle_ref(),
+                grad_output.as_handle_ref(),
+                grad_input.as_handle_ref(),
+            );
+
+            grad_input
+        }
+
+        fn gelu_tanh_backward_backward(
+            input: FloatTensor<Self>,
+            grad_output: FloatTensor<Self>,
+        ) -> FloatTensor<Self> {
+            let input = into_contiguous(input);
+            let grad_output = into_contiguous(grad_output);
+            let grad_input = empty_device::<R, F>(
+                input.client.clone(),
+                input.device.clone(),
+                input.shape.clone(),
+            );
+
+            launch_gelu_tanh_backward_backward::<R, F>(
+                &input.client,
+                input.as_handle_ref(),
+                grad_output.as_handle_ref(),
+                grad_input.as_handle_ref(),
+            );
+
+            grad_input
+        }
+    }
 
     pub fn fused_ttt_forward_launch<R: CubeRuntime, F: FloatElement>(
         xq: CubeTensor<R>,
@@ -292,13 +391,148 @@ pub mod cube_impl {
 }
 
 pub mod autodiff_impl {
-    use super::{Backend, FloatTensor, FusedTttBackend};
+    use super::{Backend, FloatTensor, FusedTttBackend, GeluTanhBackend};
     use burn::backend::autodiff::{
         Autodiff,
         checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
         grads::Gradients,
         ops::{Backward, Ops, OpsKind},
     };
+
+    #[derive(Debug)]
+    struct GeluTanhBackwardOp;
+
+    impl<B: GeluTanhBackend> Backward<B, 1> for GeluTanhBackwardOp
+    where
+        B::FloatTensorPrimitive: Clone,
+    {
+        type State = B::FloatTensorPrimitive;
+
+        fn backward(
+            self,
+            ops: Ops<Self::State, 1>,
+            grads: &mut Gradients,
+            _checkpointer: &mut Checkpointer,
+        ) {
+            let grad_output = grads.consume::<B>(&ops.node);
+            let input = ops.state;
+
+            let grad_input = B::gelu_tanh_backward(input, grad_output);
+
+            if let Some(node) = ops.parents.first().and_then(|n| n.as_ref()) {
+                grads.register::<B>(node.id, grad_input);
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct GeluBwdForwardBackwardOp;
+
+    impl<B: GeluTanhBackend> Backward<B, 1> for GeluBwdForwardBackwardOp
+    where
+        B::FloatTensorPrimitive: Clone,
+    {
+        type State = B::FloatTensorPrimitive;
+
+        fn backward(
+            self,
+            ops: Ops<Self::State, 1>,
+            grads: &mut Gradients,
+            _checkpointer: &mut Checkpointer,
+        ) {
+            let grad_output = grads.consume::<B>(&ops.node);
+            let input = ops.state;
+
+            let grad_input = B::gelu_tanh_backward_backward(input, grad_output);
+
+            if let Some(node) = ops.parents.first().and_then(|n| n.as_ref()) {
+                grads.register::<B>(node.id, grad_input);
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct GeluTanhBackwardBackwardOp;
+
+    impl<B: GeluTanhBackend> Backward<B, 1> for GeluTanhBackwardBackwardOp
+    where
+        B::FloatTensorPrimitive: Clone,
+    {
+        type State = B::FloatTensorPrimitive;
+
+        fn backward(
+            self,
+            ops: Ops<Self::State, 1>,
+            grads: &mut Gradients,
+            _checkpointer: &mut Checkpointer,
+        ) {
+            let grad_output = grads.consume::<B>(&ops.node);
+            let input = ops.state;
+
+            let grad_input = B::gelu_tanh_backward_backward(input, grad_output);
+
+            if let Some(node) = ops.parents.first().and_then(|n| n.as_ref()) {
+                grads.register::<B>(node.id, grad_input);
+            }
+        }
+    }
+
+    impl<B: GeluTanhBackend, C: CheckpointStrategy> GeluTanhBackend for Autodiff<B, C>
+    where
+        B::FloatTensorPrimitive: Clone,
+    {
+        fn gelu_tanh_forward(input: FloatTensor<Self>) -> FloatTensor<Self> {
+            let output_inner = B::gelu_tanh_forward(input.primitive.clone());
+
+            match GeluTanhBackwardOp
+                .prepare::<C>([input.node.clone()])
+                .compute_bound()
+                .stateful()
+            {
+                OpsKind::Tracked(prep) => prep.finish(input.primitive, output_inner),
+                OpsKind::UnTracked(prep) => prep.finish(output_inner),
+            }
+        }
+
+        fn gelu_bwd_forward(input: FloatTensor<Self>) -> FloatTensor<Self> {
+            let output_inner = B::gelu_bwd_forward(input.primitive.clone());
+
+            match GeluBwdForwardBackwardOp
+                .prepare::<C>([input.node.clone()])
+                .compute_bound()
+                .stateful()
+            {
+                OpsKind::Tracked(prep) => prep.finish(input.primitive, output_inner),
+                OpsKind::UnTracked(prep) => prep.finish(output_inner),
+            }
+        }
+
+        fn gelu_tanh_backward(
+            input: FloatTensor<Self>,
+            grad_output: FloatTensor<Self>,
+        ) -> FloatTensor<Self> {
+            // Second-order: gelu_bwd is called in forward pass of MLP, needs backward support
+            let output_inner =
+                B::gelu_tanh_backward(input.primitive.clone(), grad_output.primitive);
+
+            match GeluTanhBackwardBackwardOp
+                .prepare::<C>([input.node.clone()])
+                .compute_bound()
+                .stateful()
+            {
+                OpsKind::Tracked(prep) => prep.finish(input.primitive, output_inner),
+                OpsKind::UnTracked(prep) => prep.finish(output_inner),
+            }
+        }
+
+        fn gelu_tanh_backward_backward(
+            _input: FloatTensor<Self>,
+            _grad_output: FloatTensor<Self>,
+        ) -> FloatTensor<Self> {
+            // Third-order gradients not supported
+            panic!("Third-order gradients through gelu_tanh are not supported")
+        }
+    }
 
     #[derive(Debug, Clone)]
     struct FusedTttState<B: Backend> {
@@ -487,8 +721,18 @@ pub mod autodiff_impl {
 }
 
 pub mod api {
-    use super::FusedTttBackend;
+    use super::{FusedTttBackend, GeluTanhBackend};
     use burn::tensor::{Tensor, TensorPrimitive};
+
+    pub fn gelu_tanh<B: GeluTanhBackend, const D: usize>(input: Tensor<B, D>) -> Tensor<B, D> {
+        let output = B::gelu_tanh_forward(input.into_primitive().tensor());
+        Tensor::from_primitive(TensorPrimitive::Float(output))
+    }
+
+    pub fn gelu_bwd<B: GeluTanhBackend, const D: usize>(input: Tensor<B, D>) -> Tensor<B, D> {
+        let output = B::gelu_bwd_forward(input.into_primitive().tensor());
+        Tensor::from_primitive(TensorPrimitive::Float(output))
+    }
 
     pub fn fused_ttt_forward<B: FusedTttBackend>(
         xq: Tensor<B, 4>,
@@ -562,6 +806,43 @@ mod fusion_helpers {
         );
 
         new.pop().unwrap()
+    }
+}
+
+impl<B: GeluTanhBackend + FusionBackend> GeluTanhBackend for burn_fusion::Fusion<B> {
+    fn gelu_tanh_forward(input: FloatTensor<Self>) -> FloatTensor<Self> {
+        use fusion_helpers::{fusion_in, fusion_out};
+        let client = input.client.clone();
+        let output = B::gelu_tanh_forward(fusion_in::<B>(input));
+        fusion_out::<B>(output, &client)
+    }
+
+    fn gelu_bwd_forward(input: FloatTensor<Self>) -> FloatTensor<Self> {
+        use fusion_helpers::{fusion_in, fusion_out};
+        let client = input.client.clone();
+        let output = B::gelu_bwd_forward(fusion_in::<B>(input));
+        fusion_out::<B>(output, &client)
+    }
+
+    fn gelu_tanh_backward(
+        input: FloatTensor<Self>,
+        grad_output: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        use fusion_helpers::{fusion_in, fusion_out};
+        let client = input.client.clone();
+        let grad_input = B::gelu_tanh_backward(fusion_in::<B>(input), fusion_in::<B>(grad_output));
+        fusion_out::<B>(grad_input, &client)
+    }
+
+    fn gelu_tanh_backward_backward(
+        input: FloatTensor<Self>,
+        grad_output: FloatTensor<Self>,
+    ) -> FloatTensor<Self> {
+        use fusion_helpers::{fusion_in, fusion_out};
+        let client = input.client.clone();
+        let grad_input =
+            B::gelu_tanh_backward_backward(fusion_in::<B>(input), fusion_in::<B>(grad_output));
+        fusion_out::<B>(grad_input, &client)
     }
 }
 

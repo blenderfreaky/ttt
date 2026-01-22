@@ -49,6 +49,8 @@ class ValidationConfig:
     use_gate: bool = True
     conv_kernel: int = 4
     pre_conv: bool = False
+    share_qk: bool = True
+    tie_word_embeddings: bool = True
     layer_type: str = "linear"
 
     def __post_init__(self):
@@ -352,7 +354,7 @@ def validate_ttt_layer_forward(save_dir: Path, cfg: ValidationConfig):
         mini_batch_size=mini_batch_size,
         ttt_layer_type=cfg.layer_type,
         ttt_base_lr=1.0,
-        share_qk=True,
+        share_qk=cfg.share_qk,
         use_gate=cfg.use_gate,
         conv_kernel=cfg.conv_kernel,
         pre_conv=cfg.pre_conv,
@@ -386,10 +388,6 @@ def validate_ttt_layer_forward(save_dir: Path, cfg: ValidationConfig):
         "q_proj_weight": ttt_layer.q_proj.weight.contiguous(),
         "v_proj_weight": ttt_layer.v_proj.weight.contiguous(),
         "o_proj_weight": ttt_layer.o_proj.weight.contiguous(),
-        "conv_q_weight": ttt_layer.conv_q.weight.contiguous(),
-        "conv_q_bias": ttt_layer.conv_q.bias.contiguous(),
-        "conv_k_weight": ttt_layer.conv_k.weight.contiguous(),
-        "conv_k_bias": ttt_layer.conv_k.bias.contiguous(),
         "ttt_norm_weight": ttt_layer.ttt_norm_weight.contiguous(),
         "ttt_norm_bias": ttt_layer.ttt_norm_bias.contiguous(),
         "post_norm_weight": ttt_layer.post_norm.weight.contiguous(),
@@ -399,10 +397,19 @@ def validate_ttt_layer_forward(save_dir: Path, cfg: ValidationConfig):
         "token_idx": ttt_layer.token_idx.contiguous(),
         "learnable_token_idx": ttt_layer.learnable_token_idx.contiguous(),
         "config_mini_batch_size": torch.tensor([mini_batch_size], dtype=torch.int64),
+        "config_share_qk": torch.tensor([1 if cfg.share_qk else 0], dtype=torch.int64),
     }
     _add_ttt_inner_weights(tensors, ttt_layer, cfg.layer_type)
     if ttt_layer.use_gate:
         tensors["g_proj_weight"] = ttt_layer.g_proj.weight.contiguous()
+    if cfg.share_qk:
+        # Convolutions only exist when share_qk=True
+        tensors["conv_q_weight"] = ttt_layer.conv_q.weight.contiguous()
+        tensors["conv_q_bias"] = ttt_layer.conv_q.bias.contiguous()
+        tensors["conv_k_weight"] = ttt_layer.conv_k.weight.contiguous()
+        tensors["conv_k_bias"] = ttt_layer.conv_k.bias.contiguous()
+    else:
+        tensors["k_proj_weight"] = ttt_layer.k_proj.weight.contiguous()
 
     save_file(tensors, save_dir / f"ttt_layer_{cfg.layer_type}.safetensors")
 
@@ -429,7 +436,7 @@ def validate_block_forward(save_dir: Path, cfg: ValidationConfig):
         mini_batch_size=mini_batch_size,
         ttt_layer_type=cfg.layer_type,
         ttt_base_lr=1.0,
-        share_qk=True,
+        share_qk=cfg.share_qk,
         use_gate=cfg.use_gate,
         conv_kernel=cfg.conv_kernel,
         pre_conv=cfg.pre_conv,
@@ -465,10 +472,6 @@ def validate_block_forward(save_dir: Path, cfg: ValidationConfig):
         "q_proj_weight": ttt.q_proj.weight.contiguous(),
         "v_proj_weight": ttt.v_proj.weight.contiguous(),
         "o_proj_weight": ttt.o_proj.weight.contiguous(),
-        "conv_q_weight": ttt.conv_q.weight.contiguous(),
-        "conv_q_bias": ttt.conv_q.bias.contiguous(),
-        "conv_k_weight": ttt.conv_k.weight.contiguous(),
-        "conv_k_bias": ttt.conv_k.bias.contiguous(),
         "ttt_norm_weight": ttt.ttt_norm_weight.contiguous(),
         "ttt_norm_bias": ttt.ttt_norm_bias.contiguous(),
         "post_norm_weight": ttt.post_norm.weight.contiguous(),
@@ -484,10 +487,19 @@ def validate_block_forward(save_dir: Path, cfg: ValidationConfig):
         # Config values as scalar tensors for Rust to read
         "config_mini_batch_size": torch.tensor([mini_batch_size], dtype=torch.int64),
         "config_pre_conv": torch.tensor([1 if cfg.pre_conv else 0], dtype=torch.int64),
+        "config_share_qk": torch.tensor([1 if cfg.share_qk else 0], dtype=torch.int64),
     }
     _add_ttt_inner_weights(tensors, ttt, cfg.layer_type)
     if ttt.use_gate:
         tensors["g_proj_weight"] = ttt.g_proj.weight.contiguous()
+    if cfg.share_qk:
+        # Convolutions only exist when share_qk=True
+        tensors["conv_q_weight"] = ttt.conv_q.weight.contiguous()
+        tensors["conv_q_bias"] = ttt.conv_q.bias.contiguous()
+        tensors["conv_k_weight"] = ttt.conv_k.weight.contiguous()
+        tensors["conv_k_bias"] = ttt.conv_k.bias.contiguous()
+    else:
+        tensors["k_proj_weight"] = ttt.k_proj.weight.contiguous()
     if cfg.pre_conv:
         tensors["pre_conv_norm_weight"] = block.conv.norm.weight.contiguous()
         tensors["pre_conv_weight"] = block.conv.conv.weight.contiguous()
@@ -521,7 +533,8 @@ def validate_full_model(save_dir: Path, cfg: ValidationConfig):
         mini_batch_size=mini_batch_size,
         ttt_layer_type=cfg.layer_type,
         ttt_base_lr=1.0,
-        share_qk=True,
+        share_qk=cfg.share_qk,
+        tie_word_embeddings=cfg.tie_word_embeddings,
         use_gate=cfg.use_gate,
         conv_kernel=cfg.conv_kernel,
         pre_conv=cfg.pre_conv,
@@ -551,7 +564,13 @@ def validate_full_model(save_dir: Path, cfg: ValidationConfig):
         "config_mini_batch_size": torch.tensor([mini_batch_size], dtype=torch.int64),
         "config_num_layers": torch.tensor([num_layers], dtype=torch.int64),
         "config_pre_conv": torch.tensor([1 if cfg.pre_conv else 0], dtype=torch.int64),
+        "config_share_qk": torch.tensor([1 if cfg.share_qk else 0], dtype=torch.int64),
+        "config_tie_word_embeddings": torch.tensor([1 if cfg.tie_word_embeddings else 0], dtype=torch.int64),
     }
+
+    # lm_head weight if not tied
+    if not cfg.tie_word_embeddings:
+        tensors["lm_head_weight"] = model.lm_head.weight.contiguous()
 
     # Save each layer's parameters with layer prefix
     for layer_idx, layer in enumerate(model.model.layers):
@@ -564,14 +583,18 @@ def validate_full_model(save_dir: Path, cfg: ValidationConfig):
 
         # TTT layer parameters
         tensors[f"{prefix}q_proj_weight"] = ttt.q_proj.weight.contiguous()
+        if not cfg.share_qk:
+            tensors[f"{prefix}k_proj_weight"] = ttt.k_proj.weight.contiguous()
         tensors[f"{prefix}v_proj_weight"] = ttt.v_proj.weight.contiguous()
         tensors[f"{prefix}o_proj_weight"] = ttt.o_proj.weight.contiguous()
         if ttt.use_gate:
             tensors[f"{prefix}g_proj_weight"] = ttt.g_proj.weight.contiguous()
-        tensors[f"{prefix}conv_q_weight"] = ttt.conv_q.weight.contiguous()
-        tensors[f"{prefix}conv_q_bias"] = ttt.conv_q.bias.contiguous()
-        tensors[f"{prefix}conv_k_weight"] = ttt.conv_k.weight.contiguous()
-        tensors[f"{prefix}conv_k_bias"] = ttt.conv_k.bias.contiguous()
+        if cfg.share_qk:
+            # Convolutions only exist when share_qk=True
+            tensors[f"{prefix}conv_q_weight"] = ttt.conv_q.weight.contiguous()
+            tensors[f"{prefix}conv_q_bias"] = ttt.conv_q.bias.contiguous()
+            tensors[f"{prefix}conv_k_weight"] = ttt.conv_k.weight.contiguous()
+            tensors[f"{prefix}conv_k_bias"] = ttt.conv_k.bias.contiguous()
         _add_ttt_inner_weights(tensors, ttt, cfg.layer_type, prefix)
         tensors[f"{prefix}ttt_norm_weight"] = ttt.ttt_norm_weight.contiguous()
         tensors[f"{prefix}ttt_norm_bias"] = ttt.ttt_norm_bias.contiguous()
@@ -616,6 +639,8 @@ def main():
     parser.add_argument("--use_gate", action=argparse.BooleanOptionalAction, default=True, help="Use gating (default: True)")
     parser.add_argument("--conv_kernel", type=int, default=4, help="Convolution kernel size (default: 4)")
     parser.add_argument("--pre_conv", action=argparse.BooleanOptionalAction, default=False, help="Use pre-convolution (default: False)")
+    parser.add_argument("--share_qk", action=argparse.BooleanOptionalAction, default=True, help="Share Q/K projection (default: True)")
+    parser.add_argument("--tie_word_embeddings", action=argparse.BooleanOptionalAction, default=True, help="Tie word embeddings (default: True)")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory (default: validation_data_reference)")
 
     args = parser.parse_args()
@@ -633,6 +658,8 @@ def main():
         use_gate=args.use_gate,
         conv_kernel=args.conv_kernel,
         pre_conv=args.pre_conv,
+        share_qk=args.share_qk,
+        tie_word_embeddings=args.tie_word_embeddings,
     )
 
     print("=" * 70)
@@ -640,6 +667,7 @@ def main():
     print("=" * 70)
     print(f"Config: B={cfg.B}, L={cfg.L}, H={cfg.H}, D={cfg.D}, mini_batch={cfg.mini_batch_size}, seed={cfg.seed}")
     print(f"        use_gate={cfg.use_gate}, conv_kernel={cfg.conv_kernel}, pre_conv={cfg.pre_conv}")
+    print(f"        share_qk={cfg.share_qk}, tie_word_embeddings={cfg.tie_word_embeddings}")
 
     if args.output_dir:
         save_dir = Path(args.output_dir)

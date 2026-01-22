@@ -6,27 +6,14 @@ use burn::{
     tensor::{Int, Tensor, activation::silu, module::conv1d, ops::ConvOptions},
 };
 
-/// Applies causal convolution with no initial states
-// Returns [batch_size, dim, seq_len]
 pub fn causal_conv1d_fn<B: Backend>(
-    // [batch_size, dim, seq_len]
-    x: Tensor<B, 3>,
-    //// [dim, 1, width]
-    // [channels_out, channels_in/dim, kernel_size]
-    weight: Tensor<B, 3>,
-    //// [dim,]
-    // [channels_out]
-    bias: Option<Tensor<B, 1>>,
-    // // (batch, dim, width - 1)
-    // initial_states: Option<Tensor<B, 3>>,
-    // // (batch, dim, width - 1)
-    // final_states_out: Tensor<B, 3>,
+    x: Tensor<B, 3>,             // [batch_size, dim, seq_len]
+    weight: Tensor<B, 3>,        // [channels_out, 1, kernel_size]
+    bias: Option<Tensor<B, 1>>,  // [channels_out]
 ) -> Tensor<B, 3> {
     let [batch_size, input_channels, seq_len] = x.shape().dims();
     let [channels_out, channels_in_per_group, kernel_size] = weight.shape().dims();
 
-    // Debug assertions to catch dimension mismatches early with clear error messages
-    // println!("causal_conv1d_fn input shape: {:?}, weight shape: {:?}", x.shape(), weight.shape());
     debug_assert_eq!(
         input_channels,
         channels_out,
@@ -41,9 +28,6 @@ pub fn causal_conv1d_fn<B: Backend>(
         "Expected channels_in_per_group to be 1, got {channels_in_per_group}"
     );
 
-    // if let Some(initial_states) = initial_states {
-    //     x = Tensor::cat(vec![initial_states, x], 2);
-
     let out = conv1d(
         x,
         weight,
@@ -56,8 +40,6 @@ pub fn causal_conv1d_fn<B: Backend>(
 
 #[derive(Config, Debug)]
 pub struct CausalConvConfig {
-    // Used for cache indexing in src
-    // layer_idx: usize,
     hidden_size: usize,
     kernel_size: usize,
     #[config(
@@ -402,28 +384,3 @@ fn apply_rotary_pos_emb_single<B: Backend>(
     x.clone() * cos + rotate_half(x) * sin
 }
 
-/// GELU backward (derivative of tanh approximation)
-/// Reference: https://github.com/test-time-training/ttt-lm-pytorch/blob/main/ttt.py#L509
-///
-/// Using burns own gelu_backward is tricky because it's not nicely exposed,
-/// and using it requires weird tricks in passing tensors to the backend.
-pub fn gelu_bwd<B: Backend>(x: Tensor<B, 4>) -> Tensor<B, 4> {
-    // Constants from the tanh approximation of GELU
-    let sqrt_2_over_pi = 0.797_884_6_f32;
-    let coeff = 0.044_715_f32;
-
-    // tanh_out = tanh(sqrt(2/pi) * x * (1 + 0.044715 * x^2))
-    let x_sq = x.clone().powf_scalar(2.0);
-    let inner = x.clone() * (x_sq.clone() * coeff + 1.0) * sqrt_2_over_pi;
-    let tanh_out = inner.tanh();
-
-    // ff = 0.5 * x * ((1 - tanh_out^2) * (sqrt(2/pi) + 3 * 0.044715 * sqrt(2/pi) * x^2)) + 0.5 * (1 + tanh_out)
-    let tanh_sq = tanh_out.clone().powf_scalar(2.0);
-    let one_minus_tanh_sq = tanh_sq.neg() + 1.0;
-    let coeff2 = 3.0 * coeff * sqrt_2_over_pi; // 0.1070322243
-    let inner2 = one_minus_tanh_sq * (x_sq * coeff2 + sqrt_2_over_pi);
-    let term1 = x * inner2 * 0.5;
-    let term2 = (tanh_out + 1.0) * 0.5;
-
-    term1 + term2
-}

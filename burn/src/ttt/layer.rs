@@ -10,13 +10,14 @@ use burn::{
     prelude::*,
     tensor::{
         Tensor,
-        activation::{gelu, sigmoid},
+        activation::sigmoid,
     },
 };
 use burn_backend::Distribution;
 
 use super::{
     PositionEncodingType, TTTConfig,
+    cubecl_kernels::backend::api::gelu_tanh,
     util::{RotaryEmbedding, RotaryEmbeddingConfig, causal_conv1d_fn},
 };
 
@@ -60,6 +61,19 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
 
         let mini_batch_size = self.get_config().mini_batch_size;
         let num_mini_batch = seq_len / mini_batch_size;
+
+        // TODO: Implement gradient checkpointing when scan_checkpoint_group_size > 0
+        // Reference: https://github.com/test-time-training/ttt-lm-pytorch/blob/main/ttt.py#L449
+        // When enabled, groups `scan_checkpoint_group_size` mini-batches together in one
+        // gradient checkpoint. During backward, the forward pass for each group is recomputed
+        // to save memory. JAX reference uses group_size=4.
+        //
+        // Implementation would require:
+        // 1. Saving state before each checkpoint group
+        // 2. During backward, restoring state and recomputing the group's forward pass
+        // 3. Burn's autodiff doesn't have explicit checkpoint() like PyTorch, so this would
+        //    need custom autodiff integration or a manual save/restore mechanism.
+        let _checkpoint_group_size = self.get_config().scan_checkpoint_group_size;
 
         for i in 0..num_mini_batch {
             let start_idx = i * mini_batch_size;
@@ -106,6 +120,8 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
 #[derive(Module, Debug)]
 pub struct TTT<B: Backend> {
     pub q_proj: Linear<B>,
+    /// Separate K projection (only present if share_qk is false)
+    pub k_proj: Option<Linear<B>>,
     pub v_proj: Linear<B>,
     pub g_proj: Option<Linear<B>>, // Only present if use_gate is true
     pub o_proj: Linear<B>,
@@ -163,6 +179,12 @@ impl TTTConfig {
 
         TTT {
             q_proj: linear(self.token_size, self.hidden_size, false),
+            // When share_qk=false, use separate K projection; when true, K shares Q projection
+            k_proj: if self.share_qk {
+                None
+            } else {
+                Some(linear(self.token_size, self.hidden_size, false))
+            },
             v_proj: linear(self.token_size, self.hidden_size, false),
             g_proj: if self.use_gate {
                 Some(linear(self.token_size, self.hidden_size, false))
@@ -304,17 +326,27 @@ impl<B: Backend> TTTInputsInner<B> {
     }
 }
 
-impl<B: Backend> TTT<B> {
+impl<B: super::cubecl_kernels::backend::FusedTttBackend> TTT<B> {
     /// Parameters:
     /// - `x`: The input tensor of shape `[batch_size, seq_len, token_dim]`
     /// - `start_idx`: Starting position index for the sequence
     fn get_qkv(&self, x: Tensor<B, 3>, start_idx: usize) -> Qkv<B> {
         let [batch_size, seq_len, _token_dim] = x.shape().dims();
 
-        let xqk = self.q_proj.forward(x.clone()); // Shared base for Q and K
-        let xv = self.v_proj.forward(x);
+        let xv = self.v_proj.forward(x.clone());
 
-        let (xq, xk) = self.conv_qk(xqk);
+        // When share_qk=true: use shared projection + separate convs for Q and K
+        // When share_qk=false: use separate projections for Q and K
+        let (xq, xk) = if let Some(k_proj) = &self.k_proj {
+            // share_qk=false: separate projections
+            let xq = self.q_proj.forward(x.clone());
+            let xk = k_proj.forward(x);
+            (xq, xk)
+        } else {
+            // share_qk=true: shared projection + separate convs
+            let xqk = self.q_proj.forward(x);
+            self.conv_qk(xqk)
+        };
 
         // [B, seq_len, num_heads*dim] -> [B, num_heads, seq_len, dim]
         let [xq, xk, xv] = [xq, xk, xv].map(|x| {
@@ -446,7 +478,8 @@ impl<B: Backend> TTT<B> {
 
         let out = if let Some(g_proj) = &self.g_proj {
             let gate = g_proj.forward(x);
-            gelu(gate) * out
+            // Use tanh approximation for GELU to match JAX implementation
+            gelu_tanh(gate) * out
         } else {
             out
         };

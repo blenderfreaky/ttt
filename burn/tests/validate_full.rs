@@ -620,6 +620,7 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     // Read config from safetensors
     let mini_batch_size = loader.get_config_i64("config_mini_batch_size") as usize;
     let pre_conv = loader.get_config_i64("config_pre_conv") != 0;
+    let share_qk = loader.get_config_i64("config_share_qk") != 0;
 
     // Infer dimensions from tensor shapes
     let [batch_size, _seq_len, hidden_size] = input.dims();
@@ -649,8 +650,8 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     println!("  Input shape: {:?}", input.dims());
     println!("  Expected output shape: {:?}", output_expected.dims());
     println!(
-        "  Inferred: num_heads={}, head_dim={}, intermediate_size={}, mini_batch_size={}, pre_conv={}",
-        num_heads, head_dim, intermediate_size, mini_batch_size, pre_conv
+        "  Inferred: num_heads={}, head_dim={}, intermediate_size={}, mini_batch_size={}, pre_conv={}, share_qk={}",
+        num_heads, head_dim, intermediate_size, mini_batch_size, pre_conv, share_qk
     );
 
     let seq_norm_weight: Tensor<GpuBackend, 1> = loader.get_tensor("seq_norm_weight");
@@ -660,11 +661,6 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     let v_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("v_proj_weight");
     let o_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("o_proj_weight");
     let g_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("g_proj_weight");
-
-    let conv_q_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_q_weight");
-    let conv_q_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_q_bias");
-    let conv_k_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_k_weight");
-    let conv_k_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_k_bias");
 
     let post_norm_weight: Tensor<GpuBackend, 1> = loader.get_tensor("post_norm_weight");
     let post_norm_bias: Tensor<GpuBackend, 1> = loader.get_tensor("post_norm_bias");
@@ -702,7 +698,8 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
             .with_conv_kernel_size(conv_kernel_size)
             .with_use_gate(true)
             .with_conv_before_ttt(pre_conv)
-            .with_swi_glu_mlp_intermediate_size(intermediate_size),
+            .with_swi_glu_mlp_intermediate_size(intermediate_size)
+            .with_share_qk(share_qk),
     );
 
     let mut block = TTTBlockConfig::new(config.clone(), 0).init::<GpuBackend>(&device);
@@ -716,17 +713,27 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
 
     // TTT layer weights
     block.ttt.q_proj.weight = Param::from_tensor(q_proj_weight.transpose());
+    if share_qk {
+        // Convolutions only exist when share_qk=true
+        let conv_q_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_q_weight");
+        let conv_q_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_q_bias");
+        let conv_k_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_k_weight");
+        let conv_k_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_k_bias");
+        block.ttt.q_conv.weight = Param::from_tensor(conv_q_weight);
+        block.ttt.q_conv.bias = Some(Param::from_tensor(conv_q_bias));
+        block.ttt.k_conv.weight = Param::from_tensor(conv_k_weight);
+        block.ttt.k_conv.bias = Some(Param::from_tensor(conv_k_bias));
+    } else {
+        let k_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("k_proj_weight");
+        if let Some(ref mut k_proj) = block.ttt.k_proj {
+            k_proj.weight = Param::from_tensor(k_proj_weight.transpose());
+        }
+    }
     block.ttt.v_proj.weight = Param::from_tensor(v_proj_weight.transpose());
     block.ttt.o_proj.weight = Param::from_tensor(o_proj_weight.transpose());
     if let Some(ref mut g_proj) = block.ttt.g_proj {
         g_proj.weight = Param::from_tensor(g_proj_weight.transpose());
     }
-
-    // Convolutions
-    block.ttt.q_conv.weight = Param::from_tensor(conv_q_weight);
-    block.ttt.q_conv.bias = Some(Param::from_tensor(conv_q_bias));
-    block.ttt.k_conv.weight = Param::from_tensor(conv_k_weight);
-    block.ttt.k_conv.bias = Some(Param::from_tensor(conv_k_bias));
 
     // Learning rate parameters
     block.ttt.learnable_ttt_lr_weight = lr_weight.permute([0, 2, 1]);
@@ -835,6 +842,7 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
 
     // Read config from safetensors
     let mini_batch_size = loader.get_config_i64("config_mini_batch_size") as usize;
+    let share_qk = loader.get_config_i64("config_share_qk") != 0;
 
     // Infer dimensions from tensor shapes
     let [batch_size, _seq_len, hidden_size] = input.dims();
@@ -844,19 +852,14 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     println!("  Input shape: {:?}", input.dims());
     println!("  Expected output shape: {:?}", output_expected.dims());
     println!(
-        "  Inferred: num_heads={}, head_dim={}, mini_batch_size={}",
-        num_heads, head_dim, mini_batch_size
+        "  Inferred: num_heads={}, head_dim={}, mini_batch_size={}, share_qk={}",
+        num_heads, head_dim, mini_batch_size, share_qk
     );
 
     let q_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("q_proj_weight");
     let v_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("v_proj_weight");
     let o_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("o_proj_weight");
     let g_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("g_proj_weight");
-
-    let conv_q_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_q_weight");
-    let conv_q_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_q_bias");
-    let conv_k_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_k_weight");
-    let conv_k_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_k_bias");
 
     let post_norm_weight: Tensor<GpuBackend, 1> = loader.get_tensor("post_norm_weight");
     let post_norm_bias: Tensor<GpuBackend, 1> = loader.get_tensor("post_norm_bias");
@@ -874,7 +877,8 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
             .with_num_heads(num_heads)
             .with_mini_batch_size(mini_batch_size)
             .with_conv_kernel_size(4)
-            .with_use_gate(true),
+            .with_use_gate(true)
+            .with_share_qk(share_qk),
     );
 
     let mut ttt_layer = config.init_ttt_seq::<GpuBackend>(&device);
@@ -882,16 +886,27 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
 
     // Set TTT layer weights
     ttt_layer.q_proj.weight = Param::from_tensor(q_proj_weight.transpose());
+    if share_qk {
+        // Convolutions only exist when share_qk=true
+        let conv_q_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_q_weight");
+        let conv_q_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_q_bias");
+        let conv_k_weight: Tensor<GpuBackend, 3> = loader.get_tensor("conv_k_weight");
+        let conv_k_bias: Tensor<GpuBackend, 1> = loader.get_tensor("conv_k_bias");
+        ttt_layer.q_conv.weight = Param::from_tensor(conv_q_weight);
+        ttt_layer.q_conv.bias = Some(Param::from_tensor(conv_q_bias));
+        ttt_layer.k_conv.weight = Param::from_tensor(conv_k_weight);
+        ttt_layer.k_conv.bias = Some(Param::from_tensor(conv_k_bias));
+    } else {
+        let k_proj_weight: Tensor<GpuBackend, 2> = loader.get_tensor("k_proj_weight");
+        if let Some(ref mut k_proj) = ttt_layer.k_proj {
+            k_proj.weight = Param::from_tensor(k_proj_weight.transpose());
+        }
+    }
     ttt_layer.v_proj.weight = Param::from_tensor(v_proj_weight.transpose());
     ttt_layer.o_proj.weight = Param::from_tensor(o_proj_weight.transpose());
     if let Some(ref mut g_proj) = ttt_layer.g_proj {
         g_proj.weight = Param::from_tensor(g_proj_weight.transpose());
     }
-
-    ttt_layer.q_conv.weight = Param::from_tensor(conv_q_weight);
-    ttt_layer.q_conv.bias = Some(Param::from_tensor(conv_q_bias));
-    ttt_layer.k_conv.weight = Param::from_tensor(conv_k_weight);
-    ttt_layer.k_conv.bias = Some(Param::from_tensor(conv_k_bias));
 
     ttt_layer.learnable_ttt_lr_weight = lr_weight.permute([0, 2, 1]);
     ttt_layer.learnable_ttt_lr_bias = lr_bias;
@@ -949,6 +964,8 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     let mini_batch_size = loader.get_config_i64("config_mini_batch_size") as usize;
     let num_layers = loader.get_config_i64("config_num_layers") as usize;
     let pre_conv = loader.get_config_i64("config_pre_conv") != 0;
+    let share_qk = loader.get_config_i64("config_share_qk") != 0;
+    let tie_word_embeddings = loader.get_config_i64("config_tie_word_embeddings") != 0;
 
     // Infer dimensions from tensor shapes
     let embed_weight: Tensor<GpuBackend, 2> = loader.get_tensor("embed_weight");
@@ -978,7 +995,7 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     println!("  Input IDs shape: {:?}", input_ids.dims());
     println!("  Expected logits shape: {:?}", logits_expected.dims());
     println!(
-        "  Inferred: vocab_size={}, hidden_size={}, num_heads={}, head_dim={}, intermediate_size={}, num_layers={}, mini_batch_size={}, pre_conv={}",
+        "  Inferred: vocab_size={}, hidden_size={}, num_heads={}, head_dim={}, intermediate_size={}, num_layers={}, mini_batch_size={}, pre_conv={}, share_qk={}, tie_embed={}",
         vocab_size,
         hidden_size,
         num_heads,
@@ -986,7 +1003,9 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
         intermediate_size,
         num_layers,
         mini_batch_size,
-        pre_conv
+        pre_conv,
+        share_qk,
+        tie_word_embeddings
     );
 
     // embed_weight already loaded above for dimension inference
@@ -1015,7 +1034,9 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
             .with_use_gate(true)
             .with_conv_before_ttt(pre_conv)
             .with_swi_glu_mlp_intermediate_size(intermediate_size)
-            .with_num_hidden_layers(num_layers),
+            .with_num_hidden_layers(num_layers)
+            .with_share_qk(share_qk)
+            .with_tie_word_embeddings(tie_word_embeddings),
     );
 
     let inner_config = Arc::new(Inner::Config::default());
@@ -1026,6 +1047,14 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     model.embedding.weight = Param::from_tensor(embed_weight);
 
     model.norm.gamma = Param::from_tensor(final_norm_weight);
+
+    // Load lm_head if not tied
+    if !tie_word_embeddings {
+        let lm_head_weight: Tensor<GpuBackend, 2> = loader.get_tensor("lm_head_weight");
+        if let Some(ref mut lm_head) = model.lm_head {
+            lm_head.weight = Param::from_tensor(lm_head_weight.transpose());
+        }
+    }
 
     // Load and set parameters for each layer
     for layer_idx in 0..num_layers {
@@ -1044,15 +1073,6 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
             loader.get_tensor(&format!("{}o_proj_weight", prefix));
         let g_proj_weight: Tensor<GpuBackend, 2> =
             loader.get_tensor(&format!("{}g_proj_weight", prefix));
-
-        let conv_q_weight: Tensor<GpuBackend, 3> =
-            loader.get_tensor(&format!("{}conv_q_weight", prefix));
-        let conv_q_bias: Tensor<GpuBackend, 1> =
-            loader.get_tensor(&format!("{}conv_q_bias", prefix));
-        let conv_k_weight: Tensor<GpuBackend, 3> =
-            loader.get_tensor(&format!("{}conv_k_weight", prefix));
-        let conv_k_bias: Tensor<GpuBackend, 1> =
-            loader.get_tensor(&format!("{}conv_k_bias", prefix));
 
         let post_norm_weight: Tensor<GpuBackend, 1> =
             loader.get_tensor(&format!("{}post_norm_weight", prefix));
@@ -1084,17 +1104,32 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
 
         // TTT layer weights
         block.ttt.q_proj.weight = Param::from_tensor(q_proj_weight.transpose());
+        if share_qk {
+            // Convolutions only exist when share_qk=true
+            let conv_q_weight: Tensor<GpuBackend, 3> =
+                loader.get_tensor(&format!("{}conv_q_weight", prefix));
+            let conv_q_bias: Tensor<GpuBackend, 1> =
+                loader.get_tensor(&format!("{}conv_q_bias", prefix));
+            let conv_k_weight: Tensor<GpuBackend, 3> =
+                loader.get_tensor(&format!("{}conv_k_weight", prefix));
+            let conv_k_bias: Tensor<GpuBackend, 1> =
+                loader.get_tensor(&format!("{}conv_k_bias", prefix));
+            block.ttt.q_conv.weight = Param::from_tensor(conv_q_weight);
+            block.ttt.q_conv.bias = Some(Param::from_tensor(conv_q_bias));
+            block.ttt.k_conv.weight = Param::from_tensor(conv_k_weight);
+            block.ttt.k_conv.bias = Some(Param::from_tensor(conv_k_bias));
+        } else {
+            let k_proj_weight: Tensor<GpuBackend, 2> =
+                loader.get_tensor(&format!("{}k_proj_weight", prefix));
+            if let Some(ref mut k_proj) = block.ttt.k_proj {
+                k_proj.weight = Param::from_tensor(k_proj_weight.transpose());
+            }
+        }
         block.ttt.v_proj.weight = Param::from_tensor(v_proj_weight.transpose());
         block.ttt.o_proj.weight = Param::from_tensor(o_proj_weight.transpose());
         if let Some(ref mut g_proj) = block.ttt.g_proj {
             g_proj.weight = Param::from_tensor(g_proj_weight.transpose());
         }
-
-        // Convolutions
-        block.ttt.q_conv.weight = Param::from_tensor(conv_q_weight);
-        block.ttt.q_conv.bias = Some(Param::from_tensor(conv_q_bias));
-        block.ttt.k_conv.weight = Param::from_tensor(conv_k_weight);
-        block.ttt.k_conv.bias = Some(Param::from_tensor(conv_k_bias));
 
         // Learning rate parameters
         block.ttt.learnable_ttt_lr_weight = lr_weight.permute([0, 2, 1]);

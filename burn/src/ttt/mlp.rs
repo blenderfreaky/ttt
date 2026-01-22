@@ -4,14 +4,12 @@ use burn::{
     config::Config,
     module::{Ignored, Module, Param},
     nn::Initializer,
-    prelude::Backend,
-    tensor::{Tensor, activation::gelu, s},
+    tensor::{Tensor, s},
 };
-
-use crate::ttt::util::gelu_bwd;
 
 use super::{
     TTTConfig,
+    cubecl_kernels::backend::{FusedTttBackend, api::{gelu_bwd, gelu_tanh}},
     layer::{TTTInnerModel, TTTInputsInner},
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
 };
@@ -54,7 +52,7 @@ impl Default for TTTMLPConfig {
     }
 }
 
-impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for TTTMLP<B> {
     type Config = TTTMLPConfig;
     type State = TTTMLPState<B>;
 
@@ -127,7 +125,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
 
         let z1 = x1.clone().matmul(state.w1.clone()) + state.b1.clone().unsqueeze_dim(2);
 
-        let x2 = gelu(z1.clone());
+        let x2 = gelu_tanh(z1.clone());
 
         let z2 = x2.clone().matmul(state.w2.clone()) + state.b2.clone().unsqueeze_dim(2);
 
@@ -157,7 +155,7 @@ impl<B: Backend> TTTInnerModel<B> for TTTMLP<B> {
             - (eta_batch.clone() * attn1).matmul(grad_l_wrt_z1.clone())
             + b1_bar;
 
-        let x2_bar = gelu(z1_bar);
+        let x2_bar = gelu_tanh(z1_bar);
 
         let attn2 = x2_bar.clone().matmul(x2.clone().transpose()).tril(0);
 

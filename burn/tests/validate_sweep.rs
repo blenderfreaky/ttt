@@ -19,6 +19,8 @@ struct Config {
     use_gate: bool,
     conv_kernel: usize,
     pre_conv: bool,
+    share_qk: bool,
+    tie_word_embeddings: bool,
 }
 
 impl Config {
@@ -33,6 +35,8 @@ impl Config {
             use_gate: true,
             conv_kernel: 4,
             pre_conv: true,
+            share_qk: true,
+            tie_word_embeddings: true,
         }
     }
 
@@ -40,6 +44,16 @@ impl Config {
         self.use_gate = use_gate;
         self.conv_kernel = conv_kernel;
         self.pre_conv = pre_conv;
+        self
+    }
+
+    fn with_share_qk(mut self, share_qk: bool) -> Self {
+        self.share_qk = share_qk;
+        self
+    }
+
+    fn with_tie_word_embeddings(mut self, tie_word_embeddings: bool) -> Self {
+        self.tie_word_embeddings = tie_word_embeddings;
         self
     }
 }
@@ -75,6 +89,18 @@ fn run_python_validation_data_generation(cfg: &Config) -> bool {
         args.push("--pre_conv".to_string());
     } else {
         args.push("--no-pre_conv".to_string());
+    }
+
+    if cfg.share_qk {
+        args.push("--share_qk".to_string());
+    } else {
+        args.push("--no-share_qk".to_string());
+    }
+
+    if cfg.tie_word_embeddings {
+        args.push("--tie_word_embeddings".to_string());
+    } else {
+        args.push("--no-tie_word_embeddings".to_string());
     }
 
     let output = Command::new("python3")
@@ -170,13 +196,19 @@ fn sweep_dimensions() {
         // Complex combos with flags
         Config::new(2, 32, 4, 16, 16, 42).with_flags(true, 8, true), // 2 mini-batches, large conv
         Config::new(2, 16, 6, 12, 16, 42).with_flags(true, 2, true), // different H/D, small conv
+        // share_qk variations
+        Config::new(2, 16, 4, 16, 16, 42).with_share_qk(false),
+        Config::new(2, 16, 4, 16, 16, 42).with_share_qk(false).with_flags(false, 4, true),
+        // tie_word_embeddings variations
+        Config::new(2, 16, 4, 16, 16, 42).with_tie_word_embeddings(false),
+        Config::new(2, 16, 4, 16, 16, 42).with_share_qk(false).with_tie_word_embeddings(false),
     ];
 
     let mut results = Vec::new();
 
     for cfg in &configs {
         print!(
-            "Testing B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}",
+            "Testing B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}, share_qk={}, tie_embed={}",
             cfg.b,
             cfg.l,
             cfg.h,
@@ -185,7 +217,9 @@ fn sweep_dimensions() {
             cfg.seed,
             cfg.use_gate,
             cfg.conv_kernel,
-            cfg.pre_conv
+            cfg.pre_conv,
+            cfg.share_qk,
+            cfg.tie_word_embeddings
         );
 
         // Generate Python reference data
@@ -221,7 +255,7 @@ fn sweep_dimensions() {
         for (cfg, passed, details) in &results {
             if !passed {
                 println!(
-                    "  B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={} - {}",
+                    "  B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}, share_qk={}, tie_embed={} - {}",
                     cfg.b,
                     cfg.l,
                     cfg.h,
@@ -231,6 +265,8 @@ fn sweep_dimensions() {
                     cfg.use_gate,
                     cfg.conv_kernel,
                     cfg.pre_conv,
+                    cfg.share_qk,
+                    cfg.tie_word_embeddings,
                     details
                 );
             }
@@ -241,7 +277,7 @@ fn sweep_dimensions() {
     for (cfg, passed, _) in &results {
         if *passed {
             println!(
-                "  B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}",
+                "  B={}, L={}, H={}, D={}, mini_batch={}, seed={}, gate={}, conv={}, pre_conv={}, share_qk={}, tie_embed={}",
                 cfg.b,
                 cfg.l,
                 cfg.h,
@@ -250,7 +286,9 @@ fn sweep_dimensions() {
                 cfg.seed,
                 cfg.use_gate,
                 cfg.conv_kernel,
-                cfg.pre_conv
+                cfg.pre_conv,
+                cfg.share_qk,
+                cfg.tie_word_embeddings
             );
         }
     }

@@ -132,6 +132,22 @@ pub struct TTTConfig {
     /// MLP expansion factor (hidden_dim = expansion_factor * head_dim)
     #[config(default = 4)]
     pub mlp_expansion_factor: usize,
+    /// Whether to share Q/K projection matrix.
+    /// When true: uses single projection + separate conv layers for Q and K (Mamba-style).
+    /// When false: uses separate Q and K projection matrices (default, standard approach).
+    #[config(default = false)]
+    pub share_qk: bool,
+    /// Whether to tie the output projection (lm_head) weights with input embeddings.
+    /// When true: uses matmul with transposed embedding weights (weight sharing).
+    /// When false: uses separate Linear layer for lm_head (more performant, single kernel call).
+    #[config(default = true)]
+    pub tie_word_embeddings: bool,
+    /// Gradient checkpoint group size on sequence dimension.
+    /// 0 means no checkpointing (default).
+    /// When > 0, groups this many mini-batches together in one gradient checkpoint to save memory.
+    /// JAX reference uses 4. This trades compute for memory by recomputing forward pass during backward.
+    #[config(default = 0)]
+    pub scan_checkpoint_group_size: usize,
 }
 
 impl TTTConfig {
