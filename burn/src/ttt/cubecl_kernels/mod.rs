@@ -5,11 +5,21 @@ use burn::prelude::*;
 use crate::ttt::layer::TTTInnerModel;
 
 pub mod backend;
-pub mod gelu_tanh;
+pub mod bundle;
+pub mod gelu;
+mod gelu_tanh;
+pub mod impls;
+pub mod kernel;
 pub mod linear;
 mod linear_backward;
 mod linear_forward;
 mod linear_forward_tile;
+pub mod ttt;
+
+// Re-export commonly used items
+pub use bundle::TensorBundle;
+pub use kernel::{FusedKernel, FusedKernelBackend};
+pub use ttt::{TttInputs, TttKernel, TttOutputs, fused_ttt_forward};
 
 /// Marker type for fused TTT layers.
 /// TTTInnerModel is implemented using a fused kernel,

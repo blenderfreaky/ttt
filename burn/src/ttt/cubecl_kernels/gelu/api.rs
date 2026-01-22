@@ -1,0 +1,28 @@
+use burn::tensor::{Tensor, TensorPrimitive};
+
+use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
+
+use super::types::{GeluBwdKernel, GeluInput, GeluTanhKernel};
+
+/// GELU activation with tanh approximation.
+pub fn gelu_tanh<B: FusedKernelBackend<GeluTanhKernel, 1, 1>, const D: usize>(
+    input: Tensor<B, D>,
+) -> Tensor<B, D> {
+    let inputs = GeluInput {
+        input: input.into_primitive().tensor(),
+    };
+    let outputs = B::forward(inputs);
+    Tensor::from_primitive(TensorPrimitive::Float(outputs.output))
+}
+
+/// Computes d/dx gelu(x) directly.
+/// Used in TTT MLP forward pass for gradient computation.
+pub fn gelu_bwd<B: FusedKernelBackend<GeluBwdKernel, 1, 1>, const D: usize>(
+    input: Tensor<B, D>,
+) -> Tensor<B, D> {
+    let inputs = GeluInput {
+        input: input.into_primitive().tensor(),
+    };
+    let outputs = B::forward(inputs);
+    Tensor::from_primitive(TensorPrimitive::Float(outputs.output))
+}
