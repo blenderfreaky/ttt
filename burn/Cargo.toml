@@ -44,6 +44,7 @@ burn-import = "0.20.0"
 safetensors = "0.7"
 thundercube = { path = "../thundercube", features = ["test-utils"] }
 rand = "0.9"
+paste = "1.0"
 
 [[bench]]
 name = "ttt_benchmark"

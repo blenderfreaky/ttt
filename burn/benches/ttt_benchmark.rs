@@ -6,7 +6,7 @@
 //!
 //! All benchmarks are generic over:
 //! - Backend (inference vs training with autodiff)
-//! - Inner model type (TTTLinear, FusedTTTLinear, TTTMLP)
+//! - Inner model type (TTTLinear, TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4, Fused)
 //! - Model configuration (hidden size, num heads, etc.)
 //! - Runtime parameters (batch size, sequence length, vocab size)
 //!
@@ -25,6 +25,7 @@ use std::time::Duration;
 use burn::prelude::*;
 use burn::tensor::backend::Backend as BackendTrait;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use paste::paste;
 
 use ttt::data::TrainingTextGenerationBatch;
 use ttt::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
@@ -32,7 +33,11 @@ use ttt::ttt::TTTConfig;
 use ttt::ttt::cubecl_kernels::Fused;
 use ttt::ttt::layer::{Qkv, TTTInnerModel, TTTInputsInner};
 use ttt::ttt::linear::TTTLinear;
+use ttt::ttt::linear_adam::TTTLinearAdam;
 use ttt::ttt::mlp::TTTMLP;
+use ttt::ttt::mlp2::TTTMLP2;
+use ttt::ttt::mlp3::TTTMLP3;
+use ttt::ttt::mlp4::TTTMLP4;
 
 pub type InferenceBackend = burn::backend::Rocm;
 pub type TrainingBackend = burn::backend::Autodiff<InferenceBackend>;
@@ -356,172 +361,74 @@ fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend, Inner: TTTInne
     group.finish();
 }
 
-fn bench_inner_forward_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_inner_forward::<InferenceBackend, TTTLinear<_>>(c, &config, &params, &device);
-    }
+// Benchmark generation macros
+
+/// Runtime parameters used across all benchmarks
+const BENCH_PARAMS: &[RuntimeParams] = &[
+    RuntimeParams { batch_size: 4, seq_length: 64, vocab_size: 1000 },
+    RuntimeParams { batch_size: 8, seq_length: 128, vocab_size: 1000 },
+];
+
+/// Generate a single benchmark entry function
+macro_rules! define_bench {
+    // Forward benchmarks (inference backend)
+    (forward, $scope:ident, $fn_name:ident, $inner:ty) => {
+        fn $fn_name(c: &mut Criterion) {
+            let config = BenchConfig::tiny();
+            let device = device();
+            for params in BENCH_PARAMS {
+                paste! { [<bench_ $scope _forward>]::<InferenceBackend, $inner>(c, &config, params, &device); }
+            }
+        }
+    };
+    // Backward benchmarks (training backend)
+    (backward, $scope:ident, $fn_name:ident, $inner:ty) => {
+        fn $fn_name(c: &mut Criterion) {
+            let config = BenchConfig::tiny();
+            let device = device();
+            for params in BENCH_PARAMS {
+                paste! { [<bench_ $scope _backward>]::<TrainingBackend, $inner>(c, &config, params, &device); }
+            }
+        }
+    };
 }
 
-fn bench_inner_forward_mlp(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_inner_forward::<InferenceBackend, TTTMLP<_>>(c, &config, &params, &device);
-    }
+/// Generate all 4 benchmark variants (inner/full × forward/backward) for a model
+macro_rules! define_model_benches {
+    ($suffix:ident, $inner:ty) => {
+        paste! {
+            define_bench!(forward, inner, [<bench_inner_forward_ $suffix>], $inner);
+            define_bench!(backward, inner, [<bench_inner_backward_ $suffix>], $inner);
+            define_bench!(forward, full, [<bench_full_forward_ $suffix>], $inner);
+            define_bench!(backward, full, [<bench_full_backward_ $suffix>], $inner);
+        }
+    };
 }
 
-fn bench_inner_forward_fused_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_inner_forward::<InferenceBackend, Fused<_, TTTLinear<_>>>(
-            c, &config, &params, &device,
-        );
-    }
+/// Generate all benchmarks and criterion groups for the given models
+macro_rules! define_all_benches {
+    ($($suffix:ident => $inner:ty),* $(,)?) => {
+        // Generate all benchmark functions
+        $(define_model_benches!($suffix, $inner);)*
+
+        paste! {
+            // Generate criterion groups
+            criterion_group!(inner_forward, $([<bench_inner_forward_ $suffix>]),*);
+            criterion_group!(inner_backward, $([<bench_inner_backward_ $suffix>]),*);
+            criterion_group!(full_forward, $([<bench_full_forward_ $suffix>]),*);
+            criterion_group!(full_backward, $([<bench_full_backward_ $suffix>]),*);
+        }
+    };
 }
 
-fn bench_inner_backward_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_inner_backward::<TrainingBackend, TTTLinear<_>>(c, &config, &params, &device);
-    }
-}
-
-fn bench_inner_backward_mlp(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_inner_backward::<TrainingBackend, TTTMLP<_>>(c, &config, &params, &device);
-    }
-}
-
-fn bench_inner_backward_fused_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_inner_backward::<TrainingBackend, Fused<_, TTTLinear<_>>>(
-            c, &config, &params, &device,
-        );
-    }
-}
-
-fn bench_full_forward_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_full_forward::<InferenceBackend, TTTLinear<_>>(c, &config, &params, &device);
-    }
-}
-
-fn bench_full_forward_mlp(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_full_forward::<InferenceBackend, TTTMLP<_>>(c, &config, &params, &device);
-    }
-}
-
-fn bench_full_forward_fused_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_full_forward::<InferenceBackend, Fused<_, TTTLinear<_>>>(
-            c, &config, &params, &device,
-        );
-    }
-}
-
-fn bench_full_backward_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_full_backward::<TrainingBackend, TTTLinear<_>>(c, &config, &params, &device);
-    }
-}
-
-fn bench_full_backward_mlp(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_full_backward::<TrainingBackend, TTTMLP<_>>(c, &config, &params, &device);
-    }
-}
-
-fn bench_full_backward_fused_linear(c: &mut Criterion) {
-    let config = BenchConfig::tiny();
-    let device = device();
-    for params in [
-        RuntimeParams::new(4, 64, 1000),
-        RuntimeParams::new(8, 128, 1000),
-    ] {
-        bench_full_backward::<TrainingBackend, Fused<_, TTTLinear<_>>>(
-            c, &config, &params, &device,
-        );
-    }
-}
-
-criterion_group!(
-    inner_forward,
-    bench_inner_forward_linear,
-    bench_inner_forward_mlp,
-    bench_inner_forward_fused_linear,
-);
-
-criterion_group!(
-    inner_backward,
-    bench_inner_backward_linear,
-    bench_inner_backward_mlp,
-    bench_inner_backward_fused_linear,
-);
-
-criterion_group!(
-    full_forward,
-    bench_full_forward_linear,
-    bench_full_forward_mlp,
-    bench_full_forward_fused_linear,
-);
-
-criterion_group!(
-    full_backward,
-    bench_full_backward_linear,
-    bench_full_backward_mlp,
-    bench_full_backward_fused_linear,
+define_all_benches!(
+    linear => TTTLinear<_>,
+    linear_adam => TTTLinearAdam<_>,
+    mlp => TTTMLP<_>,
+    mlp2 => TTTMLP2<_>,
+    mlp3 => TTTMLP3<_>,
+    mlp4 => TTTMLP4<_>,
+    fused_linear => Fused<_, TTTLinear<_>>,
 );
 
 criterion_main!(inner_forward, inner_backward, full_forward, full_backward);
