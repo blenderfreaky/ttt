@@ -121,7 +121,9 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inner> {
 
         let initial_logits = self.forward_with_states(input_tokens.clone(), 0, &mut states);
 
-        let mut generated = input_tokens;
+        let total_length = initial_length + max_new_tokens;
+        let mut generated: Tensor<B, 2, Int> = Tensor::zeros([batch_size, total_length], &device);
+        generated = generated.slice_assign([0..batch_size, 0..initial_length], input_tokens);
         let mut current_pos = initial_length;
 
         let mut last_logits = initial_logits
@@ -141,7 +143,10 @@ impl<B: Backend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inner> {
                 }
             };
 
-            generated = Tensor::cat(vec![generated, next_token.clone().unsqueeze_dim(1)], 1);
+            generated = generated.slice_assign(
+                [0..batch_size, current_pos..current_pos + 1],
+                next_token.clone().unsqueeze_dim(1),
+            );
             current_pos += 1;
 
             let new_token_input = next_token.unsqueeze_dim(1);

@@ -1,6 +1,4 @@
 use burn::config::Config;
-#[cfg(feature = "rocm")]
-use half::bf16;
 
 pub mod block;
 pub mod cubecl_kernels;
@@ -18,7 +16,7 @@ pub mod util;
 #[cfg(all(feature = "rocm", not(feature = "bf16")))]
 pub type GpuBackend = burn::backend::Rocm<f32>;
 #[cfg(all(feature = "rocm", feature = "bf16"))]
-pub type GpuBackend = burn::backend::Rocm<bf16>;
+pub type GpuBackend = burn::backend::Rocm<half::bf16>;
 
 #[cfg(feature = "cuda")]
 pub type GpuBackend = burn::backend::Cuda;

@@ -78,10 +78,19 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
 
         let last_mini_batch_end = num_mini_batch * mini_batch_size;
 
-        // TODO: This is sketchy. See comment on forward_one.
-        for i in last_mini_batch_end..seq_len {
-            let z = self.forward_one(state, inputs.slice_seq(i..i + 1));
-            output = output.slice_assign([0..batch_size, 0..num_heads, i..i + 1, 0..head_dim], z);
+        // Process any remaining tokens in a single batch (should work for any seq_len < mini_batch_size)
+        if last_mini_batch_end < seq_len {
+            let remainder_inputs = inputs.slice_seq(last_mini_batch_end..seq_len);
+            let z = self.forward_mini_batch(state, remainder_inputs);
+            output = output.slice_assign(
+                [
+                    0..batch_size,
+                    0..num_heads,
+                    last_mini_batch_end..seq_len,
+                    0..head_dim,
+                ],
+                z,
+            );
         }
 
         output

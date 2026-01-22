@@ -3,7 +3,7 @@ use burn::{
     module::{Module, Param},
     nn::{Initializer, Linear, LinearConfig},
     prelude::Backend,
-    tensor::{Tensor, activation::silu, module::conv1d, ops::ConvOptions},
+    tensor::{Int, Tensor, activation::silu, module::conv1d, ops::ConvOptions},
 };
 
 /// Applies causal convolution with no initial states
@@ -312,10 +312,11 @@ impl<B: Backend> RotaryEmbedding<B> {
 
         // Position indices wrap at mini_batch_size boundaries
         // e.g. for seq_len=32, offset=0, mini_batch_size=16: [0,1,...,15, 0,1,...,15]
-        let positions: Vec<f32> = (0..seq_len)
-            .map(|i| ((offset + i) % mini_batch_size) as f32)
-            .collect();
-        let pos_tensor = Tensor::<B, 1>::from_floats(positions.as_slice(), &device);
+        // Compute entirely on device to avoid host-device transfer
+        // Note: Do arithmetic in float space to avoid HIP backend bug with int remainder
+        let pos_tensor = (Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device).float()
+            + (offset as f32))
+            .remainder_scalar(mini_batch_size as f32);
 
         // Compute frequencies: pos @ inv_freq -> [seq_len, head_dim/2]
         // pos: [seq_len, 1], inv_freq: [1, head_dim/2]
@@ -364,18 +365,17 @@ fn rotate_half<B: Backend, const D: usize>(x: Tensor<B, D>) -> Tensor<B, D> {
     let shape = x.shape();
     let head_dim = shape.dims[D - 1];
     let half_dim = head_dim / 2;
-
-    // Build slice ranges for all dimensions
     let dims = shape.dims;
+    let device = x.device();
 
-    // Get x1 = x[..., :half_dim]
     let x1 = x.clone().slice(build_slice_ranges::<D>(&dims, 0, half_dim));
-
-    // Get x2 = x[..., half_dim:]
     let x2 = x.slice(build_slice_ranges::<D>(&dims, half_dim, head_dim));
 
-    // Return [-x2, x1]
-    Tensor::cat(vec![x2.neg(), x1], D - 1)
+    // Preallocate full-size output and use slice_assign for contiguous writes
+    // output[..., :half_dim] = -x2, output[..., half_dim:] = x1
+    let output: Tensor<B, D> = Tensor::zeros(&dims, &device);
+    let output = output.slice_assign(build_slice_ranges::<D>(&dims, 0, half_dim), x2.neg());
+    output.slice_assign(build_slice_ranges::<D>(&dims, half_dim, head_dim), x1)
 }
 
 /// Build slice ranges for extracting part of the last dimension
