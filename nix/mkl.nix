@@ -78,7 +78,9 @@ in
         else null;
 
       nativeBuildInputs =
-        [validatePkgConfig]
+        [
+          validatePkgConfig
+        ]
         ++ (
           if stdenvNoCC.hostPlatform.isDarwin
           then [

@@ -13,33 +13,40 @@
     extraNativeBuildInputs ? [],
     extraEnv ? {},
   }:
-    pkgs.rustPlatform.buildRustPackage (finalAttrs:
-      {
-        pname = "ttt";
-        version = "0.1.0";
-        src = ../.;
+    pkgs.rustPlatform.buildRustPackage (
+      finalAttrs:
+        {
+          pname = "ttt";
+          version = "0.1.0";
+          src = ../.;
 
-        # sourceRoot = "./burn";
-        # Horrible hack
-        prePatch = ''
-          cd burn
-        '';
+          # sourceRoot = "./burn";
+          # Horrible hack
+          prePatch = ''
+            cd burn
+          '';
 
-        cargoLock = {
-          lockFile = ../burn/Cargo.lock;
-          allowBuiltinFetchGit = true;
-        };
+          cargoLock = {
+            lockFile = ../burn/Cargo.lock;
+            allowBuiltinFetchGit = true;
+          };
 
-        nativeBuildInputs = with pkgs; [pkg-config cmake] ++ extraNativeBuildInputs;
-        buildInputs = [pkgs.openssl] ++ extraBuildInputs;
+          nativeBuildInputs = with pkgs;
+            [
+              pkg-config
+              cmake
+            ]
+            ++ extraNativeBuildInputs;
+          buildInputs = [pkgs.openssl] ++ extraBuildInputs;
 
-        buildFeatures = [backend];
-        buildNoDefaultFeatures = true;
+          buildFeatures = [backend];
+          buildNoDefaultFeatures = true;
 
-        # Tests require GPU hardware and network access
-        doCheck = false;
-      }
-      // extraEnv);
+          # Tests require GPU hardware and network access
+          doCheck = false;
+        }
+        // extraEnv
+    );
 
   mkTttDocker = {
     name,
@@ -69,13 +76,16 @@
           stdenv.cc.cc.lib
           dockerTools.fakeNss
 
-          (
-            python313.withPackages
-            (ps:
+          bottom
+          htop
+          btop
+
+          (python313.withPackages (
+            ps:
               with ps; [
                 huggingface-hub
-              ])
-          )
+              ]
+          ))
         ]
         ++ runtimeDeps;
       fakeRootCommands = ''
@@ -106,7 +116,13 @@
   ttt-rocm = mkTtt {
     backend = "rocm";
     extraNativeBuildInputs = with pkgs.rocmPackages; [hipcc];
-    extraBuildInputs = with pkgs.rocmPackages; [hip-common clr rocblas rocwmma rocm-device-libs];
+    extraBuildInputs = with pkgs.rocmPackages; [
+      hip-common
+      clr
+      rocblas
+      rocwmma
+      rocm-device-libs
+    ];
     extraEnv = {
       ROCM_PATH = "${pkgs.rocmPackages.clr}";
       HIP_PATH = "${pkgs.rocmPackages.clr}";
@@ -126,7 +142,15 @@
   ttt-rocm-docker = mkTttDocker {
     name = "ttt-rocm";
     tttPkg = ttt-rocm;
-    runtimeDeps = with pkgs.rocmPackages; [clr rocblas rocwmma rocm-device-libs rocm-runtime] ++ [pkgs.nvtopPackages.amd];
+    runtimeDeps = with pkgs.rocmPackages;
+      [
+        clr
+        rocblas
+        rocwmma
+        rocm-device-libs
+        rocm-runtime
+      ]
+      ++ [pkgs.nvtopPackages.amd];
     extraEnv = [
       "ROCM_PATH=${pkgs.rocmPackages.clr}"
       "HIP_PATH=${pkgs.rocmPackages.clr}"
