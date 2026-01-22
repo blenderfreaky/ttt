@@ -26,5 +26,5 @@ impl<B> FusedTttBackend for B where
 /// API module with tensor-level functions for backward compatibility.
 pub mod api {
     pub use crate::ttt::cubecl_kernels::gelu::{gelu_bwd, gelu_tanh};
-    pub use crate::ttt::cubecl_kernels::ttt::fused_ttt_forward;
+    pub use crate::ttt::cubecl_kernels::linear_fused::fused_ttt_forward;
 }

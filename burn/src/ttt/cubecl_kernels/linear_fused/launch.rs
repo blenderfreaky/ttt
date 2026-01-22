@@ -10,13 +10,13 @@ use std::fmt::Debug;
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 use crate::ttt::cubecl_kernels::bundle::TensorBundle;
 use crate::ttt::cubecl_kernels::kernel::FusedKernel;
-use crate::ttt::cubecl_kernels::linear_backward::launch_fused_ttt_backward;
-use crate::ttt::cubecl_kernels::linear_forward::launch_fused_ttt_forward;
+use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttKernel, TttOutputs};
 
-use super::types::{TttInputs, TttKernel, TttOutputs};
+use super::backward::launch_fused_ttt_backward;
+use super::forward::launch_fused_ttt_forward;
 
 /// Create an empty tensor with the same client/device as the template.
-fn empty_like<R: CubeRuntime, F: FloatElement>(
+pub fn empty_like<R: CubeRuntime, F: FloatElement>(
     template: &CubeTensor<R>,
     shape: impl Into<Shape>,
 ) -> CubeTensor<R> {

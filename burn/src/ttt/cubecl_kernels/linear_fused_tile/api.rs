@@ -1,10 +1,17 @@
+//! High-level API for the tiled TTT-Linear forward kernel.
+
 use burn::tensor::{Tensor, TensorPrimitive};
 
 use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
+use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttOutputs};
 
-use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttKernel, TttOutputs};
+use super::launch::TttTileKernel;
 
-pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3>>(
+/// Perform fused TTT-Linear forward pass using the tiled kernel.
+///
+/// This kernel uses shared memory tiles for optimized memory access patterns.
+/// Currently only supports seq_len=8 and head_dim=8.
+pub fn fused_ttt_tile_forward<B: FusedKernelBackend<TttTileKernel, 9, 3>>(
     xq: Tensor<B, 4>,
     xk: Tensor<B, 4>,
     xv: Tensor<B, 4>,

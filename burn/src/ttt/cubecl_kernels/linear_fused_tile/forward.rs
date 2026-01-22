@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 
 use cubecl::prelude::*;
-use thundercube::{impl_reduction_ops, prelude::*, reduction_ops::*, util::index_2d};
+use thundercube::{impl_reduction_ops, prelude::*, reduction_ops::*, util::{index_2d, sync_planes}};
 
 impl_reduction_ops! {
     SumSq<F> {
@@ -324,9 +324,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     let mut k_direct_smem = P::cs_f_tile();
     let mut v_direct_smem = P::cs_f_tile();
 
-    // Eta vectors in shared memory: [CS]
-    let mut token_eta_smem = P::cs_vec();
-    let mut ttt_lr_eta_smem = P::cs_vec();
+    // Eta vectors loaded directly into registers (small, all threads need same data)
 
     // Working tiles
     let mut z1_smem = P::cs_f_tile();           // z1, then grad_l_wrt_z1 after layer_norm_l2_grad
@@ -351,11 +349,8 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     plane::load_st_direct(&inputs.xk, &mut k_direct_smem, base_qkv, 0, 0);
     plane::load_st_direct(&inputs.xv, &mut v_direct_smem, base_qkv, 0, 0);
 
-    // Load eta vectors [CS] - treat as [CS, 1] tiles
-    plane::load_st_direct(&inputs.token_eta, &mut token_eta_smem, 0, 0, 0);
-    plane::load_st_direct(&inputs.ttt_lr_eta, &mut ttt_lr_eta_smem, base_ttt_lr, 0, 0);
 
-    sync_plane();
+    sync_planes();
 
     // Load bias into register vectors
     // Each thread loads the portion relevant to its sub-tile
@@ -367,15 +362,15 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     let offset_n = thread_n * P::F_Reg::VALUE;
 
     let mut bias_reg = P::f_reg();
-    plane::load_rt_direct(&inputs.bias, &mut bias_reg, base_bias, 0, offset_n);
+    plane::load_rv_direct(&inputs.bias, &mut bias_reg, base_bias + offset_n);
 
     // Load layer norm params into register vectors
     // Each thread loads the full ln params for use in row broadcasts
     let base_ln = index_2d(&inputs.ln_weight, 0, head_idx);
     let mut ln_weight_rv = Rv::<P::E, P::F>::new();
     let mut ln_bias_rv = Rv::<P::E, P::F>::new();
-    plane::load_rt_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln, 0, 0);
-    plane::load_rt_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln, 0, 0);
+    plane::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
+    plane::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
     // === Step 1: z1 = xk @ W + b ===
     // k_smem is [F, CS], weight_smem is [F, F]
@@ -389,14 +384,14 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 
     plane::store_rt_to_st(&z1_reg, &mut z1_smem);
 
-    sync_plane();
+    sync_planes();
 
     // === Step 2: reconstruction_target = xv - xk ===
     // Both are [CS, F], result stored in v_direct_smem
     v_direct_smem.sub(&k_direct_smem);
     // v_direct_smem now contains reconstruction_target
 
-    sync_plane();
+    sync_planes();
 
     // === Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target) ===
     // This overwrites z1_smem with the gradient
@@ -410,34 +405,50 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     );
     // z1_smem now contains grad_l_wrt_z1
 
-    sync_plane();
+    sync_planes();
 
     // === Step 4: eta_matrix = outer(token_eta, ttt_lr_eta).tril() ===
-    // eta[i,j] = token_eta[j] * ttt_lr_eta[i] for j <= i, else 0
+    // eta[i,j] = token_eta[i] * ttt_lr_eta[j] for j <= i, else 0
 
     let mut eta_reg = P::cs_cs_reg();
     eta_reg.zero();
 
-    // Load eta vectors into registers
+    // CS×CS tiles have (CS/CS_Reg)² sub-tiles, which may be fewer than num_threads
+    // Only threads with valid sub-tile indices participate
+    let tiles_per_row_eta = P::CS::VALUE / P::CS_Reg::VALUE;
+    let num_cs_cs_tiles = tiles_per_row_eta * tiles_per_row_eta;
+    let participates_in_cs_cs = (UNIT_POS as usize) < num_cs_cs_tiles;
+
+    // Compute thread's sub-tile position for CS×CS tile
+    let tile_row_eta = (UNIT_POS as usize) / tiles_per_row_eta;
+    let tile_col_eta = (UNIT_POS as usize) % tiles_per_row_eta;
+
+    // Load eta vectors with offsets for this thread's sub-tile
+    // token_eta[i] broadcasts along cols, so load token_eta[tile_row_eta * CS_Reg : ...]
+    // ttt_lr_eta[j] broadcasts along rows, so load ttt_lr_eta[tile_col_eta * CS_Reg : ...]
     let mut token_eta_reg = P::cs_reg();
     let mut ttt_lr_eta_reg = P::cs_reg();
-    plane::load_rt_from_st(&token_eta_smem, &mut token_eta_reg);
-    plane::load_rt_from_st(&ttt_lr_eta_smem, &mut ttt_lr_eta_reg);
+    if participates_in_cs_cs {
+        let token_eta_offset = tile_row_eta * P::CS_Reg::VALUE;
+        let ttt_lr_eta_offset = base_ttt_lr + tile_col_eta * P::CS_Reg::VALUE;
+        plane::load_rv_direct(&inputs.token_eta, &mut token_eta_reg, token_eta_offset);
+        plane::load_rv_direct(&inputs.ttt_lr_eta, &mut ttt_lr_eta_reg, ttt_lr_eta_offset);
 
-    // eta[i,j] = token_eta[j] * ttt_lr_eta[i]
-    // token_eta broadcasts along rows: eta[i,j] = token_eta[j]
-    eta_reg.add_row(&token_eta_reg);
-    // Multiply by ttt_lr_eta along cols: eta[i,j] *= ttt_lr_eta[i]
-    eta_reg.mul_col(&ttt_lr_eta_reg);
+        // eta[i,j] = token_eta[i] * ttt_lr_eta[j]
+        // token_eta broadcasts along cols: eta[i,j] = token_eta[i]
+        eta_reg.add_col(&token_eta_reg);
+        // Multiply by ttt_lr_eta along rows: eta[i,j] *= ttt_lr_eta[j]
+        eta_reg.mul_row(&ttt_lr_eta_reg);
 
-    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+        plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+    }
 
-    sync_plane();
+    sync_planes();
 
     // Apply lower triangular mask
     eta_matrix_smem.tril();
 
-    sync_plane();
+    sync_planes();
 
     // === Step 5: attn_scores = xq @ xk^T, attn1 = attn_scores.tril() ===
     // q_smem [F, CS], k_smem [F, CS]
@@ -446,31 +457,35 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     attn_reg.zero();
     plane::mma_AtB(&mut attn_reg, &q_smem, &k_smem);
 
-    plane::store_rt_to_st(&attn_reg, &mut attn_smem);
+    if participates_in_cs_cs {
+        plane::store_rt_to_st(&attn_reg, &mut attn_smem);
+    }
 
-    sync_plane();
+    sync_planes();
 
     // Apply lower triangular mask
     attn_smem.tril();
 
-    sync_plane();
+    sync_planes();
 
     // === Step 6 & 7: Compute z1_bar ===
     // b1_bar = bias - eta_matrix @ grad_l_wrt_z1      [CS, F]
     // z1_bar = xq @ W - (eta_matrix * attn1) @ grad + b1_bar
 
-    // Recompute eta in original (non-transposed) lower triangular form
-    // eta[i,j] = token_eta[j] * ttt_lr_eta[i] for j <= i
-    eta_reg.zero();
-    eta_reg.add_row(&token_eta_reg);  // eta[i,j] = token_eta[j]
-    eta_reg.mul_col(&ttt_lr_eta_reg); // eta[i,j] *= ttt_lr_eta[i]
-    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+    // Recompute eta in original lower triangular form
+    // eta[i,j] = token_eta[i] * ttt_lr_eta[j] for j <= i
+    if participates_in_cs_cs {
+        eta_reg.zero();
+        eta_reg.add_col(&token_eta_reg);  // eta[i,j] = token_eta[i]
+        eta_reg.mul_row(&ttt_lr_eta_reg); // eta[i,j] *= ttt_lr_eta[j]
+        plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+    }
 
-    sync_plane();
+    sync_planes();
 
     eta_matrix_smem.tril();
 
-    sync_plane();
+    sync_planes();
 
     // Compute eta @ grad using mma_AB (eta is [CS, CS], grad is [CS, F])
     let mut eta_grad_reg = P::cs_f_reg();
@@ -480,7 +495,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     // Compute eta * attn (elementwise, both lower triangular)
     eta_matrix_smem.mul(&attn_smem);
 
-    sync_plane();
+    sync_planes();
 
     // Compute (eta * attn) @ grad using mma_AB
     let mut eta_attn_grad_reg = P::cs_f_reg();
@@ -504,7 +519,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     // Store z1_bar to shared memory for layer norm
     plane::store_rt_to_st(&z1_bar_reg, &mut temp_cs_f_smem);
 
-    sync_plane();
+    sync_planes();
 
     // === Step 8: output = xq + layer_norm(z1_bar) ===
     layer_norm_forward::<P::E, P::CS, P::F>(
@@ -515,18 +530,18 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     );
     // temp_cs_f_smem now contains z1_bar_normalized
 
-    sync_plane();
+    sync_planes();
 
     // Add xq (need to load it in [CS, F] layout)
     // We can reuse k_direct_smem since we're done with it
     plane::load_st_direct(&inputs.xq, &mut k_direct_smem, base_qkv, 0, 0);
 
-    sync_plane();
+    sync_planes();
 
     // output = xq + z1_bar_normalized
     temp_cs_f_smem.add(&k_direct_smem);
 
-    sync_plane();
+    sync_planes();
 
     // Store output
     let base_output = index_2d(&outputs.output, batch_idx, head_idx);
@@ -538,16 +553,18 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 
     // Extract last row of eta_matrix (before it was multiplied by attn)
     // We need to recompute eta since we modified eta_matrix_smem
-    eta_reg.zero();
-    eta_reg.add_row(&token_eta_reg);
-    eta_reg.mul_col(&ttt_lr_eta_reg);
-    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+    if participates_in_cs_cs {
+        eta_reg.zero();
+        eta_reg.add_col(&token_eta_reg);
+        eta_reg.mul_row(&ttt_lr_eta_reg);
+        plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+    }
 
-    sync_plane();
+    sync_planes();
 
     eta_matrix_smem.tril();
 
-    sync_plane();
+    sync_planes();
 
     // Extract last row of eta as a column vector
     let last_eta_col: Rv<P::E, P::CS> = extract_last_row(&eta_matrix_smem);
@@ -555,12 +572,12 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     // Reload k_direct for weight update (we overwrote it with xq earlier)
     plane::load_st_direct(&inputs.xk, &mut k_direct_smem, base_qkv, 0, 0);
 
-    sync_plane();
+    sync_planes();
 
     // Scale k by last_eta_col: k_direct[i, :] *= last_eta_col[i]
     k_direct_smem.mul_col(&last_eta_col);
 
-    sync_plane();
+    sync_planes();
 
     // weight_update = (scaled_k).T @ grad = [F, CS] @ [CS, F] = [F, F]
     // Use mma_AtB: k_direct is [CS, F], z1_smem (grad) is [CS, F]
@@ -580,7 +597,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     // Store updated weight
     plane::store_rt_to_st(&weight_out_reg, &mut weight_smem);
 
-    sync_plane();
+    sync_planes();
 
     let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
     plane::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
@@ -590,31 +607,24 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     temp_cs_f_smem.copy_from(&z1_smem);
     temp_cs_f_smem.mul_col(&last_eta_col);
 
-    sync_plane();
+    sync_planes();
 
     // Sum rows to get bias update: [F]
     let bias_update: Rv<P::E, P::F> = plane::sum_st_cols(&temp_cs_f_smem);
 
     // Compute bias_out = bias - bias_update
-    // Each thread has its portion of bias in bias_reg
-    // But sum_st_cols gives the full [F] vector to all threads
-    // We need to subtract the corresponding portion
+    // bias_update is Rv<E, F> from sum_st_cols (all threads have same value)
+    // Load original bias into register vector, subtract, and store
 
-    // Reload original bias into a full shared memory vector for subtraction
-    let mut bias_out_smem = P::f_vec();
-    plane::load_st_direct(&inputs.bias, &mut bias_out_smem, base_bias, 0, 0);
+    let mut bias_out_rv = Rv::<P::E, P::F>::new();
+    plane::load_rv_direct(&inputs.bias, &mut bias_out_rv, base_bias);
 
-    sync_plane();
-
-    // Subtract bias_update from bias_out_smem
-    // For Sv<E, F> = St<E, F, D1>, we use sub_col since the vector is stored as F rows x 1 col
-    bias_out_smem.sub_col(&bias_update);
-
-    sync_plane();
+    // Subtract bias_update (elementwise on Rv)
+    bias_out_rv.sub(&bias_update);
 
     // Store updated bias
     let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
-    plane::store_st_direct(&bias_out_smem, &mut outputs.bias_out, base_bias_out, 0, 0);
+    plane::store_rv_direct(&bias_out_rv, &mut outputs.bias_out, base_bias_out);
 }
 
 #[cfg(test)]
@@ -622,7 +632,6 @@ mod tests {
     use super::*;
     use thundercube::test_kernel;
     use thundercube::test_utils::TestFloat;
-    use thundercube::util::sync_planes;
 
     const ROWS: usize = 8;
     const COLS: usize = 8;
@@ -774,5 +783,428 @@ mod tests {
                 }
             );
         }
+    }
+}
+
+/// Integration tests comparing tile kernel against CPU reference implementation.
+#[cfg(test)]
+mod integration_tests {
+    use crate::ttt::{
+        CpuBackend,
+        layer::{Qkv, TTTInnerModel, TTTInputsInner},
+        linear::{TTTLinear, TTTLinearConfig},
+    };
+    use burn::tensor::{Tensor, TensorData};
+    use burn_backend::Backend;
+    use std::sync::Arc;
+
+    fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
+        assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match");
+
+        let mut max_diff = 0.0f32;
+        let mut max_idx = 0;
+        let mut max_av = 0.0f32;
+        let mut max_bv = 0.0f32;
+
+        for (i, (&av, &bv)) in a.iter().zip(b.iter()).enumerate() {
+            let diff = (av - bv).abs();
+            if diff > max_diff {
+                max_diff = diff;
+                max_idx = i;
+                max_av = av;
+                max_bv = bv;
+            }
+        }
+
+        let tolerance = atol + rtol * max_bv.abs();
+        assert!(
+            max_diff <= tolerance,
+            "{name}: Max mismatch at index {max_idx}: {max_av} vs {max_bv} (diff: {max_diff}, tolerance: {tolerance})",
+        );
+    }
+
+    /// Reference implementation of the full TTT-Linear forward pass using pure Rust.
+    /// This matches the algorithm implemented in the fused_ttt_forward_tile_kernel.
+    fn ref_ttt_linear_forward(
+        xq: &[f32],
+        xk: &[f32],
+        xv: &[f32],
+        weight: &[f32],
+        bias: &[f32],
+        token_eta: &[f32],
+        ttt_lr_eta: &[f32],
+        ln_weight: &[f32],
+        ln_bias: &[f32],
+        output: &mut [f32],
+        weight_out: &mut [f32],
+        bias_out: &mut [f32],
+        batch_size: usize,
+        num_heads: usize,
+        seq_len: usize,
+        head_dim: usize,
+        epsilon: f64,
+    ) {
+        let bh_size = seq_len * head_dim;
+        let ff_size = head_dim * head_dim;
+
+        for b in 0..batch_size {
+            for h in 0..num_heads {
+                let bh_offset = (b * num_heads + h) * bh_size;
+                let w_offset = (b * num_heads + h) * ff_size;
+                let bias_offset = (b * num_heads + h) * head_dim;
+                let eta_offset = (b * num_heads + h) * seq_len;
+                let ln_offset = h * head_dim;
+
+                // Local working copies
+                let mut w_local: Vec<f64> = weight[w_offset..w_offset + ff_size]
+                    .iter()
+                    .map(|&x| x as f64)
+                    .collect();
+                let mut b_local: Vec<f64> = bias[bias_offset..bias_offset + head_dim]
+                    .iter()
+                    .map(|&x| x as f64)
+                    .collect();
+
+                // Step 1: z1 = xk @ W + b
+                let mut z1 = vec![0.0f64; seq_len * head_dim];
+                for s in 0..seq_len {
+                    for d in 0..head_dim {
+                        let mut sum = 0.0f64;
+                        for k in 0..head_dim {
+                            let xk_val = xk[bh_offset + s * head_dim + k] as f64;
+                            let w_val = w_local[k * head_dim + d];
+                            sum += xk_val * w_val;
+                        }
+                        z1[s * head_dim + d] = sum + b_local[d];
+                    }
+                }
+
+                // Step 2: reconstruction_target = xv - xk
+                let mut target = vec![0.0f64; seq_len * head_dim];
+                for i in 0..bh_size {
+                    target[i] = xv[bh_offset + i] as f64 - xk[bh_offset + i] as f64;
+                }
+
+                // Step 3: Layer norm + L2 grad (grad_l_wrt_z1)
+                let mut grad = vec![0.0f64; seq_len * head_dim];
+                for s in 0..seq_len {
+                    // Compute mean and std for this row
+                    let mut mean = 0.0f64;
+                    for d in 0..head_dim {
+                        mean += z1[s * head_dim + d];
+                    }
+                    mean /= head_dim as f64;
+
+                    let mut var = 0.0f64;
+                    for d in 0..head_dim {
+                        let diff = z1[s * head_dim + d] - mean;
+                        var += diff * diff;
+                    }
+                    var /= head_dim as f64;
+                    let std = (var + epsilon).sqrt();
+
+                    // Normalize
+                    let mut norm = vec![0.0f64; head_dim];
+                    for d in 0..head_dim {
+                        norm[d] = (z1[s * head_dim + d] - mean) / std;
+                    }
+
+                    // Layer norm output
+                    let mut ln_out = vec![0.0f64; head_dim];
+                    for d in 0..head_dim {
+                        ln_out[d] = ln_weight[ln_offset + d] as f64 * norm[d]
+                            + ln_bias[ln_offset + d] as f64;
+                    }
+
+                    // L2 gradient through layer norm
+                    let mut dl_dnorm = vec![0.0f64; head_dim];
+                    for d in 0..head_dim {
+                        let dl_dout = ln_out[d] - target[s * head_dim + d];
+                        dl_dnorm[d] = dl_dout * ln_weight[ln_offset + d] as f64;
+                    }
+
+                    let mut sum_dl_dnorm = 0.0f64;
+                    let mut sum_dl_dnorm_norm = 0.0f64;
+                    for d in 0..head_dim {
+                        sum_dl_dnorm += dl_dnorm[d];
+                        sum_dl_dnorm_norm += dl_dnorm[d] * norm[d];
+                    }
+
+                    let n = head_dim as f64;
+                    for d in 0..head_dim {
+                        grad[s * head_dim + d] =
+                            (dl_dnorm[d] * n - sum_dl_dnorm - norm[d] * sum_dl_dnorm_norm)
+                                / (std * n);
+                    }
+                }
+
+                // Step 4: eta_matrix = outer(token_eta, ttt_lr_eta).tril()
+                // eta[i,j] = token_eta[i] * ttt_lr_eta[j] for j <= i
+                let mut eta = vec![0.0f64; seq_len * seq_len];
+                for i in 0..seq_len {
+                    for j in 0..=i {
+                        eta[i * seq_len + j] =
+                            token_eta[i] as f64 * ttt_lr_eta[eta_offset + j] as f64;
+                    }
+                }
+
+                // Step 5: attn1 = tril(xq @ xk^T)
+                let mut attn = vec![0.0f64; seq_len * seq_len];
+                for i in 0..seq_len {
+                    for j in 0..=i {
+                        let mut sum = 0.0f64;
+                        for k in 0..head_dim {
+                            sum += xq[bh_offset + i * head_dim + k] as f64
+                                * xk[bh_offset + j * head_dim + k] as f64;
+                        }
+                        attn[i * seq_len + j] = sum;
+                    }
+                }
+
+                // Step 6 & 7: z1_bar = xq @ W - (eta * attn) @ grad + b - eta @ grad
+                let mut z1_bar = vec![0.0f64; seq_len * head_dim];
+                for i in 0..seq_len {
+                    for d in 0..head_dim {
+                        // xq @ W
+                        let mut xq_w = 0.0f64;
+                        for k in 0..head_dim {
+                            xq_w += xq[bh_offset + i * head_dim + k] as f64 * w_local[k * head_dim + d];
+                        }
+
+                        // eta @ grad (for b1_bar)
+                        let mut eta_grad = 0.0f64;
+                        for j in 0..=i {
+                            eta_grad += eta[i * seq_len + j] * grad[j * head_dim + d];
+                        }
+
+                        // (eta * attn) @ grad
+                        let mut eta_attn_grad = 0.0f64;
+                        for j in 0..=i {
+                            eta_attn_grad +=
+                                eta[i * seq_len + j] * attn[i * seq_len + j] * grad[j * head_dim + d];
+                        }
+
+                        z1_bar[i * head_dim + d] =
+                            xq_w - eta_attn_grad + b_local[d] - eta_grad;
+                    }
+                }
+
+                // Step 8: output = xq + layer_norm(z1_bar)
+                for s in 0..seq_len {
+                    let mut mean = 0.0f64;
+                    for d in 0..head_dim {
+                        mean += z1_bar[s * head_dim + d];
+                    }
+                    mean /= head_dim as f64;
+
+                    let mut var = 0.0f64;
+                    for d in 0..head_dim {
+                        let diff = z1_bar[s * head_dim + d] - mean;
+                        var += diff * diff;
+                    }
+                    var /= head_dim as f64;
+                    let std = (var + epsilon).sqrt();
+
+                    for d in 0..head_dim {
+                        let norm = (z1_bar[s * head_dim + d] - mean) / std;
+                        let ln_out =
+                            ln_weight[ln_offset + d] as f64 * norm + ln_bias[ln_offset + d] as f64;
+                        output[bh_offset + s * head_dim + d] =
+                            (xq[bh_offset + s * head_dim + d] as f64 + ln_out) as f32;
+                    }
+                }
+
+                // Step 9 & 10: Weight and bias updates
+                // weight_out = weight - (last_eta_col * xk)^T @ grad
+                // bias_out = bias - sum_cols(last_eta_col * grad)
+
+                let last_i = seq_len - 1;
+                for row in 0..head_dim {
+                    for col in 0..head_dim {
+                        let mut update = 0.0f64;
+                        for k in 0..seq_len {
+                            let eta_k = eta[last_i * seq_len + k];
+                            let xk_kr = xk[bh_offset + k * head_dim + row] as f64;
+                            let grad_kc = grad[k * head_dim + col];
+                            update += eta_k * xk_kr * grad_kc;
+                        }
+                        w_local[row * head_dim + col] -= update;
+                    }
+                }
+
+                for d in 0..head_dim {
+                    let mut update = 0.0f64;
+                    for k in 0..seq_len {
+                        let eta_k = eta[last_i * seq_len + k];
+                        update += eta_k * grad[k * head_dim + d];
+                    }
+                    b_local[d] -= update;
+                }
+
+                // Copy outputs
+                for i in 0..ff_size {
+                    weight_out[w_offset + i] = w_local[i] as f32;
+                }
+                for i in 0..head_dim {
+                    bias_out[bias_offset + i] = b_local[i] as f32;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_tile_kernel_vs_reference() {
+        let batch_size = 2usize;
+        let num_heads = 2usize;
+        let head_dim = 64usize;
+        let seq_len = 16usize;
+        let hidden_size = num_heads * head_dim;
+        let epsilon = 1e-6f32;
+
+        let config = Arc::new(crate::ttt::TTTConfig {
+            num_heads,
+            hidden_size,
+            token_size: hidden_size,
+            mini_batch_size: seq_len,
+            base_lr: 1.0,
+            epsilon: f64::from(epsilon),
+            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
+        });
+        let linear_config = Arc::new(TTTLinearConfig::new());
+
+        let cpu_device = Default::default();
+
+        // Create random input tensors
+        let xq_cpu: Tensor<CpuBackend, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &cpu_device,
+        );
+        let xk_cpu: Tensor<CpuBackend, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &cpu_device,
+        );
+        let xv_cpu: Tensor<CpuBackend, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &cpu_device,
+        );
+        let token_eta_cpu: Tensor<CpuBackend, 1> =
+            Tensor::arange(1..(seq_len as i64 + 1), &cpu_device)
+                .float()
+                .recip();
+        let ttt_lr_eta_cpu: Tensor<CpuBackend, 3> = Tensor::random(
+            [batch_size, num_heads, seq_len],
+            burn::tensor::Distribution::Uniform(0.01, 0.05),
+            &cpu_device,
+        );
+
+        // Get data as vectors
+        let xq_data: Vec<f32> = xq_cpu.to_data().to_vec().unwrap();
+        let xk_data: Vec<f32> = xk_cpu.to_data().to_vec().unwrap();
+        let xv_data: Vec<f32> = xv_cpu.to_data().to_vec().unwrap();
+        let token_eta_data: Vec<f32> = token_eta_cpu.to_data().to_vec().unwrap();
+        let ttt_lr_eta_data: Vec<f32> = ttt_lr_eta_cpu.to_data().to_vec().unwrap();
+
+        // Create TTTLinear for weight/bias/ln initialization
+        let ttt_linear_cpu: TTTLinear<CpuBackend> =
+            TTTLinear::new(&config, &linear_config, &cpu_device);
+        let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
+
+        let weight_init_data: Vec<f32> =
+            ttt_linear_cpu.weight_init.val().to_data().to_vec().unwrap();
+        let bias_init_data: Vec<f32> = ttt_linear_cpu.bias_init.val().to_data().to_vec().unwrap();
+        let ln_weight_data: Vec<f32> = ttt_linear_cpu
+            .layer_norm
+            .weight
+            .val()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let ln_bias_data: Vec<f32> = ttt_linear_cpu
+            .layer_norm
+            .bias
+            .val()
+            .to_data()
+            .to_vec()
+            .unwrap();
+
+        // Expand weight/bias for batch dimension
+        let weight_expanded: Vec<f32> = (0..batch_size)
+            .flat_map(|_| weight_init_data.iter().copied())
+            .collect();
+        let bias_expanded: Vec<f32> = (0..batch_size)
+            .flat_map(|_| bias_init_data.iter().copied())
+            .collect();
+
+        // Run CPU TTTLinear reference
+        let inputs_cpu = TTTInputsInner {
+            qkv: Qkv {
+                xq: xq_cpu.clone(),
+                xk: xk_cpu.clone(),
+                xv: xv_cpu.clone(),
+            },
+            token_eta: token_eta_cpu.clone(),
+            ttt_lr_eta: ttt_lr_eta_cpu.clone(),
+            start_idx: 0,
+        };
+
+        let output_ttt_linear = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, inputs_cpu);
+        let output_ttt_linear_data: Vec<f32> = output_ttt_linear.to_data().to_vec().unwrap();
+
+        // Run our reference implementation
+        let mut output_ref = vec![0.0f32; batch_size * num_heads * seq_len * head_dim];
+        let mut weight_out_ref = vec![0.0f32; batch_size * num_heads * head_dim * head_dim];
+        let mut bias_out_ref = vec![0.0f32; batch_size * num_heads * head_dim];
+
+        ref_ttt_linear_forward(
+            &xq_data,
+            &xk_data,
+            &xv_data,
+            &weight_expanded,
+            &bias_expanded,
+            &token_eta_data,
+            &ttt_lr_eta_data,
+            &ln_weight_data,
+            &ln_bias_data,
+            &mut output_ref,
+            &mut weight_out_ref,
+            &mut bias_out_ref,
+            batch_size,
+            num_heads,
+            seq_len,
+            head_dim,
+            epsilon as f64,
+        );
+
+        // Compare reference implementation against TTTLinear output
+        assert_data_close(
+            &output_ref,
+            &output_ttt_linear_data,
+            1e-3, // rtol
+            1e-4, // atol
+            "tile reference vs TTTLinear output",
+        );
+
+        // Compare weight updates
+        let weight_ttt_linear: Vec<f32> = state_cpu.weight.to_data().to_vec().unwrap();
+        assert_data_close(
+            &weight_out_ref,
+            &weight_ttt_linear,
+            1e-3,
+            1e-4,
+            "tile reference vs TTTLinear weight update",
+        );
+
+        // Compare bias updates
+        let bias_ttt_linear: Vec<f32> = state_cpu.bias.to_data().to_vec().unwrap();
+        assert_data_close(
+            &bias_out_ref,
+            &bias_ttt_linear,
+            1e-3,
+            1e-4,
+            "tile reference vs TTTLinear bias update",
+        );
     }
 }

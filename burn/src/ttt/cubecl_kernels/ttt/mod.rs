@@ -1,7 +1,7 @@
-mod api;
-mod launch;
+//! TTT kernel types.
+//!
+//! This module contains the common type definitions for TTT fused kernels.
+
 mod types;
 
-pub use api::*;
-pub use launch::*;
 pub use types::*;
