@@ -13,5 +13,5 @@ pub use forward::{
     extract_last_row, fused_ttt_forward_kernel, layer_norm_forward, layer_norm_l2_grad, Inputs,
     Outputs, Params, ParamsTrait,
 };
-pub use launch::{forward, launch_tile_forward_64x64, TttTileKernel};
+pub use launch::{forward, launch_tile_forward, launch_tile_forward_64x64, TttTileKernel};
 pub use wrapper::FusedTttTileBackend;

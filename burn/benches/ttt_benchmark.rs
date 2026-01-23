@@ -29,7 +29,7 @@ use paste::paste;
 use ttt::data::TrainingTextGenerationBatch;
 use ttt::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 use ttt::ttt::TTTConfig;
-use ttt::ttt::cubecl_kernels::{Fused, FusedTttBackend};
+use ttt::ttt::cubecl_kernels::{Fused, FusedTile, FusedTttBackend};
 use ttt::ttt::layer::{Qkv, TTTInnerModel, TTTInputsInner};
 use ttt::ttt::linear::TTTLinear;
 use ttt::ttt::linear_adam::TTTLinearAdam;
@@ -87,6 +87,30 @@ impl BenchConfig {
             hidden_size: 256,
             num_heads: 8,
             num_layers: 4,
+            mlp_intermediate: 512,
+            mini_batch_size: 16,
+        }
+    }
+
+    /// Config for tiled kernel (requires head_dim=64, mini_batch_size=16)
+    pub const fn tile() -> Self {
+        Self {
+            name: "tile",
+            hidden_size: 128, // 2 heads × 64 head_dim
+            num_heads: 2,
+            num_layers: 1,
+            mlp_intermediate: 256,
+            mini_batch_size: 16,
+        }
+    }
+
+    /// Larger config for tiled kernel (4 heads × 64 head_dim)
+    pub const fn tile_large() -> Self {
+        Self {
+            name: "tile_large",
+            hidden_size: 256, // 4 heads × 64 head_dim
+            num_heads: 4,
+            num_layers: 1,
             mlp_intermediate: 512,
             mini_batch_size: 16,
         }
@@ -382,6 +406,30 @@ const BENCH_PARAMS: &[RuntimeParams] = &[
     },
 ];
 
+/// Runtime parameters for the tiled fused kernel (requires seq_len=16, head_dim=64)
+const BENCH_PARAMS_TILE: &[RuntimeParams] = &[
+    RuntimeParams {
+        batch_size: 1,
+        seq_length: 16,
+        vocab_size: 1000,
+    },
+    RuntimeParams {
+        batch_size: 2,
+        seq_length: 16,
+        vocab_size: 1000,
+    },
+    RuntimeParams {
+        batch_size: 4,
+        seq_length: 16,
+        vocab_size: 1000,
+    },
+    RuntimeParams {
+        batch_size: 8,
+        seq_length: 16,
+        vocab_size: 1000,
+    },
+];
+
 /// Generate a single benchmark entry function
 macro_rules! define_bench {
     // Forward benchmarks (inference backend)
@@ -444,4 +492,50 @@ define_all_benches!(
     fused_linear => Fused<_, TTTLinear<_>>,
 );
 
-criterion_main!(inner_forward, inner_backward, full_forward, full_backward);
+/// Generate tile kernel benchmark entry function
+macro_rules! define_tile_bench {
+    // Forward benchmarks (inference backend)
+    (forward, $scope:ident, $fn_name:ident, $inner:ty) => {
+        fn $fn_name(c: &mut Criterion) {
+            type B = GpuBackend;
+            let device = device::<B>();
+            for bench_config in [BenchConfig::tile(), BenchConfig::tile_large()] {
+                for params in BENCH_PARAMS_TILE {
+                    paste! { [<bench_ $scope _forward>]::<B, $inner>(c, &bench_config, params, &device); }
+                }
+            }
+        }
+    };
+    // Backward benchmarks (training backend)
+    (backward, $scope:ident, $fn_name:ident, $inner:ty) => {
+        fn $fn_name(c: &mut Criterion) {
+            type B = GpuAutodiffBackend;
+            let device = device::<B>();
+            for bench_config in [BenchConfig::tile(), BenchConfig::tile_large()] {
+                for params in BENCH_PARAMS_TILE {
+                    paste! { [<bench_ $scope _backward>]::<B, $inner>(c, &bench_config, params, &device); }
+                }
+            }
+        }
+    };
+}
+
+/// Generate all 4 benchmark variants for the tiled kernel
+macro_rules! define_tile_model_benches {
+    ($suffix:ident, $inner:ty) => {
+        paste! {
+            define_tile_bench!(forward, inner, [<bench_inner_forward_ $suffix>], $inner);
+            // Note: backward not yet implemented for tile kernel
+            // define_tile_bench!(backward, inner, [<bench_inner_backward_ $suffix>], $inner);
+            define_tile_bench!(forward, full, [<bench_full_forward_ $suffix>], $inner);
+            // define_tile_bench!(backward, full, [<bench_full_backward_ $suffix>], $inner);
+        }
+    };
+}
+
+// Generate tiled kernel benchmarks
+define_tile_model_benches!(fused_tile, FusedTile<_>);
+
+criterion_group!(tile_forward, bench_inner_forward_fused_tile, bench_full_forward_fused_tile);
+
+criterion_main!(inner_forward, inner_backward, full_forward, full_backward, tile_forward);
