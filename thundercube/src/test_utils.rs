@@ -593,7 +593,7 @@ impl TestFloat for bf16 {
 }
 
 // These tests are for testing the macro, not any actual CubeCL code
-#[cfg(true)]
+#[cfg(test)]
 mod test_macro_tests {
     use test_case::{test_case, test_matrix};
 
