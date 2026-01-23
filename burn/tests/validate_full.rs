@@ -13,16 +13,20 @@ use burn::module::Param;
 use burn::prelude::*;
 use burn::tensor::Tensor;
 use safetensors::{Dtype, SafeTensors};
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::{fs, path::PathBuf};
+use test_case::test_case;
 
-use ttt::ttt::{
-    TTTConfig, TEST_VOCAB_SIZE,
-    layer::{Qkv, TTTInnerModel, TTTInputsInner},
-    linear::{TTTLinear, TTTLinearConfig, TTTLinearState},
-    mlp::{TTTMLP, TTTMLPConfig, TTTMLPState},
-    util::MultiHeadLayerNorm,
+use ttt::{
+    GpuBackend,
+    ttt::{
+        TEST_VOCAB_SIZE, TTTConfig,
+        layer::{Qkv, TTTInnerModel, TTTInputsInner},
+        linear::{TTTLinear, TTTLinearConfig, TTTLinearState},
+        mlp::{TTTMLP, TTTMLPConfig, TTTMLPState},
+        util::MultiHeadLayerNorm,
+    },
 };
 
 /// Trait for inner models that can be loaded from safetensors for testing
@@ -40,16 +44,10 @@ trait TestableInnerModel<B: burn::tensor::backend::Backend>: TTTInnerModel<B> {
     fn inner_model_validation_file() -> &'static str;
 
     /// Load initial state and expected final state from safetensors for inner model testing
-    fn load_test_state(
-        loader: &SafeTensorLoader,
-    ) -> (Self::State, ExpectedState<B>);
+    fn load_test_state(loader: &SafeTensorLoader) -> (Self::State, ExpectedState<B>);
 
     /// Compare actual state against expected state, returns true if all pass
-    fn compare_state(
-        actual: &Self::State,
-        expected: &ExpectedState<B>,
-        tolerance: f32,
-    ) -> bool;
+    fn compare_state(actual: &Self::State, expected: &ExpectedState<B>, tolerance: f32) -> bool;
 
     /// Load and configure inner model from inner model test validation data
     fn load_for_inner_model_test(
@@ -101,9 +99,7 @@ impl TestableInnerModel<GpuBackend> for TTTLinear<GpuBackend> {
         "ttt_linear.safetensors"
     }
 
-    fn load_test_state(
-        loader: &SafeTensorLoader,
-    ) -> (Self::State, ExpectedState<GpuBackend>) {
+    fn load_test_state(loader: &SafeTensorLoader) -> (Self::State, ExpectedState<GpuBackend>) {
         let w1_init: Tensor<GpuBackend, 4> = loader.get_tensor("W1_init");
         let b1_init: Tensor<GpuBackend, 3> = loader.get_tensor("b1_init");
         let w1_last_expected: Tensor<GpuBackend, 4> = loader.get_tensor("W1_last_expected");
@@ -127,8 +123,18 @@ impl TestableInnerModel<GpuBackend> for TTTLinear<GpuBackend> {
         expected: &ExpectedState<GpuBackend>,
         tolerance: f32,
     ) -> bool {
-        let w1_passed = compare_tensors(&actual.weight, &expected.tensors[0].1, &expected.tensors[0].0, tolerance);
-        let b1_passed = compare_tensors_3d(&actual.bias, &expected.biases[0].1, &expected.biases[0].0, tolerance);
+        let w1_passed = compare_tensors(
+            &actual.weight,
+            &expected.tensors[0].1,
+            &expected.tensors[0].0,
+            tolerance,
+        );
+        let b1_passed = compare_tensors_3d(
+            &actual.bias,
+            &expected.biases[0].1,
+            &expected.biases[0].0,
+            tolerance,
+        );
         w1_passed && b1_passed
     }
 
@@ -146,12 +152,10 @@ impl TestableInnerModel<GpuBackend> for TTTLinear<GpuBackend> {
         let ln_bias: Tensor<GpuBackend, 2> = loader.get_tensor("ln_bias");
 
         // W1 init is stored as [batch_size, num_heads, head_dim, head_dim], take first batch
-        inner_model.weight_init = Param::from_tensor(
-            w1_init.slice(s![0..1, .., .., ..]).squeeze_dim::<3>(0),
-        );
-        inner_model.bias_init = Param::from_tensor(
-            b1_init.slice(s![0..1, .., ..]).squeeze_dim::<2>(0),
-        );
+        inner_model.weight_init =
+            Param::from_tensor(w1_init.slice(s![0..1, .., .., ..]).squeeze_dim::<3>(0));
+        inner_model.bias_init =
+            Param::from_tensor(b1_init.slice(s![0..1, .., ..]).squeeze_dim::<2>(0));
         inner_model.layer_norm = MultiHeadLayerNorm {
             weight: Param::from_tensor(ln_weight),
             bias: Param::from_tensor(ln_bias),
@@ -202,9 +206,7 @@ impl TestableInnerModel<GpuBackend> for TTTMLP<GpuBackend> {
         "ttt_mlp.safetensors"
     }
 
-    fn load_test_state(
-        loader: &SafeTensorLoader,
-    ) -> (Self::State, ExpectedState<GpuBackend>) {
+    fn load_test_state(loader: &SafeTensorLoader) -> (Self::State, ExpectedState<GpuBackend>) {
         let w1_init: Tensor<GpuBackend, 4> = loader.get_tensor("W1_init");
         let b1_init: Tensor<GpuBackend, 3> = loader.get_tensor("b1_init");
         let w2_init: Tensor<GpuBackend, 4> = loader.get_tensor("W2_init");
@@ -240,10 +242,30 @@ impl TestableInnerModel<GpuBackend> for TTTMLP<GpuBackend> {
         expected: &ExpectedState<GpuBackend>,
         tolerance: f32,
     ) -> bool {
-        let w1_passed = compare_tensors(&actual.w1, &expected.tensors[0].1, &expected.tensors[0].0, tolerance);
-        let b1_passed = compare_tensors_3d(&actual.b1, &expected.biases[0].1, &expected.biases[0].0, tolerance);
-        let w2_passed = compare_tensors(&actual.w2, &expected.tensors[1].1, &expected.tensors[1].0, tolerance);
-        let b2_passed = compare_tensors_3d(&actual.b2, &expected.biases[1].1, &expected.biases[1].0, tolerance);
+        let w1_passed = compare_tensors(
+            &actual.w1,
+            &expected.tensors[0].1,
+            &expected.tensors[0].0,
+            tolerance,
+        );
+        let b1_passed = compare_tensors_3d(
+            &actual.b1,
+            &expected.biases[0].1,
+            &expected.biases[0].0,
+            tolerance,
+        );
+        let w2_passed = compare_tensors(
+            &actual.w2,
+            &expected.tensors[1].1,
+            &expected.tensors[1].0,
+            tolerance,
+        );
+        let b2_passed = compare_tensors_3d(
+            &actual.b2,
+            &expected.biases[1].1,
+            &expected.biases[1].0,
+            tolerance,
+        );
         w1_passed && b1_passed && w2_passed && b2_passed
     }
 
@@ -263,18 +285,14 @@ impl TestableInnerModel<GpuBackend> for TTTMLP<GpuBackend> {
         let ln_bias: Tensor<GpuBackend, 2> = loader.get_tensor("ln_bias");
 
         // W1 init is stored as [batch_size, num_heads, head_dim, 4*head_dim], take first batch
-        inner_model.w1_init = Param::from_tensor(
-            w1_init.slice(s![0..1, .., .., ..]).squeeze_dim::<3>(0),
-        );
-        inner_model.b1_init = Param::from_tensor(
-            b1_init.slice(s![0..1, .., ..]).squeeze_dim::<2>(0),
-        );
-        inner_model.w2_init = Param::from_tensor(
-            w2_init.slice(s![0..1, .., .., ..]).squeeze_dim::<3>(0),
-        );
-        inner_model.b2_init = Param::from_tensor(
-            b2_init.slice(s![0..1, .., ..]).squeeze_dim::<2>(0),
-        );
+        inner_model.w1_init =
+            Param::from_tensor(w1_init.slice(s![0..1, .., .., ..]).squeeze_dim::<3>(0));
+        inner_model.b1_init =
+            Param::from_tensor(b1_init.slice(s![0..1, .., ..]).squeeze_dim::<2>(0));
+        inner_model.w2_init =
+            Param::from_tensor(w2_init.slice(s![0..1, .., .., ..]).squeeze_dim::<3>(0));
+        inner_model.b2_init =
+            Param::from_tensor(b2_init.slice(s![0..1, .., ..]).squeeze_dim::<2>(0));
         inner_model.layer_norm = MultiHeadLayerNorm {
             weight: Param::from_tensor(ln_weight),
             bias: Param::from_tensor(ln_bias),
@@ -284,8 +302,6 @@ impl TestableInnerModel<GpuBackend> for TTTMLP<GpuBackend> {
         inner_model
     }
 }
-
-type GpuBackend = burn::backend::Rocm;
 
 /// A helper struct to load tensors from a safetensors file.
 /// Parses the file once on load. Uses Box::leak for simplicity in tests.
@@ -466,8 +482,9 @@ fn print_header(title: &str) {
     println!("========================================");
 }
 
-fn load_validation_data(filename: &str) -> SafeTensorLoader {
-    let data_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("validation_data_reference");
+fn load_validation_data(filename: &str, dir: Option<PathBuf>) -> SafeTensorLoader {
+    let data_dir =
+        dir.unwrap_or(Path::new(env!("CARGO_MANIFEST_DIR")).join("validation_data_reference"));
     let path = data_dir.join(filename);
     if !path.exists() {
         panic!(
@@ -481,10 +498,10 @@ fn load_validation_data(filename: &str) -> SafeTensorLoader {
 // Component Tests
 
 /// Test layer norm forward pass (ln_fwd)
-#[test]
-fn test_ln_fwd() {
+#[test_case(None)]
+fn test_ln_fwd(dir: Option<PathBuf>) {
     print_header("Layer Norm Forward (ln_fwd) Validation");
-    let loader = load_validation_data("ln_fwd.safetensors");
+    let loader = load_validation_data("ln_fwd.safetensors", dir);
 
     let x: Tensor<GpuBackend, 4> = loader.get_tensor("ln_fwd_x");
     let gamma: Tensor<GpuBackend, 3> = loader.get_tensor("ln_fwd_gamma");
@@ -513,10 +530,10 @@ fn test_ln_fwd() {
 }
 
 /// Test fused layer norm + L2 loss backward (ln_fused_l2_bwd)
-#[test]
-fn test_ln_fused_l2_bwd() {
+#[test_case(None)]
+fn test_ln_fused_l2_bwd(dir: Option<PathBuf>) {
     print_header("Fused LayerNorm + L2 Backward Validation");
-    let loader = load_validation_data("ln_fused.safetensors");
+    let loader = load_validation_data("ln_fused.safetensors", dir);
 
     let x: Tensor<GpuBackend, 4> = loader.get_tensor("ln_fused_x");
     let target: Tensor<GpuBackend, 4> = loader.get_tensor("ln_fused_target");
@@ -546,10 +563,10 @@ fn test_ln_fused_l2_bwd() {
 }
 
 /// Test Q/K permutation for RoPE alignment
-#[test]
-fn test_permute_qk() {
+#[test_case(None)]
+fn test_permute_qk(dir: Option<PathBuf>) {
     print_header("Permute QK Validation");
-    let loader = load_validation_data("permute_qk.safetensors");
+    let loader = load_validation_data("permute_qk.safetensors", dir);
 
     let q_in: Tensor<GpuBackend, 4> = loader.get_tensor("permute_q_in");
     let k_in: Tensor<GpuBackend, 4> = loader.get_tensor("permute_k_in");
@@ -592,11 +609,11 @@ fn test_permute_qk() {
 }
 
 /// TTT Inner Model Test - Generic implementation
-fn test_inner_model_impl<Inner: TestableInnerModel<GpuBackend>>() {
+fn test_inner_model_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<PathBuf>) {
     let layer_type = Inner::layer_type_name();
     print_header(&format!("TTT Inner Model ({layer_type}) Validation"));
     let device = Default::default();
-    let loader = load_validation_data(Inner::inner_model_validation_file());
+    let loader = load_validation_data(Inner::inner_model_validation_file(), dir);
 
     // Load common inputs
     let xq: Tensor<GpuBackend, 4> = loader.get_tensor("XQ");
@@ -646,32 +663,38 @@ fn test_inner_model_impl<Inner: TestableInnerModel<GpuBackend>>() {
     let passed = out_passed && state_passed;
 
     if passed {
-        println!("\n  TTT {} INNER MODEL VALIDATION PASSED!", layer_type.to_uppercase());
+        println!(
+            "\n  TTT {} INNER MODEL VALIDATION PASSED!",
+            layer_type.to_uppercase()
+        );
     } else {
-        println!("\n  TTT {} INNER MODEL VALIDATION FAILED!", layer_type.to_uppercase());
+        println!(
+            "\n  TTT {} INNER MODEL VALIDATION FAILED!",
+            layer_type.to_uppercase()
+        );
     }
 
     assert!(passed, "TTT {} inner model validation failed!", layer_type);
 }
 
-#[test]
-fn test_ttt_inner_model_linear() {
-    test_inner_model_impl::<TTTLinear<GpuBackend>>();
+#[test_case(None)]
+fn test_ttt_inner_model_linear(dir: Option<PathBuf>) {
+    test_inner_model_impl::<TTTLinear<GpuBackend>>(dir);
 }
 
-#[test]
-fn test_ttt_inner_model_mlp() {
-    test_inner_model_impl::<TTTMLP<GpuBackend>>();
+#[test_case(None)]
+fn test_ttt_inner_model_mlp(dir: Option<PathBuf>) {
+    test_inner_model_impl::<TTTMLP<GpuBackend>>(dir);
 }
 
 /// Full Block Test - Generic implementation
-fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
+fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<PathBuf>) {
     use ttt::ttt::block::TTTBlockConfig;
 
     let layer_type = Inner::layer_type_name();
     print_header(&format!("Block Forward Validation ({layer_type})"));
     let device = Default::default();
-    let loader = load_validation_data(&format!("block_{layer_type}.safetensors"));
+    let loader = load_validation_data(&format!("block_{layer_type}.safetensors"), dir);
 
     let input: Tensor<GpuBackend, 3> = loader.get_tensor("input");
     let output_expected: Tensor<GpuBackend, 3> = loader.get_tensor("output_expected");
@@ -879,22 +902,22 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     assert!(passed, "Block validation failed!");
 }
 
-#[test]
-fn test_ttt_block_forward_linear() {
-    test_ttt_block_forward_impl::<TTTLinear<GpuBackend>>();
+#[test_case(None)]
+fn test_ttt_block_forward_linear(dir: Option<PathBuf>) {
+    test_ttt_block_forward_impl::<TTTLinear<GpuBackend>>(dir);
 }
 
-#[test]
-fn test_ttt_block_forward_mlp() {
-    test_ttt_block_forward_impl::<TTTMLP<GpuBackend>>();
+#[test_case(None)]
+fn test_ttt_block_forward_mlp(dir: Option<PathBuf>) {
+    test_ttt_block_forward_impl::<TTTMLP<GpuBackend>>(dir);
 }
 
 /// Full TTT Layer Test - Generic implementation
-fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
+fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<PathBuf>) {
     let layer_type = Inner::layer_type_name();
     print_header(&format!("TTT Layer Forward Validation ({layer_type})"));
     let device = Default::default();
-    let loader = load_validation_data(&format!("ttt_layer_{layer_type}.safetensors"));
+    let loader = load_validation_data(&format!("ttt_layer_{layer_type}.safetensors"), dir);
 
     let input: Tensor<GpuBackend, 3> = loader.get_tensor("input");
     let output_expected: Tensor<GpuBackend, 3> = loader.get_tensor("output_expected");
@@ -996,25 +1019,25 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     assert!(passed, "TTT layer validation failed!");
 }
 
-#[test]
-fn test_ttt_layer_forward_linear() {
-    test_ttt_layer_forward_impl::<TTTLinear<GpuBackend>>();
+#[test_case(None)]
+fn test_ttt_layer_forward_linear(dir: Option<PathBuf>) {
+    test_ttt_layer_forward_impl::<TTTLinear<GpuBackend>>(dir);
 }
 
-#[test]
-fn test_ttt_layer_forward_mlp() {
-    test_ttt_layer_forward_impl::<TTTMLP<GpuBackend>>();
+#[test_case(None)]
+fn test_ttt_layer_forward_mlp(dir: Option<PathBuf>) {
+    test_ttt_layer_forward_impl::<TTTMLP<GpuBackend>>(dir);
 }
 
 /// Full Model Test - Generic implementation
-fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
+fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<PathBuf>) {
     use burn::tensor::Int;
     use ttt::ttt::lm::TTTModel;
 
     let layer_type = Inner::layer_type_name();
     print_header(&format!("Full Model Forward Validation ({layer_type})"));
     let device = Default::default();
-    let loader = load_validation_data(&format!("full_model_{layer_type}.safetensors"));
+    let loader = load_validation_data(&format!("full_model_{layer_type}.safetensors"), dir);
 
     let input_ids: Tensor<GpuBackend, 2, Int> = loader.get_int_tensor("input_ids");
     let logits_expected: Tensor<GpuBackend, 3> = loader.get_tensor("logits_expected");
@@ -1273,12 +1296,57 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>() {
     assert!(passed, "Full model validation failed!");
 }
 
-#[test]
-fn test_full_model_forward_linear() {
-    test_full_model_forward_impl::<TTTLinear<GpuBackend>>();
+#[test_case(None)]
+fn test_full_model_forward_linear(dir: Option<PathBuf>) {
+    test_full_model_forward_impl::<TTTLinear<GpuBackend>>(dir);
 }
 
-#[test]
-fn test_full_model_forward_mlp() {
-    test_full_model_forward_impl::<TTTMLP<GpuBackend>>();
+#[test_case(None)]
+fn test_full_model_forward_mlp(dir: Option<PathBuf>) {
+    test_full_model_forward_impl::<TTTMLP<GpuBackend>>(dir);
+}
+
+pub fn test_all(dir: Option<PathBuf>) {
+    fn header(s: &str) {
+        let len = 70 - s.len();
+        println!(
+            "{} {} {}",
+            s,
+            "=".repeat(len.div_ceil(2)),
+            "=".repeat(len / 2)
+        );
+    }
+
+    header("Full Model Forward Linear");
+    test_full_model_forward_linear(dir.clone());
+
+    header("Full Model Forward MLP");
+    test_full_model_forward_mlp(dir.clone());
+
+    header("LayerNorm Fused L2 Backward");
+    test_ln_fused_l2_bwd(dir.clone());
+
+    header("LayerNorm Forward");
+    test_ln_fwd(dir.clone());
+
+    header("Permute QK");
+    test_permute_qk(dir.clone());
+
+    header("TTT Block Forward Linear");
+    test_ttt_block_forward_linear(dir.clone());
+
+    header("TTT Block Forward MLP");
+    test_ttt_block_forward_mlp(dir.clone());
+
+    header("TTT Inner Model Linear");
+    test_ttt_inner_model_linear(dir.clone());
+
+    header("TTT Inner Model MLP");
+    test_ttt_inner_model_mlp(dir.clone());
+
+    header("TTT Layer Forward Linear");
+    test_ttt_layer_forward_linear(dir.clone());
+
+    header("TTT Layer Forward MLP");
+    test_ttt_layer_forward_mlp(dir);
 }
