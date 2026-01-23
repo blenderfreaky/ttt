@@ -8,6 +8,7 @@
     #   inputs.nixpkgs.follows = "nixpkgs";
     # };
     flake-utils.url = "github:numtide/flake-utils";
+    crane.url = "github:ipetkov/crane";
   };
 
   nixConfig = {
@@ -21,6 +22,7 @@
     # nixpkgs-intel,
     # intel-nix,
     flake-utils,
+    crane,
   }:
     flake-utils.lib.eachDefaultSystem (
       system: let
@@ -69,7 +71,8 @@
           #   (_: _: intel-pkgs)
           # ];
         };
-        own-pkgs = pkgs.callPackage ./nix {};
+        craneLib = crane.mkLib pkgs;
+        own-pkgs = pkgs.callPackage ./nix {inherit craneLib;};
         # rocmMerged = pkgs:
         #   pkgs.symlinkJoin {
         #     name = "rocm-merged";

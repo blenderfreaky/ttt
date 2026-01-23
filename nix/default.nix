@@ -1,4 +1,7 @@
-{pkgs}: rec {
+{
+  pkgs,
+  craneLib,
+}: rec {
   # mkl = pkgs.callPackage ./mkl.nix {};
   kokkos = pkgs.callPackage ./kokkos.nix {};
   kokkos-kernels = pkgs.callPackage ./kokkos-kernels.nix {inherit kokkos;};
@@ -7,45 +10,139 @@
   #   env.KOKKOS_TOOLS_LIBS = kokkos-tools;
   # };
 
-  mkTtt = {
+  # Common source for crane - include burn and thundercube directories
+  fullSrc = pkgs.lib.cleanSourceWith {
+    src = ../.;
+    filter = path: type:
+      let
+        baseName = baseNameOf path;
+        relPath = pkgs.lib.removePrefix (toString ../. + "/") (toString path);
+        # Include burn and thundercube directories
+        isRelevant = (pkgs.lib.hasPrefix "burn" relPath) || (pkgs.lib.hasPrefix "thundercube" relPath);
+        # Exclude common non-source files
+        isExcluded = baseName == ".git" || baseName == "target" || baseName == "result" || baseName == ".worktree";
+      in
+        isRelevant && !isExcluded;
+  };
+
+  # Point crane to the Cargo.lock in the burn directory
+  cargoLock = ../burn/Cargo.lock;
+  cargoToml = ../burn/Cargo.toml;
+
+  # Vendored dependencies (shared between all builds)
+  cargoVendorDir = craneLib.vendorCargoDeps {
+    inherit cargoLock cargoToml;
+  };
+
+  # Common args shared between dep and package builds
+  commonArgs = {
+    src = fullSrc;
+    inherit cargoVendorDir;
+    strictDeps = true;
+
+    # Explicitly set these since Cargo.toml is in a subdirectory
+    pname = "ttt";
+    version = "0.1.0";
+
+    nativeBuildInputs = with pkgs; [
+      pkg-config
+      cmake
+    ];
+    buildInputs = [pkgs.openssl];
+
+    # Build from the burn subdirectory while keeping thundercube accessible
+    # The sourceRoot is relative to the unpacked source directory
+    postUnpack = ''
+      # Move into the burn subdirectory but ensure thundercube is accessible
+      sourceRoot="$sourceRoot/burn"
+    '';
+  };
+
+  # Build dependencies separately for caching
+  mkCargoArtifacts = {
     backend,
     extraBuildInputs ? [],
     extraNativeBuildInputs ? [],
     extraEnv ? {},
   }:
-    pkgs.rustPlatform.buildRustPackage (
-      finalAttrs:
-        {
-          pname = "ttt";
-          version = "0.1.0";
-          src = ../.;
+    craneLib.buildDepsOnly (
+      commonArgs
+      // {
+        pname = "ttt-deps"; # Override pname for deps
 
-          # sourceRoot = "./burn";
-          # Horrible hack
-          prePatch = ''
-            cd burn
-          '';
+        nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
+        buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
 
-          cargoLock = {
-            lockFile = ../burn/Cargo.lock;
-            allowBuiltinFetchGit = true;
-          };
+        # Build deps for both bin and bench targets (all-targets includes benchmarks)
+        cargoExtraArgs = "--no-default-features --features ${backend} --all-targets";
 
-          nativeBuildInputs = with pkgs;
-            [
-              pkg-config
-              cmake
-            ]
-            ++ extraNativeBuildInputs;
-          buildInputs = [pkgs.openssl] ++ extraBuildInputs;
+        # Tests require GPU hardware and network access
+        doCheck = false;
+      }
+      // extraEnv
+    );
 
-          buildFeatures = [backend];
-          buildNoDefaultFeatures = true;
+  mkTtt = {
+    backend,
+    extraBuildInputs ? [],
+    extraNativeBuildInputs ? [],
+    extraEnv ? {},
+  }: let
+    cargoArtifacts = mkCargoArtifacts {
+      inherit backend extraBuildInputs extraNativeBuildInputs extraEnv;
+    };
+  in
+    craneLib.buildPackage (
+      commonArgs
+      // {
+        pname = "ttt";
+        version = "0.1.0";
+        inherit cargoArtifacts;
 
-          # Tests require GPU hardware and network access
-          doCheck = false;
-        }
-        // extraEnv
+        nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
+        buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
+
+        cargoExtraArgs = "--no-default-features --features ${backend}";
+
+        # Tests require GPU hardware and network access
+        doCheck = false;
+      }
+      // extraEnv
+    );
+
+  mkTttBench = {
+    backend,
+    extraBuildInputs ? [],
+    extraNativeBuildInputs ? [],
+    extraEnv ? {},
+  }: let
+    cargoArtifacts = mkCargoArtifacts {
+      inherit backend extraBuildInputs extraNativeBuildInputs extraEnv;
+    };
+  in
+    craneLib.buildPackage (
+      commonArgs
+      // {
+        pname = "ttt-bench";
+        version = "0.1.0";
+        inherit cargoArtifacts;
+
+        nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
+        buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
+
+        # Build the benchmark binary
+        cargoExtraArgs = "--no-default-features --features ${backend} --bench ttt_benchmark";
+
+        # Install the benchmark binary (criterion benchmarks go to deps/)
+        installPhaseCommand = ''
+          mkdir -p $out/bin
+          find target/release/deps -name "ttt_benchmark-*" -type f -executable ! -name "*.d" -exec cp {} $out/bin/ttt_benchmark \;
+        '';
+
+        # Tests require GPU hardware and network access
+        doCheck = false;
+      }
+      // extraEnv
     );
 
   mkTttDocker = {
@@ -113,8 +210,7 @@
       };
     };
 
-  ttt-rocm = mkTtt {
-    backend = "rocm";
+  rocmBuildConfig = {
     extraNativeBuildInputs = with pkgs.rocmPackages; [hipcc];
     extraBuildInputs = with pkgs.rocmPackages; [
       hip-common
@@ -130,14 +226,25 @@
     };
   };
 
+  ttt-rocm = mkTtt (rocmBuildConfig // {backend = "rocm";});
+  ttt-bench-rocm = mkTttBench (rocmBuildConfig // {backend = "rocm";});
+
+  # Expose the cargo artifacts for debugging/caching visibility
+  ttt-deps-rocm = mkCargoArtifacts (rocmBuildConfig // {backend = "rocm";});
+
   cudaPackages = pkgs.cudaPackages_12_8; # Match RunPod's CUDA 12.8.1
 
-  ttt-cuda = mkTtt {
-    backend = "cuda";
+  cudaBuildConfig = {
     extraNativeBuildInputs = [cudaPackages.cudatoolkit]; # nvcc needed at build time for cudarc version detection
     extraBuildInputs = [cudaPackages.cudatoolkit];
     extraEnv.CUDA_PATH = "${cudaPackages.cudatoolkit}";
   };
+
+  ttt-cuda = mkTtt (cudaBuildConfig // {backend = "cuda";});
+  ttt-bench-cuda = mkTttBench (cudaBuildConfig // {backend = "cuda";});
+
+  # Expose the cargo artifacts for debugging/caching visibility
+  ttt-deps-cuda = mkCargoArtifacts (cudaBuildConfig // {backend = "cuda";});
 
   ttt-rocm-docker = mkTttDocker {
     name = "ttt-rocm";
@@ -149,6 +256,7 @@
         rocwmma
         rocm-device-libs
         rocm-runtime
+        ttt-bench-rocm
       ]
       ++ [pkgs.nvtopPackages.amd];
     extraEnv = [
@@ -161,7 +269,7 @@
   ttt-cuda-docker = mkTttDocker {
     name = "ttt-cuda";
     tttPkg = ttt-cuda;
-    runtimeDeps = with cudaPackages; [cudatoolkit] ++ [pkgs.nvtopPackages.nvidia];
+    runtimeDeps = with cudaPackages; [cudatoolkit] ++ [pkgs.nvtopPackages.nvidia ttt-bench-cuda];
     extraEnv = [
       "NVIDIA_VISIBLE_DEVICES=all"
       "NVIDIA_DRIVER_CAPABILITIES=compute,utility"
