@@ -536,7 +536,7 @@ pub fn slices_eq<F: TestFloat>(actual: &[F], expected: &[F], ctx: &str) {
     for (i, (&a, &e)) in actual.iter().zip(expected).enumerate() {
         if !approx_eq(a, e) {
             passed = false;
-            println!("{ctx}[{i}] failed: expected {e}, got {a}");
+            println!("{ctx}[{i}] mismatch: expected {e}, got {a}");
         }
         avg_magnitude_actual += a.into_f64().abs();
         avg_magnitude_expected += e.into_f64().abs();
@@ -552,7 +552,7 @@ pub fn slices_eq<F: TestFloat>(actual: &[F], expected: &[F], ctx: &str) {
     );
 
     if !passed {
-        panic!("{} failed", ctx);
+        panic!("{} mismatch", ctx);
     }
 }
 
@@ -666,7 +666,7 @@ mod test_macro_tests {
         }
 
         #[test]
-        #[should_panic = "x failed"]
+        #[should_panic = "x mismatch"]
         fn zero_panic() for F in all {
             let x: Tensor = [4];
             assert_eq!(
@@ -703,10 +703,6 @@ mod test_macro_tests {
             seed(42*42);
             let x: Tensor = [4];
 
-            {
-                x[1..3].fill(F::zero());
-            }
-
             assert_eq!(
                 noop(x()) for (1, 1, 1) @ max(1),
                 {
@@ -718,10 +714,6 @@ mod test_macro_tests {
         #[test_matrix([4, 16])]
         fn range_vec(n: usize) for F in all {
             let x: Tensor = [n] as Range;
-
-            {
-                x[1..3].fill(F::zero());
-            }
 
             assert_eq!(
                 noop(x()) for (1, 1, 1) @ max(1),
