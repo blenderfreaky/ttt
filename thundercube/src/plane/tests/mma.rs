@@ -44,16 +44,8 @@ fn test_mma_AtB<
 
     mma_AtB(&mut rt_c, &st_a, &st_b);
 
-    // Calculate thread offsets for storing
-    let tid = UNIT_POS as usize;
-    let threads_n = TileN::VALUE / ThreadTileN::VALUE;
-    let thread_m = tid / threads_n;
-    let thread_n = tid % threads_n;
-
-    let offset_m = ThreadTileM::VALUE * thread_m;
-    let offset_n = ThreadTileN::VALUE * thread_n;
-
-    store_rt_direct(&rt_c, output, 0, offset_m, offset_n);
+    // Store directly - function computes per-thread offsets automatically
+    store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
 }
 
 /// Test kernel that performs C = A * B using the mma_AB function.
@@ -93,16 +85,8 @@ fn test_mma_AB<
 
     mma_AB(&mut rt_c, &st_a, &st_b);
 
-    // Calculate thread offsets for storing
-    let tid = UNIT_POS as usize;
-    let threads_n = TileN::VALUE / ThreadTileN::VALUE;
-    let thread_m = tid / threads_n;
-    let thread_n = tid % threads_n;
-
-    let offset_m = ThreadTileM::VALUE * thread_m;
-    let offset_n = ThreadTileN::VALUE * thread_n;
-
-    store_rt_direct(&rt_c, output, 0, offset_m, offset_n);
+    // Store directly - function computes per-thread offsets automatically
+    store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
 }
 
 test_kernel! {

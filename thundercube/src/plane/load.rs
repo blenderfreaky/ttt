@@ -7,6 +7,8 @@ use cubecl::prelude::*;
 /// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
 /// layout for bank-conflict-free access.
 ///
+/// Threads with UNIT_POS >= num_sub_tiles are safely skipped (Rt unchanged).
+///
 /// # Type Parameters
 /// * `R, C` - Register tile dimensions
 /// * `SR, SC` - Shared memory tile dimensions (must be multiples of R, C)
@@ -16,30 +18,36 @@ pub fn load_rt_from_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     rt_mem: &mut Rt<F, R, C>,
 ) {
     let tiles_per_row = SC::VALUE / C::VALUE;
-    let tile_idx = UNIT_POS as usize;
-    let tile_row = tile_idx / tiles_per_row;
-    let tile_col = tile_idx % tiles_per_row;
+    let tiles_per_col = SR::VALUE / R::VALUE;
+    let num_tiles = tiles_per_row * tiles_per_col;
 
-    let offset_row = tile_row * R::VALUE;
-    let offset_col_vec = tile_col * C::LINES;
+    // Guard: only threads with valid tile indices participate
+    if (UNIT_POS as usize) < num_tiles {
+        let tile_idx = UNIT_POS as usize;
+        let tile_row = tile_idx / tiles_per_row;
+        let tile_col = tile_idx % tiles_per_row;
 
-    let rt_rows = R::VALUE;
-    let num_c_vecs = C::LINES;
-    let s_stride = SC::LINES;
-    let mask = s_stride - 1;
+        let offset_row = tile_row * R::VALUE;
+        let offset_col_vec = tile_col * C::LINES;
 
-    #[unroll(R::VALUE <= UNROLL_LIMIT)]
-    for row in 0..rt_rows {
-        let s_row = offset_row + row;
+        let rt_rows = R::VALUE;
+        let num_c_vecs = C::LINES;
+        let s_stride = SC::LINES;
+        let mask = s_stride - 1;
 
-        #[unroll(C::LINES <= UNROLL_LIMIT)]
-        for cv in 0..num_c_vecs {
-            let s_col_vec = offset_col_vec + cv;
-            let phys_col = swizzle(s_row, s_col_vec, mask);
-            let s_idx = s_row * s_stride + phys_col;
+        #[unroll(R::VALUE <= UNROLL_LIMIT)]
+        for row in 0..rt_rows {
+            let s_row = offset_row + row;
 
-            let rt_idx = row * num_c_vecs + cv;
-            rt_mem.data[rt_idx] = s_mem.data[s_idx];
+            #[unroll(C::LINES <= UNROLL_LIMIT)]
+            for cv in 0..num_c_vecs {
+                let s_col_vec = offset_col_vec + cv;
+                let phys_col = swizzle(s_row, s_col_vec, mask);
+                let s_idx = s_row * s_stride + phys_col;
+
+                let rt_idx = row * num_c_vecs + cv;
+                rt_mem.data[rt_idx] = s_mem.data[s_idx];
+            }
         }
     }
 }

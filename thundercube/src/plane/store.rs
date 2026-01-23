@@ -12,6 +12,8 @@ use cubecl::prelude::*;
 /// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
 /// layout for bank-conflict-free access.
 ///
+/// Threads with UNIT_POS >= num_sub_tiles are safely skipped.
+///
 /// # Type Parameters
 /// * `R, C` - Register tile dimensions
 /// * `SR, SC` - Shared memory tile dimensions (must be multiples of R, C)
@@ -21,30 +23,36 @@ pub fn store_rt_to_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     s_mem: &mut St<F, SR, SC>,
 ) {
     let tiles_per_row = SC::VALUE / C::VALUE;
-    let tile_idx = UNIT_POS as usize;
-    let tile_row = tile_idx / tiles_per_row;
-    let tile_col = tile_idx % tiles_per_row;
+    let tiles_per_col = SR::VALUE / R::VALUE;
+    let num_tiles = tiles_per_row * tiles_per_col;
 
-    let offset_row = tile_row * R::VALUE;
-    let offset_col_vec = tile_col * C::LINES;
+    // Guard: only threads with valid tile indices participate
+    if (UNIT_POS as usize) < num_tiles {
+        let tile_idx = UNIT_POS as usize;
+        let tile_row = tile_idx / tiles_per_row;
+        let tile_col = tile_idx % tiles_per_row;
 
-    let rt_rows = R::VALUE;
-    let num_c_vecs = C::LINES;
-    let s_stride = SC::LINES;
-    let mask = s_stride - 1;
+        let offset_row = tile_row * R::VALUE;
+        let offset_col_vec = tile_col * C::LINES;
 
-    #[unroll(R::VALUE <= UNROLL_LIMIT)]
-    for row in 0..rt_rows {
-        let s_row = offset_row + row;
+        let rt_rows = R::VALUE;
+        let num_c_vecs = C::LINES;
+        let s_stride = SC::LINES;
+        let mask = s_stride - 1;
 
-        #[unroll(C::LINES <= UNROLL_LIMIT)]
-        for cv in 0..num_c_vecs {
-            let s_col_vec = offset_col_vec + cv;
-            let phys_col = swizzle(s_row, s_col_vec, mask);
-            let s_idx = s_row * s_stride + phys_col;
+        #[unroll(R::VALUE <= UNROLL_LIMIT)]
+        for row in 0..rt_rows {
+            let s_row = offset_row + row;
 
-            let rt_idx = row * num_c_vecs + cv;
-            s_mem.data[s_idx] = rt_mem.data[rt_idx];
+            #[unroll(C::LINES <= UNROLL_LIMIT)]
+            for cv in 0..num_c_vecs {
+                let s_col_vec = offset_col_vec + cv;
+                let phys_col = swizzle(s_row, s_col_vec, mask);
+                let s_idx = s_row * s_stride + phys_col;
+
+                let rt_idx = row * num_c_vecs + cv;
+                s_mem.data[s_idx] = rt_mem.data[rt_idx];
+            }
         }
     }
 }
@@ -161,48 +169,69 @@ pub fn store_st_transpose<F: Float, R: Dim, C: Dim>(
     }
 }
 
-/// Stores a per-thread register tile to global memory without transposing.
+/// Cooperatively stores per-thread register tiles to global memory without transposing.
 ///
-/// Unlike `store_st_*`, this is not a cooperative operation - each thread stores its own
-/// private register tile independently. Out-of-bounds writes are skipped, enabling safe
-/// stores at matrix boundaries.
+/// Each thread stores its own register tile sub-region. Threads are mapped to sub-tiles
+/// in row-major order based on UNIT_POS, matching `load_rt_from_st`. Threads with
+/// UNIT_POS >= num_sub_tiles are safely skipped.
+///
+/// Out-of-bounds writes are also skipped, enabling safe stores at matrix boundaries.
+///
+/// # Type Parameters
+/// * `R, C` - Register tile dimensions
+/// * `SR, SC` - Full tile dimensions (determines thread mapping)
 ///
 /// # Arguments
 /// * `rt_mem` - Source register tile (`Rt`), stored row-major as `[rows, cols/LINE_SIZE]` Lines
 /// * `g_mem` - Destination tensor in global memory (any rank, last 2 dims treated as matrix)
 /// * `base_offset` - Scalar offset into `g_mem` from batch dimensions
-/// * `g_offset_row` - Row offset within the matrix for this thread's tile
-/// * `g_offset_col` - Column offset within the matrix for this thread's tile
+/// * `g_offset_row` - Additional row offset within the matrix (usually 0)
+/// * `g_offset_col` - Additional column offset within the matrix (usually 0)
 #[cube]
-pub fn store_rt_direct<F: Float, R: Dim, C: Dim>(
+pub fn store_rt_direct<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     rt_mem: &Rt<F, R, C>,
     g_mem: &mut Tensor<Line<F>>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let rt_rows = R::VALUE;
-    let num_n_vecs = C::LINES;
+    let tiles_per_row = SC::VALUE / C::VALUE;
+    let tiles_per_col = SR::VALUE / R::VALUE;
+    let num_tiles = tiles_per_row * tiles_per_col;
 
-    let rank = g_mem.rank();
-    let num_rows = g_mem.shape(rank - 2);
-    let num_cols = g_mem.shape(rank - 1);
-    let row_stride = g_mem.stride(rank - 2);
+    // Guard: only threads with valid tile indices participate
+    if (UNIT_POS as usize) < num_tiles {
+        let tile_idx = UNIT_POS as usize;
+        let tile_row = tile_idx / tiles_per_row;
+        let tile_col = tile_idx % tiles_per_row;
 
-    #[unroll(R::VALUE <= UNROLL_LIMIT)]
-    for row in 0..rt_rows {
-        let g_r = g_offset_row + row;
-        if g_r < num_rows {
-            #[unroll(C::LINES <= UNROLL_LIMIT)]
-            for nl in 0..num_n_vecs {
-                let g_c = g_offset_col + nl * LINE_SIZE;
-                if g_c < num_cols {
-                    let rt_idx = row * num_n_vecs + nl;
-                    let val = rt_mem.data[rt_idx];
+        // Compute this thread's offset within the full tile
+        let offset_row = tile_row * R::VALUE;
+        let offset_col = tile_col * C::VALUE;
 
-                    let scalar_idx = base_offset + g_r * row_stride + g_c;
-                    let line_idx = scalar_idx / LINE_SIZE;
-                    g_mem[line_idx] = val;
+        let rt_rows = R::VALUE;
+        let num_n_vecs = C::LINES;
+
+        let rank = g_mem.rank();
+        let num_rows = g_mem.shape(rank - 2);
+        let num_cols = g_mem.shape(rank - 1);
+        let row_stride = g_mem.stride(rank - 2);
+
+        #[unroll(R::VALUE <= UNROLL_LIMIT)]
+        for row in 0..rt_rows {
+            let g_r = g_offset_row + offset_row + row;
+            if g_r < num_rows {
+                #[unroll(C::LINES <= UNROLL_LIMIT)]
+                for nl in 0..num_n_vecs {
+                    let g_c = g_offset_col + offset_col + nl * LINE_SIZE;
+                    if g_c < num_cols {
+                        let rt_idx = row * num_n_vecs + nl;
+                        let val = rt_mem.data[rt_idx];
+
+                        let scalar_idx = base_offset + g_r * row_stride + g_c;
+                        let line_idx = scalar_idx / LINE_SIZE;
+                        g_mem[line_idx] = val;
+                    }
                 }
             }
         }

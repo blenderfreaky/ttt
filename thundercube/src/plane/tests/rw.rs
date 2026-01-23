@@ -5,6 +5,7 @@ use crate::{
     },
     prelude::*,
     test_kernel,
+    util::sync_planes,
 };
 use cubecl::prelude::*;
 use test_case::test_matrix;
@@ -60,7 +61,49 @@ fn rw_rt_st<F: Float, TileM: Dim, TileN: Dim, RtM: Dim, RtN: Dim>(
     store_st_direct(&st, output, 0, r_off, c_off);
 }
 
+/// Tests round-trip: global -> St -> Rt -> St -> global for larger tiles
+/// This matches the kernel's D16×D64 tile with D4×D16 register tiles
+#[cube(launch)]
+fn rw_rt_st_16x64<F: Float>(
+    input: &Tensor<Line<F>>,
+    output: &mut Tensor<Line<F>>,
+) {
+    let mut st = St::<F, D16, D64>::new();
+    let mut rt = Rt::<F, D4, D16>::new();
+
+    // Global -> St
+    load_st_direct(input, &mut st, 0, 0, 0);
+
+    sync_planes();
+
+    // St -> Rt (cooperative)
+    load_rt_from_st::<F, D4, D16, D16, D64>(&st, &mut rt);
+
+    sync_planes();
+
+    // Rt -> St (cooperative)
+    store_rt_to_st::<F, D4, D16, D16, D64>(&rt, &mut st);
+
+    sync_planes();
+
+    // St -> Global
+    store_st_direct(&st, output, 0, 0, 0);
+}
+
 test_kernel! {
+    #[test]
+    fn test_rw_rt_st_16x64_32threads() for F in all {
+        let input: Tensor = [16, 64];
+        let output: Tensor = [16, 64];
+
+        assert_eq!(
+            rw_rt_st_16x64(input(), output()) for (1, 1, 1) @ (32),
+            {
+                output.copy_from_slice(&input);
+            }
+        );
+    }
+
     #[test_matrix([4, 32], [4, 32], [1, 4, 32, 64])]
     fn test_rw_direct(rows: usize, cols: usize, threads: usize) for
         F in all

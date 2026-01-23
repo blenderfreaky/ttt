@@ -37,15 +37,7 @@ fn bench_mma_AtB<
 
     mma_AtB(&mut rt_c, &st_a, &st_b);
 
-    let tid = UNIT_POS as usize;
-    let threads_n = TileN::VALUE / ThreadTileN::VALUE;
-    let thread_m = tid / threads_n;
-    let thread_n = tid % threads_n;
-
-    let offset_m = ThreadTileM::VALUE * thread_m;
-    let offset_n = ThreadTileN::VALUE * thread_n;
-
-    store_rt_direct(&rt_c, output, 0, offset_m, offset_n);
+    store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
 }
 
 /// Benchmark kernel for mma_AB with configurable tile sizes.
@@ -66,15 +58,7 @@ fn bench_mma_AB<F: Float, TileM: Dim, TileK: Dim, TileN: Dim, ThreadTileM: Dim, 
 
     mma_AB(&mut rt_c, &st_a, &st_b);
 
-    let tid = UNIT_POS as usize;
-    let threads_n = TileN::VALUE / ThreadTileN::VALUE;
-    let thread_m = tid / threads_n;
-    let thread_n = tid % threads_n;
-
-    let offset_m = ThreadTileM::VALUE * thread_m;
-    let offset_n = ThreadTileN::VALUE * thread_n;
-
-    store_rt_direct(&rt_c, output, 0, offset_m, offset_n);
+    store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
 }
 
 /// Run mma_AtB benchmark with specific tile dimensions
