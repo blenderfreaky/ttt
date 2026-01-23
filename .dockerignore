@@ -1,0 +1,32 @@
+# Build artifacts
+**/target/
+**/*.rs.bk
+**/Cargo.lock.bak
+
+# Git
+.git/
+.gitignore
+.gitmodules
+
+# Nix
+result*
+.direnv/
+flake.lock
+
+# Worktrees (separate experiments)
+.worktree/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and misc
+*.log
+.claude/
+notes
+
+# Unused directories
+zluda/
+nix/

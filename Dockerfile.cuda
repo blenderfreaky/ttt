@@ -1,10 +1,10 @@
-# ROCm Dockerfile for TTT - includes full Rust toolchain for on-server development
+# CUDA Dockerfile for TTT - includes full Rust toolchain for on-server development
 # Uses cargo-chef for dependency caching - deps only rebuild when Cargo.toml/lock change
 
 # =============================================================================
 # Stage 1: Chef - prepare dependency recipe
 # =============================================================================
-FROM rocm/dev-ubuntu-24.04:6.3.3 AS chef
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS chef
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -36,11 +36,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 # =============================================================================
 FROM chef AS builder
 
-ENV ROCM_PATH=/opt/rocm
-ENV HIP_PATH=/opt/rocm
-ENV ROCM_DEVICE_LIB_PATH=/opt/rocm/amdgcn/bitcode
-ENV PATH="${ROCM_PATH}/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${ROCM_PATH}/lib:${LD_LIBRARY_PATH}"
+ENV CUDA_PATH=/usr/local/cuda
+ENV PATH="${CUDA_PATH}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
 
 # Copy recipe and build dependencies only (this layer is cached)
 COPY --from=planner /workspace/burn/recipe.json /workspace/burn/recipe.json
@@ -49,16 +47,16 @@ COPY --from=planner /workspace/burn/recipe.json /workspace/burn/recipe.json
 COPY thundercube /workspace/thundercube
 
 WORKDIR /workspace/burn
-RUN cargo chef cook --release --no-default-features --features rocm --recipe-path recipe.json
+RUN cargo chef cook --release --no-default-features --features cuda --recipe-path recipe.json
 
 # Now copy actual source and build (only this rebuilds on code changes)
 COPY burn /workspace/burn
-RUN cargo build --release --no-default-features --features rocm
+RUN cargo build --release --no-default-features --features cuda
 
 # =============================================================================
 # Stage 4: Runtime - final image with dev tools
 # =============================================================================
-FROM rocm/dev-ubuntu-24.04:6.3.3 AS runtime
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -91,12 +89,12 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Install useful cargo tools
 RUN cargo install cargo-nextest cargo-watch
 
-# Set up ROCm environment
-ENV ROCM_PATH=/opt/rocm
-ENV HIP_PATH=/opt/rocm
-ENV ROCM_DEVICE_LIB_PATH=/opt/rocm/amdgcn/bitcode
-ENV PATH="${ROCM_PATH}/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${ROCM_PATH}/lib:${LD_LIBRARY_PATH}"
+# Set up CUDA environment
+ENV CUDA_PATH=/usr/local/cuda
+ENV PATH="${CUDA_PATH}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 WORKDIR /workspace
 
