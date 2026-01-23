@@ -1,6 +1,8 @@
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Separate nixpkgs for ROCm to match RunPod's kernel driver (6.x)
+    nixpkgs-rocm.url = "github:NixOS/nixpkgs/nixos-25.11";
     # nixpkgs-intel.url = "github:blenderfreaky/nixpkgs/package/intel-oneapi";
     # intel-nix = {
     #   # url = "github:blenderfreaky/intel-nix/main";
@@ -19,6 +21,7 @@
   outputs = {
     self,
     nixpkgs,
+    nixpkgs-rocm,
     # nixpkgs-intel,
     # intel-nix,
     flake-utils,
@@ -35,6 +38,14 @@
         #   intel-oneapi-hpckit = intel-pkgs-original.toolkits.installer.hpc;
         # };
         pkgs = import nixpkgs {
+          inherit system;
+          config = {
+            rocmSupport = true;
+            allowUnfree = true;
+          };
+        };
+        # ROCm from older nixpkgs to match RunPod kernel driver
+        pkgs-rocm = import nixpkgs-rocm {
           inherit system;
           config = {
             rocmSupport = true;
@@ -72,7 +83,7 @@
           # ];
         };
         craneLib = crane.mkLib pkgs;
-        own-pkgs = pkgs.callPackage ./nix {inherit craneLib;};
+        own-pkgs = pkgs.callPackage ./nix {inherit craneLib pkgs-rocm;};
         # rocmMerged = pkgs:
         #   pkgs.symlinkJoin {
         #     name = "rocm-merged";
@@ -90,8 +101,8 @@
         #     '';
         #   };
       in {
-        packages = own-pkgs;
-        # // intel-pkgs;
+        # legacyPackages for nested structure: .#rocm6.f32.ttt, .#cuda.bf16.ttt-bench, etc.
+        legacyPackages = own-pkgs;
 
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs;
