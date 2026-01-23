@@ -1,5 +1,6 @@
 target/
 artifacts*/
 validation_data_reference/
+validation_data/
 gpucore.*
 __pycache__/

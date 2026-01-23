@@ -6,7 +6,7 @@
 //!
 //! Tests are parameterized using test_case/test_matrix macros and will fail if validation fails.
 #![allow(clippy::too_many_arguments)]
-use std::{path::PathBuf, process::Command};
+use std::{fs, path::PathBuf, process::Command};
 use test_case::{test_case, test_matrix};
 
 mod validate_full;
@@ -95,6 +95,9 @@ fn run_sweep(
     let dir = format!(
         "validation_data/batch_{b}/layer_{l}/head_{h}/dim_{d}/mini_batch_{mini_batch_size}/seed_{seed}/conv_{conv_kernel}/gate_{use_gate}_pre_conv_{pre_conv}_share_qk_{share_qk}_tie_word_embeddings_{tie_word_embeddings}"
     );
+
+    let path = PathBuf::from(dir.clone());
+    fs::create_dir_all(&path).expect("Failed to create directory");
 
     generate_validation_data(
         dir.clone(),

@@ -92,30 +92,6 @@ impl BenchConfig {
         }
     }
 
-    /// Config for tiled kernel (requires head_dim=64, mini_batch_size=16)
-    pub const fn tile() -> Self {
-        Self {
-            name: "tile",
-            hidden_size: 128, // 2 heads × 64 head_dim
-            num_heads: 2,
-            num_layers: 1,
-            mlp_intermediate: 256,
-            mini_batch_size: 16,
-        }
-    }
-
-    /// Larger config for tiled kernel (4 heads × 64 head_dim)
-    pub const fn tile_large() -> Self {
-        Self {
-            name: "tile_large",
-            hidden_size: 256, // 4 heads × 64 head_dim
-            num_heads: 4,
-            num_layers: 1,
-            mlp_intermediate: 512,
-            mini_batch_size: 16,
-        }
-    }
-
     pub fn to_ttt_config(&self, vocab_size: usize) -> TTTConfig {
         TTTConfig::new(vocab_size)
             .with_token_size(self.hidden_size)
@@ -396,41 +372,25 @@ fn bench_full_backward<
 const BENCH_PARAMS: &[RuntimeParams] = &[
     RuntimeParams {
         batch_size: 4,
-        seq_length: 64,
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 8,
         seq_length: 128,
         vocab_size: 1000,
     },
+    RuntimeParams {
+        batch_size: 16,
+        seq_length: 8192,
+        vocab_size: 1000,
+    },
+    // RuntimeParams {
+    //     batch_size: 128,
+    //     seq_length: 8192,
+    //     vocab_size: 1000,
+    // },
 ];
 
-/// Runtime parameters for the tiled fused kernel (mini_batch_size=16, head_dim=64)
-/// seq_length should be a multiple of 16 (the mini-batch size)
-const BENCH_PARAMS_TILE: &[RuntimeParams] = &[
-    // Small batches, varying sequence lengths
-    RuntimeParams {
-        batch_size: 4,
-        seq_length: 64, // 4 mini-batches
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 4,
-        seq_length: 128, // 8 mini-batches
-        vocab_size: 1000,
-    },
-    // Larger batches
-    RuntimeParams {
-        batch_size: 8,
-        seq_length: 64,
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 8,
-        seq_length: 128,
-        vocab_size: 1000,
-    },
+const BENCH_CONFIGS: &[BenchConfig] = &[
+    BenchConfig::tiny(),
+    BenchConfig::small(),
+    BenchConfig::medium(),
 ];
 
 /// Generate a single benchmark entry function
@@ -438,20 +398,22 @@ macro_rules! define_bench {
     // Forward benchmarks (inference backend)
     (forward, $scope:ident, $fn_name:ident, $inner:ty) => {
         fn $fn_name(c: &mut Criterion) {
-            let config = BenchConfig::tiny();
             let device = device::<GpuBackend>();
-            for params in BENCH_PARAMS {
-                paste! { [<bench_ $scope _forward>]::<GpuBackend, $inner>(c, &config, params, &device); }
+            for config in BENCH_CONFIGS {
+                for params in BENCH_PARAMS {
+                    paste! { [<bench_ $scope _forward>]::<GpuBackend, $inner>(c, &config, params, &device); }
+                }
             }
         }
     };
     // Backward benchmarks (training backend)
     (backward, $scope:ident, $fn_name:ident, $inner:ty) => {
         fn $fn_name(c: &mut Criterion) {
-            let config = BenchConfig::tiny();
             let device = device::<GpuAutodiffBackend>();
-            for params in BENCH_PARAMS {
-                paste! { [<bench_ $scope _backward>]::<GpuAutodiffBackend, $inner>(c, &config, params, &device); }
+            for config in BENCH_CONFIGS {
+                for params in BENCH_PARAMS {
+                    paste! { [<bench_ $scope _backward>]::<GpuAutodiffBackend, $inner>(c, &config, params, &device); }
+                }
             }
         }
     };
@@ -495,42 +457,14 @@ define_all_benches!(
     fused_linear => Fused<_, TTTLinear<_>>,
 );
 
-/// Generate tile kernel benchmark entry function
-macro_rules! define_tile_bench {
-    // Forward benchmarks (inference backend)
-    (forward, $scope:ident, $fn_name:ident, $inner:ty) => {
-        fn $fn_name(c: &mut Criterion) {
-            type B = GpuBackend;
-            let device = device::<B>();
-            for bench_config in [BenchConfig::tile(), BenchConfig::tile_large()] {
-                for params in BENCH_PARAMS_TILE {
-                    paste! { [<bench_ $scope _forward>]::<B, $inner>(c, &bench_config, params, &device); }
-                }
-            }
-        }
-    };
-    // Backward benchmarks (training backend)
-    (backward, $scope:ident, $fn_name:ident, $inner:ty) => {
-        fn $fn_name(c: &mut Criterion) {
-            type B = GpuAutodiffBackend;
-            let device = device::<B>();
-            for bench_config in [BenchConfig::tile(), BenchConfig::tile_large()] {
-                for params in BENCH_PARAMS_TILE {
-                    paste! { [<bench_ $scope _backward>]::<B, $inner>(c, &bench_config, params, &device); }
-                }
-            }
-        }
-    };
-}
-
 /// Generate all 4 benchmark variants for the tiled kernel
 macro_rules! define_tile_model_benches {
     ($suffix:ident, $inner:ty) => {
         paste! {
-            define_tile_bench!(forward, inner, [<bench_inner_forward_ $suffix>], $inner);
+            define_bench!(forward, inner, [<bench_inner_forward_ $suffix>], $inner);
             // Note: backward not yet implemented for tile kernel
             // define_tile_bench!(backward, inner, [<bench_inner_backward_ $suffix>], $inner);
-            define_tile_bench!(forward, full, [<bench_full_forward_ $suffix>], $inner);
+            define_bench!(forward, full, [<bench_full_forward_ $suffix>], $inner);
             // define_tile_bench!(backward, full, [<bench_full_backward_ $suffix>], $inner);
         }
     };
