@@ -1,7 +1,12 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
 use cubecl::prelude::*;
-use thundercube::{impl_reduction_ops, prelude::*, reduction_ops::*, util::{index_2d, sync_planes}};
+use thundercube::{
+    impl_reduction_ops,
+    prelude::*,
+    reduction_ops::{ReductionOp, SumOp},
+    util::{index_2d, sync_planes},
+};
 
 impl_reduction_ops! {
     SumSq<F> {
@@ -294,6 +299,7 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
 /// Extract the last row of a shared memory tile into a register vector.
 /// Cooperative: all threads participate, result is broadcast to all.
 #[cube]
+#[must_use]
 pub fn extract_last_row<F: Float, R: Dim, C: Dim>(st: &St<F, R, C>) -> Rv<F, C> {
     // The last row is at index R-1
     // We read it using plane::sum with a mask that selects only that row
@@ -330,7 +336,7 @@ pub fn extract_last_row<F: Float, R: Dim, C: Dim>(st: &St<F, R, C>) -> Rv<F, C> 
 /// 10. bias_out = bias - sum_rows(last_eta_col * grad)
 #[cube(launch)]
 pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
-    inputs: Inputs<P::E>,
+    inputs: &Inputs<P::E>,
     outputs: &mut Outputs<P::E>,
     #[comptime] config: FusedTttConfig,
 ) {
@@ -612,7 +618,8 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 
     // Sum columns to get bias_update [F]
     // reduce_st_cols sums across rows for each column, giving one value per column
-    let bias_update_rv: Rv<P::E, P::F> = plane::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem);
+    let bias_update_rv: Rv<P::E, P::F> =
+        plane::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem);
 
     // bias_out = bias - bias_update
     let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);

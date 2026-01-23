@@ -5,7 +5,6 @@ use burn::{
     config::Config,
     module::{Ignored, Module},
     nn::{RmsNorm, RmsNormConfig},
-    prelude::Backend,
     tensor::Tensor,
 };
 

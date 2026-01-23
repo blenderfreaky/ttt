@@ -5,7 +5,6 @@ use burn::backend::autodiff::{
     ops::{Backward, Ops, OpsKind},
 };
 use burn::tensor::FloatDType;
-use burn::tensor::backend::Backend;
 use burn::tensor::ops::FloatTensor;
 use burn_backend::Shape;
 use burn_backend::TensorMetadata;
@@ -100,7 +99,7 @@ where
         // Save output shapes for creating zeros in backward
         let output_shapes: [_; M] = std::array::from_fn(|i| {
             (
-                output_primitives[i].shape().dims.to_vec(),
+                output_primitives[i].shape().dims.clone(),
                 output_primitives[i].dtype().into(),
             )
         });
@@ -121,11 +120,7 @@ where
                 .stateful()
             {
                 OpsKind::Tracked(prep) => prep.finish(
-                    (
-                        saved_inputs.clone(),
-                        output_shapes.clone(),
-                        input_node_ids.clone(),
-                    ),
+                    (saved_inputs.clone(), output_shapes.clone(), input_node_ids),
                     output_primitives[idx].clone(),
                 ),
                 OpsKind::UnTracked(prep) => prep.finish(output_primitives[idx].clone()),

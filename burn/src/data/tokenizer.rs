@@ -10,7 +10,7 @@ pub trait TokenizerTrait: Send + Sync {
 }
 
 pub struct Tokenizer {
-    tokenizer: HfTokenizer,
+    inner: HfTokenizer,
     pad_token_id: usize,
     eos_token_id: usize,
     bos_token_id: usize,
@@ -25,7 +25,7 @@ impl Tokenizer {
         bos_token_id: usize,
     ) -> Self {
         Self {
-            tokenizer,
+            inner: tokenizer,
             pad_token_id,
             eos_token_id,
             bos_token_id,
@@ -38,6 +38,7 @@ impl Tokenizer {
     /// - Otherwise, treats as a HuggingFace model name (e.g., "gpt2", "EleutherAI/gpt-neox-20b")
     ///
     /// Tries to automatically detect special tokens (specialized tokens first, generic fallbacks last).
+    #[must_use]
     pub fn load(
         identifier: &str,
         pad_token: Option<&str>,
@@ -46,8 +47,9 @@ impl Tokenizer {
     ) -> Self {
         let path = std::path::Path::new(identifier);
         let tokenizer = if path.exists() {
-            HfTokenizer::from_file(identifier)
-                .unwrap_or_else(|e| panic!("Failed to load tokenizer from file '{identifier}': {e}"))
+            HfTokenizer::from_file(identifier).unwrap_or_else(|e| {
+                panic!("Failed to load tokenizer from file '{identifier}': {e}")
+            })
         } else {
             HfTokenizer::from_pretrained(identifier, None)
                 .unwrap_or_else(|e| panic!("Failed to load tokenizer '{identifier}': {e}"))
@@ -85,7 +87,7 @@ impl Tokenizer {
             .unwrap_or(eos_token_id as u32) as usize;
 
         Self {
-            tokenizer,
+            inner: tokenizer,
             pad_token_id,
             eos_token_id,
             bos_token_id,
@@ -93,11 +95,13 @@ impl Tokenizer {
     }
 
     /// GPT-2 tokenizer (vocab_size: 50257)
+    #[must_use]
     pub fn gpt2() -> Self {
         Self::load("gpt2", None, None, None)
     }
 
     /// GPT-NeoX-20B tokenizer (vocab_size: 50432)
+    #[must_use]
     pub fn gpt_neox_20b() -> Self {
         Self::load("EleutherAI/gpt-neox-20b", None, None, None)
     }
@@ -111,7 +115,7 @@ impl Default for Tokenizer {
 
 impl TokenizerTrait for Tokenizer {
     fn encode(&self, text: &str, add_special_tokens: bool) -> Vec<usize> {
-        let encoding = self.tokenizer.encode(text, add_special_tokens).unwrap();
+        let encoding = self.inner.encode(text, add_special_tokens).unwrap();
         encoding.get_ids().iter().map(|&id| id as usize).collect()
     }
 
@@ -124,13 +128,11 @@ impl TokenizerTrait for Tokenizer {
                 )
             })
             .collect();
-        self.tokenizer
-            .decode(&token_ids, skip_special_tokens)
-            .unwrap()
+        self.inner.decode(&token_ids, skip_special_tokens).unwrap()
     }
 
     fn vocab_size(&self) -> usize {
-        self.tokenizer.get_vocab_size(true)
+        self.inner.get_vocab_size(true)
     }
 
     fn pad_token(&self) -> usize {

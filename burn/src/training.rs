@@ -66,6 +66,7 @@ pub struct TTTTrainingConfig {
 }
 
 /// Common training loop for all inner model types
+#[allow(clippy::too_many_arguments)]
 fn run_training<
     B: AutodiffBackend + FusedTttBackend,
     Inner: TTTInnerModel<B> + ModuleDisplay + AutodiffModule<B> + 'static,
@@ -307,7 +308,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
     artifact_dir: &str,
-    tokenizer: Tokenizer,
+    tokenizer: &Tokenizer,
     resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
@@ -316,9 +317,9 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     let pad_token = tokenizer.pad_token();
 
     println!("Loading pre-tokenized datasets...");
-    let dataset_train = load_or_pretokenize(&tokenizer, "train", config.max_seq_len)
+    let dataset_train = load_or_pretokenize(tokenizer, "train", config.max_seq_len)
         .expect("Failed to load/create pre-tokenized train dataset");
-    let dataset_test = load_or_pretokenize(&tokenizer, "validation", config.max_seq_len)
+    let dataset_test = load_or_pretokenize(tokenizer, "validation", config.max_seq_len)
         .expect("Failed to load/create pre-tokenized test dataset");
 
     println!(

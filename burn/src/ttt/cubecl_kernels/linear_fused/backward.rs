@@ -27,14 +27,14 @@ pub struct ForwardInputs<F: Float> {
 /// Gradient output tensors grouped into a struct.
 #[derive(CubeType, CubeLaunch)]
 pub struct GradOutputs<F: Float> {
-    pub grad_xq: Tensor<F>,
-    pub grad_xk: Tensor<F>,
-    pub grad_xv: Tensor<F>,
-    pub grad_weight: Tensor<F>,
-    pub grad_bias: Tensor<F>,
-    pub grad_ttt_lr_eta: Tensor<F>,
-    pub grad_ln_weight: Tensor<F>,
-    pub grad_ln_bias: Tensor<F>,
+    pub xq: Tensor<F>,
+    pub xk: Tensor<F>,
+    pub xv: Tensor<F>,
+    pub weight: Tensor<F>,
+    pub bias: Tensor<F>,
+    pub ttt_lr_eta: Tensor<F>,
+    pub ln_weight: Tensor<F>,
+    pub ln_bias: Tensor<F>,
 }
 
 /// Fused TTT-Linear backward pass kernel.
@@ -51,8 +51,8 @@ pub fn fused_ttt_backward_kernel<F: Float>(
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;
 
-    let batch_size = inputs.xq.shape(0) as usize;
-    let num_heads = inputs.xq.shape(1) as usize;
+    let batch_size = inputs.xq.shape(0);
+    let num_heads = inputs.xq.shape(1);
     let seq_len = config.mini_batch_len;
     let head_dim = config.head_dim;
     let epsilon = config.epsilon();
@@ -490,9 +490,9 @@ pub fn fused_ttt_backward_kernel<F: Float>(
         // Write out gradients
         if seq_idx < seq_len && dim_idx < head_dim {
             let idx = bh_seq_dim_base + seq_idx * head_dim + dim_idx;
-            outputs.grad_xq[idx] = grad_xq_local;
-            outputs.grad_xk[idx] = grad_xk_local;
-            outputs.grad_xv[idx] = grad_xv_local;
+            outputs.xq[idx] = grad_xq_local;
+            outputs.xk[idx] = grad_xk_local;
+            outputs.xv[idx] = grad_xv_local;
         }
         sync_cube();
 
@@ -504,14 +504,14 @@ pub fn fused_ttt_backward_kernel<F: Float>(
                     let dl_dz1_bar = dl_dz1_bar_shared[s * head_dim + col];
                     grad_w += xq_val * dl_dz1_bar;
                 }
-                outputs.grad_weight[bh_dim_dim_base + dim_idx * head_dim + col] = grad_w;
+                outputs.weight[bh_dim_dim_base + dim_idx * head_dim + col] = grad_w;
             }
 
             let mut grad_b = F::new(0.0);
             for s in 0..seq_len {
                 grad_b += dl_dz1_bar_shared[s * head_dim + dim_idx];
             }
-            outputs.grad_bias[bh_dim_base + dim_idx] = grad_b;
+            outputs.bias[bh_dim_base + dim_idx] = grad_b;
         }
         sync_cube();
 
@@ -540,7 +540,7 @@ pub fn fused_ttt_backward_kernel<F: Float>(
                 grad_lr += dl_d_eta_ij * token_eta_i;
             }
 
-            outputs.grad_ttt_lr_eta[bh_seq_base + j] = grad_lr;
+            outputs.ttt_lr_eta[bh_seq_base + j] = grad_lr;
         }
         sync_cube();
 
@@ -559,10 +559,8 @@ pub fn fused_ttt_backward_kernel<F: Float>(
                 grad_ln_b += grad_out;
             }
 
-            outputs.grad_ln_weight[batch_idx * num_heads * head_dim + h_dim_base + dim_idx] =
-                grad_ln_w;
-            outputs.grad_ln_bias[batch_idx * num_heads * head_dim + h_dim_base + dim_idx] =
-                grad_ln_b;
+            outputs.ln_weight[batch_idx * num_heads * head_dim + h_dim_base + dim_idx] = grad_ln_w;
+            outputs.ln_bias[batch_idx * num_heads * head_dim + h_dim_base + dim_idx] = grad_ln_b;
         }
     }
 }

@@ -412,7 +412,7 @@ const BENCH_PARAMS_TILE: &[RuntimeParams] = &[
     // Small batches, varying sequence lengths
     RuntimeParams {
         batch_size: 4,
-        seq_length: 64,  // 4 mini-batches
+        seq_length: 64, // 4 mini-batches
         vocab_size: 1000,
     },
     RuntimeParams {
@@ -539,6 +539,16 @@ macro_rules! define_tile_model_benches {
 // Generate tiled kernel benchmarks
 define_tile_model_benches!(fused_tile, FusedTile<_>);
 
-criterion_group!(tile_forward, bench_inner_forward_fused_tile, bench_full_forward_fused_tile);
+criterion_group!(
+    tile_forward,
+    bench_inner_forward_fused_tile,
+    bench_full_forward_fused_tile
+);
 
-criterion_main!(inner_forward, inner_backward, full_forward, full_backward, tile_forward);
+criterion_main!(
+    inner_forward,
+    inner_backward,
+    full_forward,
+    full_backward,
+    tile_forward
+);

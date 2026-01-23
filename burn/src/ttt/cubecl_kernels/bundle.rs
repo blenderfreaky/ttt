@@ -14,10 +14,10 @@ pub trait TensorBundle<T: Debug + Clone + Send, const N: usize>:
 
     fn try_map<U: Debug + Clone + Send, E: Debug + Clone + Send>(
         self,
-        mut f: impl FnMut(T) -> Result<U, E>,
+        f: impl FnMut(T) -> Result<U, E>,
     ) -> Result<Self::Mapped<U>, E> {
         let arr = self.into_array();
-        let results: Result<Vec<U>, E> = arr.into_iter().map(|t| f(t)).collect();
+        let results: Result<Vec<U>, E> = arr.into_iter().map(f).collect();
         let results_arr: [U; N] = results?.try_into().ok().unwrap();
         Ok(Self::Mapped::from_array(results_arr))
     }
@@ -98,6 +98,7 @@ macro_rules! tensor_bundle {
     (@setters $name:ident, $($scalar:ident : $scalar_ty:ty),+) => {
         impl<T> $name<T> {
             $(
+                #[must_use]
                 pub fn $scalar(mut self, value: $scalar_ty) -> Self {
                     self.$scalar = value;
                     self

@@ -2,7 +2,6 @@ use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 use burn::{
     module::{Ignored, Module},
     nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
-    prelude::Backend,
     tensor::{Int, Tensor},
 };
 use std::sync::Arc;

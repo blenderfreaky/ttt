@@ -39,6 +39,7 @@ pub type CpuBackend = burn::backend::NdArray;
 pub const TEST_VOCAB_SIZE: usize = 50257;
 
 /// TTT Layer Type variants
+#[allow(clippy::expl_impl_clone_on_copy)]
 #[derive(Config, Debug, PartialEq, Copy)]
 pub enum TTTLayerType {
     Linear,
@@ -85,6 +86,7 @@ pub enum PositionEncodingType {
 }
 
 /// Configuration for the TTT layer.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Config, Debug)]
 pub struct TTTConfig {
     /// The size of token vectors.

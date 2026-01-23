@@ -2,12 +2,12 @@
 
 use burn_cubecl::CubeRuntime;
 use cubecl::prelude::*;
-use thundercube::unary_ops::{gelu, gelu_bwd, gelu_bwd_bwd};
 use thundercube::LINE_SIZE;
+use thundercube::unary_ops::{gelu, gelu_bwd, gelu_bwd_bwd};
 
 #[cube(launch)]
 pub fn gelu_tanh_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut Tensor<Line<F>>) {
-    let idx = ABSOLUTE_POS as usize;
+    let idx = ABSOLUTE_POS;
 
     if idx < input.len() {
         output[idx] = gelu::<F>(input[idx]);
@@ -18,7 +18,7 @@ pub fn gelu_tanh_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut Tensor<L
 /// Used directly in TTT MLP forward pass for gradient computation.
 #[cube(launch)]
 pub fn gelu_bwd_forward_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut Tensor<Line<F>>) {
-    let idx = ABSOLUTE_POS as usize;
+    let idx = ABSOLUTE_POS;
 
     if idx < input.len() {
         output[idx] = gelu_bwd::<F>(input[idx]);
@@ -31,7 +31,7 @@ pub fn gelu_tanh_backward_kernel<F: Float>(
     grad_output: &Tensor<Line<F>>,
     grad_input: &mut Tensor<Line<F>>,
 ) {
-    let idx = ABSOLUTE_POS as usize;
+    let idx = ABSOLUTE_POS;
 
     if idx < input.len() {
         grad_input[idx] = grad_output[idx] * gelu_bwd::<F>(input[idx]);
@@ -44,7 +44,7 @@ pub fn gelu_tanh_backward_backward_kernel<F: Float>(
     grad_output: &Tensor<Line<F>>,
     grad_input: &mut Tensor<Line<F>>,
 ) {
-    let idx = ABSOLUTE_POS as usize;
+    let idx = ABSOLUTE_POS;
 
     if idx < input.len() {
         grad_input[idx] = grad_output[idx] * gelu_bwd_bwd::<F>(input[idx]);

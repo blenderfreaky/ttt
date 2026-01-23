@@ -7,9 +7,9 @@ use burn::{
 };
 
 pub fn causal_conv1d_fn<B: Backend>(
-    x: Tensor<B, 3>,             // [batch_size, dim, seq_len]
-    weight: Tensor<B, 3>,        // [channels_out, 1, kernel_size]
-    bias: Option<Tensor<B, 1>>,  // [channels_out]
+    x: Tensor<B, 3>,            // [batch_size, dim, seq_len]
+    weight: Tensor<B, 3>,       // [channels_out, 1, kernel_size]
+    bias: Option<Tensor<B, 1>>, // [channels_out]
 ) -> Tensor<B, 3> {
     let [batch_size, input_channels, seq_len] = x.shape().dims();
     let [channels_out, channels_in_per_group, kernel_size] = weight.shape().dims();
@@ -383,4 +383,3 @@ fn apply_rotary_pos_emb_single<B: Backend>(
 ) -> Tensor<B, 4> {
     x.clone() * cos + rotate_half(x) * sin
 }
-

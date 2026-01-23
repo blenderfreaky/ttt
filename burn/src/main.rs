@@ -306,7 +306,10 @@ fn main() {
 
             println!("Training TTT text generation model...");
             println!("Artifacts will be saved to: {artifact_dir}");
-            println!("Tokenizer: {tokenizer_name} (vocab_size: {})", tokenizer.vocab_size());
+            println!(
+                "Tokenizer: {tokenizer_name} (vocab_size: {})",
+                tokenizer.vocab_size()
+            );
             println!("Layer type: {:?}", config.ttt_config.layer_type);
             println!(
                 "Model size: {} hidden, {} layers",
@@ -331,7 +334,7 @@ fn main() {
                     &device,
                     &config,
                     &artifact_dir,
-                    tokenizer,
+                    &tokenizer,
                     resume_epoch,
                 );
             } else {
@@ -352,7 +355,8 @@ fn main() {
             let device = Default::default();
             let tokenizer = load_tokenizer(&tokenizer);
 
-            match inference::generate::<TrainingBackend>(&artifact_dir, device, &prompt, tokenizer) {
+            match inference::generate::<TrainingBackend>(&artifact_dir, device, &prompt, tokenizer)
+            {
                 Ok(generated) => {
                     println!("Prompt: {}", prompt);
                     println!("Generated: {}", generated);
@@ -362,7 +366,10 @@ fn main() {
                 }
             }
         }
-        Commands::Interactive { artifact_dir, tokenizer } => {
+        Commands::Interactive {
+            artifact_dir,
+            tokenizer,
+        } => {
             let device = Default::default();
             let tokenizer = load_tokenizer(&tokenizer);
 

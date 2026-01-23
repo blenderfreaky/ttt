@@ -1,3 +1,14 @@
+#![allow(clippy::too_many_arguments)]
+#![allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "erroneous false positives on #[cube] functions"
+)]
+#![allow(
+    clippy::used_underscore_binding,
+    clippy::pub_underscore_fields,
+    reason = "False positive on Module derive"
+)]
+
 use std::marker::PhantomData;
 
 use burn::prelude::*;

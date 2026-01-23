@@ -61,8 +61,8 @@ pub fn fused_ttt_forward_kernel<F: Float>(
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;
 
-    let batch_size = xq.shape(0) as usize;
-    let num_heads = xq.shape(1) as usize;
+    let batch_size = xq.shape(0);
+    let num_heads = xq.shape(1);
     let seq_len = config.mini_batch_len;
     let head_dim = config.head_dim;
     let epsilon = config.epsilon();

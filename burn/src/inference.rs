@@ -8,7 +8,6 @@ use crate::{
 use burn::{
     prelude::*,
     record::{DefaultRecorder, Recorder},
-    tensor::backend::Backend,
 };
 use std::sync::Arc;
 
