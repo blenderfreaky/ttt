@@ -398,6 +398,7 @@ def validate_ttt_layer_forward(save_dir: Path, cfg: ValidationConfig):
         "learnable_token_idx": ttt_layer.learnable_token_idx.contiguous(),
         "config_mini_batch_size": torch.tensor([mini_batch_size], dtype=torch.int64),
         "config_share_qk": torch.tensor([1 if cfg.share_qk else 0], dtype=torch.int64),
+        "config_use_gate": torch.tensor([1 if cfg.use_gate else 0], dtype=torch.int64),
     }
     _add_ttt_inner_weights(tensors, ttt_layer, cfg.layer_type)
     if ttt_layer.use_gate:
@@ -488,6 +489,7 @@ def validate_block_forward(save_dir: Path, cfg: ValidationConfig):
         "config_mini_batch_size": torch.tensor([mini_batch_size], dtype=torch.int64),
         "config_pre_conv": torch.tensor([1 if cfg.pre_conv else 0], dtype=torch.int64),
         "config_share_qk": torch.tensor([1 if cfg.share_qk else 0], dtype=torch.int64),
+        "config_use_gate": torch.tensor([1 if cfg.use_gate else 0], dtype=torch.int64),
     }
     _add_ttt_inner_weights(tensors, ttt, cfg.layer_type)
     if ttt.use_gate:
@@ -566,6 +568,7 @@ def validate_full_model(save_dir: Path, cfg: ValidationConfig):
         "config_pre_conv": torch.tensor([1 if cfg.pre_conv else 0], dtype=torch.int64),
         "config_share_qk": torch.tensor([1 if cfg.share_qk else 0], dtype=torch.int64),
         "config_tie_word_embeddings": torch.tensor([1 if cfg.tie_word_embeddings else 0], dtype=torch.int64),
+        "config_use_gate": torch.tensor([1 if cfg.use_gate else 0], dtype=torch.int64),
     }
 
     # lm_head weight if not tied
