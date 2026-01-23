@@ -23,7 +23,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use burn::prelude::*;
-use burn::tensor::backend::Backend as BackendTrait;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use paste::paste;
 
@@ -38,16 +37,14 @@ use ttt::ttt::mlp::TTTMLP;
 use ttt::ttt::mlp2::TTTMLP2;
 use ttt::ttt::mlp3::TTTMLP3;
 use ttt::ttt::mlp4::TTTMLP4;
+use ttt::{GpuAutodiffBackend, GpuBackend};
 
-pub type InferenceBackend = burn::backend::Rocm;
-pub type TrainingBackend = burn::backend::Autodiff<InferenceBackend>;
-
-pub fn device() -> <InferenceBackend as BackendTrait>::Device {
+pub fn device<B: FusedTttBackend>() -> B::Device {
     Default::default()
 }
 
 /// Force async operations to complete before returning.
-fn sync<B: BackendTrait, const D: usize>(tensor: Tensor<B, D>) {
+fn sync<B: FusedTttBackend, const D: usize>(tensor: Tensor<B, D>) {
     let _ = tensor.into_data();
 }
 
@@ -136,7 +133,7 @@ impl RuntimeParams {
     }
 }
 
-fn create_inner_inputs<B: BackendTrait>(
+fn create_inner_inputs<B: FusedTttBackend>(
     config: &BenchConfig,
     params: &RuntimeParams,
     device: &B::Device,
@@ -180,7 +177,10 @@ fn create_inner_inputs<B: BackendTrait>(
     }
 }
 
-fn random_logits<B: BackendTrait>(params: &RuntimeParams, device: &B::Device) -> Tensor<B, 2, Int> {
+fn random_logits<B: FusedTttBackend>(
+    params: &RuntimeParams,
+    device: &B::Device,
+) -> Tensor<B, 2, Int> {
     Tensor::random(
         [params.batch_size, params.seq_length],
         burn::tensor::Distribution::Uniform(0.0, params.vocab_size as f64 - 1.0),
@@ -188,7 +188,7 @@ fn random_logits<B: BackendTrait>(params: &RuntimeParams, device: &B::Device) ->
     )
 }
 
-fn create_training_batch<B: BackendTrait>(
+fn create_training_batch<B: FusedTttBackend>(
     params: &RuntimeParams,
     device: &B::Device,
 ) -> TrainingTextGenerationBatch<B> {
@@ -204,7 +204,7 @@ fn create_training_batch<B: BackendTrait>(
 }
 
 /// Benchmark inner model forward pass
-fn bench_inner_forward<B: BackendTrait, Inner: TTTInnerModel<B>>(
+fn bench_inner_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     c: &mut Criterion,
     config: &BenchConfig,
     params: &RuntimeParams,
@@ -247,7 +247,10 @@ fn bench_inner_forward<B: BackendTrait, Inner: TTTInnerModel<B>>(
 }
 
 /// Benchmark inner model backward pass (forward + backward)
-fn bench_inner_backward<B: burn::tensor::backend::AutodiffBackend, Inner: TTTInnerModel<B>>(
+fn bench_inner_backward<
+    B: burn::tensor::backend::AutodiffBackend + FusedTttBackend,
+    Inner: TTTInnerModel<B>,
+>(
     c: &mut Criterion,
     config: &BenchConfig,
     params: &RuntimeParams,
@@ -324,7 +327,10 @@ fn bench_full_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
 }
 
 /// Benchmark full model backward pass (forward + backward)
-fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend + FusedTttBackend, Inner: TTTInnerModel<B>>(
+fn bench_full_backward<
+    B: burn::tensor::backend::AutodiffBackend + FusedTttBackend,
+    Inner: TTTInnerModel<B>,
+>(
     c: &mut Criterion,
     config: &BenchConfig,
     params: &RuntimeParams,
@@ -364,8 +370,16 @@ fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend + FusedTttBacke
 
 /// Runtime parameters used across all benchmarks
 const BENCH_PARAMS: &[RuntimeParams] = &[
-    RuntimeParams { batch_size: 4, seq_length: 64, vocab_size: 1000 },
-    RuntimeParams { batch_size: 8, seq_length: 128, vocab_size: 1000 },
+    RuntimeParams {
+        batch_size: 4,
+        seq_length: 64,
+        vocab_size: 1000,
+    },
+    RuntimeParams {
+        batch_size: 8,
+        seq_length: 128,
+        vocab_size: 1000,
+    },
 ];
 
 /// Generate a single benchmark entry function
@@ -374,9 +388,9 @@ macro_rules! define_bench {
     (forward, $scope:ident, $fn_name:ident, $inner:ty) => {
         fn $fn_name(c: &mut Criterion) {
             let config = BenchConfig::tiny();
-            let device = device();
+            let device = device::<GpuBackend>();
             for params in BENCH_PARAMS {
-                paste! { [<bench_ $scope _forward>]::<InferenceBackend, $inner>(c, &config, params, &device); }
+                paste! { [<bench_ $scope _forward>]::<GpuBackend, $inner>(c, &config, params, &device); }
             }
         }
     };
@@ -384,9 +398,9 @@ macro_rules! define_bench {
     (backward, $scope:ident, $fn_name:ident, $inner:ty) => {
         fn $fn_name(c: &mut Criterion) {
             let config = BenchConfig::tiny();
-            let device = device();
+            let device = device::<GpuAutodiffBackend>();
             for params in BENCH_PARAMS {
-                paste! { [<bench_ $scope _backward>]::<TrainingBackend, $inner>(c, &config, params, &device); }
+                paste! { [<bench_ $scope _backward>]::<GpuAutodiffBackend, $inner>(c, &config, params, &device); }
             }
         }
     };
