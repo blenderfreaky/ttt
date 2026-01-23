@@ -30,15 +30,19 @@ pub use backend::FusedTttBackend;
 pub use bundle::TensorBundle;
 pub use kernel::{FusedKernel, FusedKernelBackend};
 pub use linear_fused::fused_ttt_forward;
-pub use linear_fused_tile::FusedTttTileBackend;
 pub use ttt::{TttInputs, TttKernel, TttOutputs};
 
 use crate::ttt::linear::TTTLinear;
 
-/// Type alias for the tiled fused TTT-Linear kernel.
+/// Type alias for the tiled fused TTT-Linear kernel (single-stage).
 /// Uses double Fused wrapper to distinguish from the non-tiled fused version.
-/// Currently supports: seq_len=16, head_dim=64
+/// Processes one mini-batch per kernel launch.
 pub type FusedTile<B> = Fused<B, Fused<B, TTTLinear<B>>>;
+
+/// Type alias for the multi-stage tiled fused TTT-Linear kernel.
+/// Uses triple Fused wrapper. Processes all mini-batches in a single kernel
+/// launch, keeping weight/bias in shared memory between stages.
+pub type FusedTileMulti<B> = Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>;
 
 /// Marker type for fused TTT layers.
 /// TTTInnerModel is implemented using a fused kernel,

@@ -5,7 +5,10 @@ tensor_bundle! {
     pub struct TttInputs[9] {
         xq, xk, xv, weight, bias, token_eta, ttt_lr_eta, ln_weight, ln_bias
     }
-    scalars { epsilon: f32 = 0.0 }
+    scalars {
+        epsilon: f32 = 0.0,
+        mini_batch_len: usize = 0,
+    }
 }
 
 tensor_bundle! {

@@ -375,13 +375,13 @@ const BENCH_PARAMS: &[RuntimeParams] = &[
         seq_length: 128,
         vocab_size: 1000,
     },
-    RuntimeParams {
-        batch_size: 16,
-        seq_length: 8192,
-        vocab_size: 1000,
-    },
     // RuntimeParams {
-    //     batch_size: 128,
+    //     batch_size: 16,
+    //     seq_length: 8192,
+    //     vocab_size: 1000,
+    // },
+    // RuntimeParams {
+    //     batch_size: 4,
     //     seq_length: 8192,
     //     vocab_size: 1000,
     // },
@@ -389,8 +389,8 @@ const BENCH_PARAMS: &[RuntimeParams] = &[
 
 const BENCH_CONFIGS: &[BenchConfig] = &[
     BenchConfig::tiny(),
-    BenchConfig::small(),
-    BenchConfig::medium(),
+    // BenchConfig::small(),
+    // BenchConfig::medium(),
 ];
 
 /// Generate a single benchmark entry function

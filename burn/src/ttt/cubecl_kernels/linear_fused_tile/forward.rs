@@ -318,41 +318,35 @@ pub fn extract_last_row<F: Float, R: Dim, C: Dim>(st: &St<F, R, C>) -> Rv<F, C> 
     result
 }
 
-/// Fused TTT-Linear forward pass kernel.
+/// Process one mini-batch stage of the TTT-Linear forward pass.
 ///
-/// Each CUBE handles one (batch, head) pair.
-/// Computes the TTT-Linear forward pass with online weight updates.
+/// This is the inner loop body.
+/// Weight and bias are kept in shared memory / registers and updated in place.
 ///
-/// Algorithm:
-/// 1. z1 = xk @ W + b
-/// 2. reconstruction_target = xv - xk
-/// 3. grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
-/// 4. eta_matrix = outer(token_eta, ttt_lr_eta).tril()
-/// 5. attn_scores = xq @ xk^T, attn1 = attn_scores.tril()
-/// 6. b1_bar = bias - eta_matrix @ grad_l_wrt_z1
-/// 7. z1_bar = xq @ W - (eta_matrix * attn1) @ grad_l_wrt_z1 + b1_bar
-/// 8. output = xq + layer_norm(z1_bar)
-/// 9. weight_out = weight - (last_eta_col * xk).T @ grad
-/// 10. bias_out = bias - sum_rows(last_eta_col * grad)
-#[cube(launch)]
-pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
+/// # Arguments
+/// * `inputs` - Input tensors (xq, xk, xv indexed by stage_offset)
+/// * `outputs` - Output tensor (indexed by stage_offset)
+/// * `weight_smem` - Weight matrix in shared memory [F, F], updated in place
+/// * `bias_rv` - Bias vector in registers [F], updated in place
+/// * `ln_weight_rv` - Layer norm weight [F]
+/// * `ln_bias_rv` - Layer norm bias [F]
+/// * `stage_offset` - Offset into qkv/output for this mini-batch (in elements)
+/// * `ttt_lr_eta_idx` - Base offset for ttt_lr_eta
+/// * `epsilon` - Layer norm epsilon
+#[cube]
+#[allow(clippy::too_many_arguments)]
+pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     inputs: &Inputs<P::E>,
     outputs: &mut Outputs<P::E>,
-    #[comptime] config: FusedTttConfig,
+    weight_smem: &mut St<P::E, P::F, P::F>,
+    bias_rv: &mut Rv<P::E, P::F>,
+    ln_weight_rv: &Rv<P::E, P::F>,
+    ln_bias_rv: &Rv<P::E, P::F>,
+    stage_offset: usize,
+    ttt_lr_eta_idx: usize,
+    #[comptime] epsilon: f32,
 ) {
-    let batch_idx = CUBE_POS_X as usize;
-    let head_idx = CUBE_POS_Y as usize;
-    let epsilon = comptime!(config.epsilon());
-
-    // Compute base offsets
-    let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
-    let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
-    let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
-    let base_ttt_lr = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
-    let base_out = index_2d(&outputs.output, batch_idx, head_idx);
-
-    // Shared memory tiles
-    let mut weight_smem = P::f_f_tile();
+    // Scratch tiles - allocated per stage call
     let mut q_smem = P::f_cs_tile();
     let mut k_smem = P::f_cs_tile();
     let mut k_direct_smem = P::cs_f_tile();
@@ -362,37 +356,30 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     let mut eta_matrix_smem = P::cs_cs_tile();
     let mut attn_smem = P::cs_cs_tile();
 
-    // Load inputs
-    plane::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
-    plane::load_st_transpose(&inputs.xq, &mut q_smem, base_qkv, 0, 0);
-    plane::load_st_transpose(&inputs.xk, &mut k_smem, base_qkv, 0, 0);
-    plane::load_st_direct(&inputs.xk, &mut k_direct_smem, base_qkv, 0, 0);
-    plane::load_st_direct(&inputs.xv, &mut v_direct_smem, base_qkv, 0, 0);
+    // Load QKV for this stage
+    plane::load_st_transpose(&inputs.xq, &mut q_smem, stage_offset, 0, 0);
+    plane::load_st_transpose(&inputs.xk, &mut k_smem, stage_offset, 0, 0);
+    plane::load_st_direct(&inputs.xk, &mut k_direct_smem, stage_offset, 0, 0);
+    plane::load_st_direct(&inputs.xv, &mut v_direct_smem, stage_offset, 0, 0);
 
     sync_planes();
-
-    // Load bias
-    let threads_n = P::F::VALUE / P::F_Reg::VALUE;
-    let thread_n = (UNIT_POS as usize) % threads_n;
-    let offset_n = thread_n * P::F_Reg::VALUE;
-
-    let mut bias_reg = P::f_reg();
-    plane::load_rv_direct(&inputs.bias, &mut bias_reg, base_bias + offset_n);
-
-    // Load layer norm params
-    let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-    let mut ln_weight_rv = Rv::<P::E, P::F>::new();
-    let mut ln_bias_rv = Rv::<P::E, P::F>::new();
-    plane::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
-    plane::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
     // Step 1: z1 = xk @ W + b
     let mut z1_reg = P::cs_f_reg();
     z1_reg.zero();
-    plane::mma_AtB(&mut z1_reg, &k_smem, &weight_smem);
+    plane::mma_AtB(&mut z1_reg, &k_smem, weight_smem);
 
     sync_planes();
 
+    // Add bias (need to broadcast from full bias_rv to the thread's portion)
+    let threads_n = P::F::VALUE / P::F_Reg::VALUE;
+    let thread_n = (UNIT_POS as usize) % threads_n;
+    let mut bias_reg = P::f_reg();
+    #[unroll]
+    for i in 0..P::F_Reg::LINES {
+        let src_idx = thread_n * P::F_Reg::LINES + i;
+        bias_reg.data[i] = bias_rv.data[src_idx];
+    }
     z1_reg.add_row(&bias_reg);
 
     plane::store_rt_to_st(&z1_reg, &mut z1_smem);
@@ -408,15 +395,15 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     layer_norm_l2_grad::<P::E, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
-        &ln_weight_rv,
-        &ln_bias_rv,
+        ln_weight_rv,
+        ln_bias_rv,
         &mut temp_cs_f_smem,
         epsilon,
     );
 
     sync_planes();
 
-    // Step 4: eta_matrix
+    // Step 4: eta_matrix = outer(token_eta, ttt_lr_eta).tril()
     let mut eta_reg = P::cs_cs_reg();
     eta_reg.zero();
 
@@ -431,7 +418,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     let mut ttt_lr_eta_reg = P::cs_reg();
     if participates_in_cs_cs {
         let token_eta_offset = tile_row_eta * P::CS_Reg::VALUE;
-        let ttt_lr_eta_offset = base_ttt_lr + tile_col_eta * P::CS_Reg::VALUE;
+        let ttt_lr_eta_offset = ttt_lr_eta_idx + tile_col_eta * P::CS_Reg::VALUE;
         plane::load_rv_direct(&inputs.token_eta, &mut token_eta_reg, token_eta_offset);
         plane::load_rv_direct(&inputs.ttt_lr_eta, &mut ttt_lr_eta_reg, ttt_lr_eta_offset);
 
@@ -447,7 +434,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 
     sync_planes();
 
-    // Step 5: attn_scores
+    // Step 5: attn_scores = xq @ xk^T, tril
     let mut attn_reg = P::cs_cs_reg();
     attn_reg.zero();
     plane::mma_AtB(&mut attn_reg, &q_smem, &k_smem);
@@ -465,7 +452,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     sync_planes();
 
     // Steps 6-7: z1_bar computation
-    // Recompute eta
+    // Recompute eta (was overwritten by tril)
     if participates_in_cs_cs {
         eta_reg.zero();
         eta_reg.add_col(&token_eta_reg);
@@ -501,7 +488,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     // z1_bar = xq @ W
     let mut z1_bar_reg = P::cs_f_reg();
     z1_bar_reg.zero();
-    plane::mma_AtB(&mut z1_bar_reg, &q_smem, &weight_smem);
+    plane::mma_AtB(&mut z1_bar_reg, &q_smem, weight_smem);
 
     sync_planes();
 
@@ -520,17 +507,12 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     sync_planes();
 
     // Step 8: layer_norm + add xq
-    layer_norm_forward::<P::E, P::CS, P::F>(
-        &mut temp_cs_f_smem,
-        &ln_weight_rv,
-        &ln_bias_rv,
-        epsilon,
-    );
+    layer_norm_forward::<P::E, P::CS, P::F>(&mut temp_cs_f_smem, ln_weight_rv, ln_bias_rv, epsilon);
 
     sync_planes();
 
     // Load xq into k_direct_smem
-    plane::load_st_direct(&inputs.xq, &mut k_direct_smem, base_qkv, 0, 0);
+    plane::load_st_direct(&inputs.xq, &mut k_direct_smem, stage_offset, 0, 0);
 
     sync_planes();
 
@@ -539,34 +521,25 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 
     sync_planes();
 
-    // Store output
-    plane::store_st_direct(&temp_cs_f_smem, &mut outputs.output, base_out, 0, 0);
+    // Store output for this stage
+    plane::store_st_direct(&temp_cs_f_smem, &mut outputs.output, stage_offset, 0, 0);
 
     sync_planes();
 
-    // === Steps 9-10: Weight and bias updates ===
-    // weight_out = weight - (last_eta_row * xk)^T @ grad
-    // bias_out = bias - last_eta_row^T @ grad
-    // where last_eta_row[j] = token_eta[last] * ttt_lr_eta[j]
-
-    // Load the last element of token_eta (token_eta[seq_len-1])
-    // Since seq_len = 16 = CS, the last element is at index 15
+    // === Steps 9-10: Weight and bias updates (in place) ===
     let last_token_eta_idx = P::CS::VALUE - 1;
-
-    // Load token_eta[last] - all threads load the same scalar
     let last_line_idx = last_token_eta_idx / comptime!(LINE_SIZE);
     let last_elem_in_line = last_token_eta_idx % comptime!(LINE_SIZE);
     let token_eta_line = inputs.token_eta[last_line_idx];
     let last_token_eta_scalar = token_eta_line[last_elem_in_line];
 
-    // Load ttt_lr_eta and scale by token_eta[last] to get last_eta_row
+    // Load ttt_lr_eta and scale by token_eta[last]
     let mut last_eta_rv = Rv::<P::E, P::CS>::new();
-    plane::load_rv_direct(&inputs.ttt_lr_eta, &mut last_eta_rv, base_ttt_lr);
+    plane::load_rv_direct(&inputs.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta_scalar);
 
-    // For weight update: need scaled_xk^T @ grad = [F, CS] @ [CS, F] = [F, F]
-    // Reload k transposed into q_smem [F, CS]
-    plane::load_st_transpose(&inputs.xk, &mut q_smem, base_qkv, 0, 0);
+    // Reload k transposed for weight update
+    plane::load_st_transpose(&inputs.xk, &mut q_smem, stage_offset, 0, 0);
 
     sync_planes();
 
@@ -582,49 +555,173 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 
     sync_planes();
 
-    // Reload weight from global (it may have been used for mma operations)
-    plane::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
+    // Update weight in place: weight -= weight_update
+    let mut weight_reg = P::f_f_reg();
+    plane::load_rt_from_st(weight_smem, &mut weight_reg);
+    weight_reg.sub(&weight_update_reg);
+    plane::store_rt_to_st(&weight_reg, weight_smem);
 
     sync_planes();
 
-    // Load weight into register, subtract update, store result
-    let mut weight_out_reg = P::f_f_reg();
-    plane::load_rt_from_st(&weight_smem, &mut weight_out_reg);
-    weight_out_reg.sub(&weight_update_reg);
-
-    // Store result back to shared memory (cooperative)
-    plane::store_rt_to_st(&weight_out_reg, &mut weight_smem);
-
-    sync_planes();
-
-    // Store shared memory to global (cooperative)
-    let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
-    plane::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
-
-    sync_planes();
-
-    // === Step 10: bias_out = bias - last_eta^T @ grad ===
-    // For each f: bias_update[f] = sum_k(last_eta[k] * grad[k, f])
-
-    // Copy grad (z1_smem) to temp_cs_f_smem for scaling
+    // Bias update: bias -= last_eta^T @ grad
     temp_cs_f_smem.copy_from(&z1_smem);
 
     sync_planes();
 
-    // Scale rows by last_eta: temp[k, f] *= last_eta[k]
     temp_cs_f_smem.mul_col(&last_eta_rv);
 
     sync_planes();
 
-    // Sum columns to get bias_update [F]
-    // reduce_st_cols sums across rows for each column, giving one value per column
     let bias_update_rv: Rv<P::E, P::F> =
         plane::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem);
 
-    // bias_out = bias - bias_update
+    // Update bias in place
+    bias_rv.sub(&bias_update_rv);
+}
+
+/// Fused TTT-Linear forward pass kernel (single mini-batch).
+///
+/// Each CUBE handles one (batch, head) pair.
+/// Computes the TTT-Linear forward pass with online weight updates.
+///
+/// Algorithm:
+/// 1. z1 = xk @ W + b
+/// 2. reconstruction_target = xv - xk
+/// 3. grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
+/// 4. eta_matrix = outer(token_eta, ttt_lr_eta).tril()
+/// 5. attn_scores = xq @ xk^T, attn1 = attn_scores.tril()
+/// 6. b1_bar = bias - eta_matrix @ grad_l_wrt_z1
+/// 7. z1_bar = xq @ W - (eta_matrix * attn1) @ grad_l_wrt_z1 + b1_bar
+/// 8. output = xq + layer_norm(z1_bar)
+/// 9. weight_out = weight - (last_eta_col * xk).T @ grad
+/// 10. bias_out = bias - sum_rows(last_eta_col * grad)
+#[cube(launch)]
+pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
+    inputs: &Inputs<P::E>,
+    outputs: &mut Outputs<P::E>,
+    #[comptime] config: FusedTttConfig,
+) {
+    let batch_idx = CUBE_POS_X as usize;
+    let head_idx = CUBE_POS_Y as usize;
+    let epsilon = comptime!(config.epsilon());
+
+    // Compute base offsets
+    let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
+    let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
+    let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
+    let ttt_lr_eta_idx = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
+
+    // Initialize weight in shared memory
+    let mut weight_smem = P::f_f_tile();
+    plane::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
+
+    sync_planes();
+
+    // Initialize bias in register vector
+    let mut bias_rv = Rv::<P::E, P::F>::new();
+    plane::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
+
+    // Load layer norm params
+    let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
+    let mut ln_weight_rv = Rv::<P::E, P::F>::new();
+    let mut ln_bias_rv = Rv::<P::E, P::F>::new();
+    plane::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
+    plane::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
+
+    // Process single stage
+    fused_ttt_forward_stage::<P>(
+        inputs,
+        outputs,
+        &mut weight_smem,
+        &mut bias_rv,
+        &ln_weight_rv,
+        &ln_bias_rv,
+        base_qkv,
+        ttt_lr_eta_idx,
+        epsilon,
+    );
+
+    sync_planes();
+
+    // Store final weight and bias
+    let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
     let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
-    let mut bias_out_rv = Rv::<P::E, P::F>::new();
-    plane::load_rv_direct(&inputs.bias, &mut bias_out_rv, base_bias);
-    bias_out_rv.sub(&bias_update_rv);
-    plane::store_rv_direct(&bias_out_rv, &mut outputs.bias_out, base_bias_out);
+
+    plane::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
+    plane::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
+}
+
+/// Fused TTT-Linear forward pass kernel with multiple mini-batch stages.
+///
+/// Processes `num_stages` mini-batches in a single kernel launch, keeping
+/// weight and bias in shared memory between stages to avoid global memory
+/// round-trips.
+///
+/// Input tensors xq, xk, xv should have shape [batch, heads, num_stages * mini_batch_len, head_dim]
+/// Output tensor should have the same shape.
+#[cube(launch)]
+pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
+    inputs: &Inputs<P::E>,
+    outputs: &mut Outputs<P::E>,
+    num_stages: u32,
+    #[comptime] config: FusedTttConfig,
+) {
+    let batch_idx = CUBE_POS_X as usize;
+    let head_idx = CUBE_POS_Y as usize;
+    let epsilon = comptime!(config.epsilon());
+    let mini_batch_len = comptime!(config.mini_batch_len);
+    let head_dim = comptime!(config.head_dim);
+
+    // Stride to advance by one mini-batch in the sequence dimension (in scalars)
+    let stage_stride = mini_batch_len * head_dim;
+
+    // Compute base offsets
+    let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
+    let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
+    let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
+    let ttt_lr_eta_idx = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
+
+    // Initialize weight in shared memory
+    let mut weight_smem = P::f_f_tile();
+    plane::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
+
+    sync_planes();
+
+    // Initialize bias in register vector
+    let mut bias_rv = Rv::<P::E, P::F>::new();
+    plane::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
+
+    // Load layer norm params (shared across all stages)
+    let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
+    let mut ln_weight_rv = Rv::<P::E, P::F>::new();
+    let mut ln_bias_rv = Rv::<P::E, P::F>::new();
+    plane::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
+    plane::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
+
+    // Process all stages
+    for stage in 0..num_stages {
+        let stage_offset = base_qkv + (stage as usize) * stage_stride;
+        let ttt_lr_offset = ttt_lr_eta_idx + (stage as usize) * mini_batch_len;
+
+        fused_ttt_forward_stage::<P>(
+            inputs,
+            outputs,
+            &mut weight_smem,
+            &mut bias_rv,
+            &ln_weight_rv,
+            &ln_bias_rv,
+            stage_offset,
+            ttt_lr_offset,
+            epsilon,
+        );
+
+        sync_planes();
+    }
+
+    // Store final weight and bias
+    let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
+    let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
+
+    plane::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
+    plane::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
 }

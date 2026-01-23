@@ -1,16 +1,25 @@
-//! Backward compatibility layer for the old backend traits.
+//! Unified backend trait for fused TTT kernels.
 //!
-//! The old `FusedTttBackend` and `GeluTanhBackend` traits have been replaced
-//! with the generic `FusedKernelBackend<K, N, M>` system. This module provides
-//! trait aliases and re-exports for compatibility.
+//! The `FusedTttBackend` trait combines all TTT kernel capabilities:
+//! - Regular fused TTT kernel
+//! - Tiled fused TTT kernel
+//! - Multi-stage tiled kernel
+//! - GELU activation kernels
 
 use crate::ttt::cubecl_kernels::gelu::{GeluBwdKernel, GeluTanhKernel};
 use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
+use crate::ttt::cubecl_kernels::linear_fused_tile::{TttTileKernel, TttTileMultiKernel};
 use crate::ttt::cubecl_kernels::ttt::TttKernel;
 
-/// Trait alias for backends that support the fused TTT kernel.
+/// This includes:
+/// - `TttKernel` - the regular fused TTT kernel
+/// - `TttTileKernel` - the tiled fused TTT kernel (single mini-batch)
+/// - `TttTileMultiKernel` - multi-stage tiled kernel (full sequence)
+/// - `GeluTanhKernel` / `GeluBwdKernel` - GELU activation kernels
 pub trait FusedTttBackend:
     FusedKernelBackend<TttKernel, 9, 3>
+    + FusedKernelBackend<TttTileKernel, 9, 3>
+    + FusedKernelBackend<TttTileMultiKernel, 9, 3>
     + FusedKernelBackend<GeluTanhKernel, 1, 1>
     + FusedKernelBackend<GeluBwdKernel, 1, 1>
 {
@@ -18,6 +27,8 @@ pub trait FusedTttBackend:
 
 impl<B> FusedTttBackend for B where
     B: FusedKernelBackend<TttKernel, 9, 3>
+        + FusedKernelBackend<TttTileKernel, 9, 3>
+        + FusedKernelBackend<TttTileMultiKernel, 9, 3>
         + FusedKernelBackend<GeluTanhKernel, 1, 1>
         + FusedKernelBackend<GeluBwdKernel, 1, 1>
 {

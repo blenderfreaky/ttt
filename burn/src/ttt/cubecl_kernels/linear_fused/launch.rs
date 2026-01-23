@@ -159,6 +159,7 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         ln_weight: grad_ln_weight,
         ln_bias: grad_ln_bias,
         epsilon: 0.0,
+        mini_batch_len: 0,
     }
 }
 

@@ -8,10 +8,13 @@ mod forward;
 mod launch;
 mod wrapper;
 
-pub use api::fused_ttt_tile_forward;
+pub use api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 pub use forward::{
     Inputs, Outputs, Params, ParamsTrait, extract_last_row, fused_ttt_forward_kernel,
-    layer_norm_forward, layer_norm_l2_grad,
+    fused_ttt_forward_kernel_multi, fused_ttt_forward_stage, layer_norm_forward,
+    layer_norm_l2_grad,
 };
-pub use launch::{TttTileKernel, forward, launch_tile_forward};
-pub use wrapper::FusedTttTileBackend;
+pub use launch::{
+    TttTileKernel, TttTileMultiKernel, forward, forward_multi, launch_tile_forward,
+    launch_tile_forward_multi,
+};

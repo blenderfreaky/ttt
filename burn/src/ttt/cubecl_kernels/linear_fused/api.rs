@@ -27,6 +27,7 @@ pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3>>(
         ln_weight: ln_weight.into_primitive().tensor(),
         ln_bias: ln_bias.into_primitive().tensor(),
         epsilon,
+        mini_batch_len: 0,
     };
 
     let outputs: TttOutputs<_> = B::forward(inputs);

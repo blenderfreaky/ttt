@@ -13,9 +13,7 @@
 
 
 [compilation]
-# Enable kernel caching to avoid JIT recompilation
-# Using global cache so it can be cleared without full cargo clean
-cache = "global"
+cache = "target"
 
 [autotune]
 level = "balanced"
