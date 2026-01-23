@@ -18,23 +18,40 @@ use super::forward::{
     InputsLaunch, OutputsLaunch, Params, fused_ttt_forward_kernel, fused_ttt_forward_kernel_multi,
 };
 
-/// Declarative macro to define supported tile configurations and generate dispatch code.
+/// Supported tile configurations.
+/// Format: (mini_batch_len, head_dim, CS_dim, F_dim, CS_Reg_dim, F_Reg_dim)
 ///
-/// Each entry is: (seq_len, head_dim, CS_dim, F_dim, CS_Reg_dim, F_Reg_dim)
-/// The macro generates the match arms automatically.
-///
-/// Tile constraints:
-/// - Number of sub-tiles = (CS/CS_Reg) × (F/F_Reg) must be ≤ 32 (plane size)
+/// Sub-tile counts (must be ≤ 32):
+/// - 8×32:   (8/4)×(32/8)   = 2×4 = 8 sub-tiles
+/// - 8×64:   (8/4)×(64/16)  = 2×4 = 8 sub-tiles
+/// - 16×32:  (16/4)×(32/8)  = 4×4 = 16 sub-tiles
+/// - 16×64:  (16/4)×(64/16) = 4×4 = 16 sub-tiles
+/// - 16×128: (16/4)×(128/32)= 4×4 = 16 sub-tiles
+/// - 32×32:  (32/8)×(32/8)  = 4×4 = 16 sub-tiles
+/// - 32×64:  (32/4)×(64/16) = 8×4 = 32 sub-tiles
+macro_rules! supported_tile_configs {
+    ($callback:ident!($($args:tt)*)) => {
+        $callback!($($args)*
+            ( 8,  32, D8,  D32,  D4, D8),
+            ( 8,  64, D8,  D64,  D4, D16),
+            (16,  32, D16, D32,  D4, D8),
+            (16,  64, D16, D64,  D4, D16),
+            (16, 128, D16, D128, D4, D32),
+            (32,  32, D32, D32,  D8, D8),
+            (32,  64, D32, D64,  D4, D16),
+        )
+    };
+}
+
+/// Dispatch macro for single-stage kernel.
 macro_rules! impl_tile_dispatch {
-    // Entry point: defines configs and generates the dispatch function body
     (
         $client:expr, $cube_count:expr, $cube_dim:expr,
         $inputs:expr, $outputs:expr, $config:expr,
-        $seq_len:expr, $head_dim:expr;
-        // List of (seq_len, head_dim, CS, F, CS_Reg, F_Reg)
+        $mini_batch_len:expr, $head_dim:expr;
         $(($s:literal, $h:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
     ) => {
-        match ($seq_len, $head_dim) {
+        match ($mini_batch_len, $head_dim) {
             $(
                 ($s, $h) => {
                     type P<E> = Params<E, $CS, $F, $CSR, $FR>;
@@ -49,41 +66,15 @@ macro_rules! impl_tile_dispatch {
                     .map(|(s, h)| format!("{}×{}", s, h))
                     .collect();
                 panic!(
-                    "Unsupported tile size: seq_len={}, head_dim={}. Supported: {}",
-                    $seq_len, $head_dim, supported_str.join(", ")
+                    "Unsupported tile size: mini_batch_len={}, head_dim={}. Supported: {}",
+                    $mini_batch_len, $head_dim, supported_str.join(", ")
                 )
             }
         }
     };
 }
 
-/// Supported tile configurations.
-/// Format: (seq_len, head_dim, CS_dim, F_dim, CS_Reg_dim, F_Reg_dim)
-///
-/// Sub-tile counts (must be ≤ 32):
-/// - 8×32:   (8/4)×(32/8)   = 2×4 = 8 sub-tiles
-/// - 8×64:   (8/4)×(64/16)  = 2×4 = 8 sub-tiles
-/// - 16×32:  (16/4)×(32/8)  = 4×4 = 16 sub-tiles
-/// - 16×64:  (16/4)×(64/16) = 4×4 = 16 sub-tiles
-/// - 16×128: (16/4)×(128/32)= 4×4 = 16 sub-tiles
-/// - 32×32:  (32/8)×(32/8)  = 4×4 = 16 sub-tiles
-/// - 32×64:  (32/4)×(64/16) = 8×4 = 32 sub-tiles
-macro_rules! dispatch_tile_kernel {
-    ($client:expr, $cube_count:expr, $cube_dim:expr, $inputs:expr, $outputs:expr, $config:expr, $seq_len:expr, $head_dim:expr) => {
-        impl_tile_dispatch!(
-            $client, $cube_count, $cube_dim, $inputs, $outputs, $config, $seq_len, $head_dim;
-            ( 8,  32, D8,  D32,  D4, D8),
-            ( 8,  64, D8,  D64,  D4, D16),
-            (16,  32, D16, D32,  D4, D8),
-            (16,  64, D16, D64,  D4, D16),
-            (16, 128, D16, D128, D4, D32),
-            (32,  32, D32, D32,  D8, D8),
-            (32,  64, D32, D64,  D4, D16),
-        )
-    };
-}
-
-/// Dispatch macro for multi-stage kernel (tile size only, num_stages is runtime).
+/// Dispatch macro for multi-stage kernel.
 macro_rules! impl_tile_dispatch_multi {
     (
         $client:expr, $cube_count:expr, $cube_dim:expr,
@@ -114,19 +105,19 @@ macro_rules! impl_tile_dispatch_multi {
     };
 }
 
-/// Dispatch for multi-stage kernel using supported tile configurations.
+macro_rules! dispatch_tile_kernel {
+    ($client:expr, $cube_count:expr, $cube_dim:expr, $inputs:expr, $outputs:expr, $config:expr, $mini_batch_len:expr, $head_dim:expr) => {
+        supported_tile_configs!(impl_tile_dispatch!(
+            $client, $cube_count, $cube_dim, $inputs, $outputs, $config, $mini_batch_len, $head_dim;
+        ))
+    };
+}
+
 macro_rules! dispatch_tile_kernel_multi {
     ($client:expr, $cube_count:expr, $cube_dim:expr, $inputs:expr, $outputs:expr, $num_stages:expr, $config:expr, $mini_batch_len:expr, $head_dim:expr) => {
-        impl_tile_dispatch_multi!(
+        supported_tile_configs!(impl_tile_dispatch_multi!(
             $client, $cube_count, $cube_dim, $inputs, $outputs, $num_stages, $config, $mini_batch_len, $head_dim;
-            ( 8,  32, D8,  D32,  D4, D8),
-            ( 8,  64, D8,  D64,  D4, D16),
-            (16,  32, D16, D32,  D4, D8),
-            (16,  64, D16, D64,  D4, D16),
-            (16, 128, D16, D128, D4, D32),
-            (32,  32, D32, D32,  D8, D8),
-            (32,  64, D32, D64,  D4, D16),
-        )
+        ))
     };
 }
 
