@@ -11,19 +11,18 @@
   # Common source for crane - include burn and thundercube directories
   fullSrc = pkgs.lib.cleanSourceWith {
     src = ../.;
-    filter = path: type:
-      let
-        baseName = baseNameOf path;
-        relPath = pkgs.lib.removePrefix (toString ../. + "/") (toString path);
-        isRelevant = (pkgs.lib.hasPrefix "burn" relPath) || (pkgs.lib.hasPrefix "thundercube" relPath);
-        isExcluded = baseName == ".git" || baseName == "target" || baseName == "result" || baseName == ".worktree";
-      in
-        isRelevant && !isExcluded;
+    filter = path: type: let
+      baseName = baseNameOf path;
+      relPath = pkgs.lib.removePrefix (toString ../. + "/") (toString path);
+      isRelevant = (pkgs.lib.hasPrefix "burn" relPath) || (pkgs.lib.hasPrefix "thundercube" relPath);
+      isExcluded = baseName == ".git" || baseName == "target" || baseName == "result" || baseName == ".worktree";
+    in
+      isRelevant && !isExcluded;
   };
 
   cargoLock = ../burn/Cargo.lock;
   cargoToml = ../burn/Cargo.toml;
-  cargoVendorDir = craneLib.vendorCargoDeps { inherit cargoLock cargoToml; };
+  cargoVendorDir = craneLib.vendorCargoDeps {inherit cargoLock cargoToml;};
 
   commonArgs = {
     src = fullSrc;
@@ -36,55 +35,107 @@
     postUnpack = ''sourceRoot="$sourceRoot/burn"'';
   };
 
-  mkCargoArtifacts = {backend, extraBuildInputs ? [], extraNativeBuildInputs ? [], extraEnv ? {}}:
-    craneLib.buildDepsOnly (commonArgs // {
-      pname = "ttt-deps";
-      nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
-      buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
-      cargoExtraArgs = "--no-default-features --features ${backend} --all-targets";
-      doCheck = false;
-    } // extraEnv);
+  mkCargoArtifacts = {
+    backend,
+    extraBuildInputs ? [],
+    extraNativeBuildInputs ? [],
+    extraEnv ? {},
+  }:
+    craneLib.buildDepsOnly (commonArgs
+      // {
+        pname = "ttt-deps";
+        nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
+        buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
+        cargoExtraArgs = "--no-default-features --features ${backend} --all-targets";
+        doCheck = false;
+      }
+      // extraEnv);
 
-  mkTtt = {backend, binSuffix ? "", extraBuildInputs ? [], extraNativeBuildInputs ? [], extraEnv ? {}}:
-    let cargoArtifacts = mkCargoArtifacts {inherit backend extraBuildInputs extraNativeBuildInputs extraEnv;};
-    in craneLib.buildPackage (commonArgs // {
-      pname = "ttt${binSuffix}";
-      version = "0.1.0";
-      inherit cargoArtifacts;
-      nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
-      buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
-      cargoExtraArgs = "--no-default-features --features ${backend}";
-      doCheck = false;
-    } // extraEnv // (if binSuffix != "" then {
-      postInstall = ''for f in $out/bin/*; do mv "$f" "$f${binSuffix}"; done'';
-    } else {}));
+  mkTtt = {
+    backend,
+    binSuffix ? "",
+    extraBuildInputs ? [],
+    extraNativeBuildInputs ? [],
+    extraEnv ? {},
+  }: let
+    cargoArtifacts = mkCargoArtifacts {inherit backend extraBuildInputs extraNativeBuildInputs extraEnv;};
+  in
+    craneLib.buildPackage (commonArgs
+      // {
+        pname = "ttt${binSuffix}";
+        version = "0.1.0";
+        inherit cargoArtifacts;
+        nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
+        buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
+        cargoExtraArgs = "--no-default-features --features ${backend}";
+        doCheck = false;
+      }
+      // extraEnv
+      // (
+        if binSuffix != ""
+        then {
+          postInstall = ''for f in $out/bin/*; do mv "$f" "$f${binSuffix}"; done'';
+        }
+        else {}
+      ));
 
-  mkTttBench = {backend, binSuffix ? "", extraBuildInputs ? [], extraNativeBuildInputs ? [], extraEnv ? {}}:
-    let cargoArtifacts = mkCargoArtifacts {inherit backend extraBuildInputs extraNativeBuildInputs extraEnv;};
-    in craneLib.buildPackage (commonArgs // {
-      pname = "ttt-bench${binSuffix}";
-      version = "0.1.0";
-      inherit cargoArtifacts;
-      nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
-      buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
-      cargoExtraArgs = "--no-default-features --features ${backend} --bench ttt_benchmark";
-      installPhaseCommand = ''
-        mkdir -p $out/bin
-        find target/release/deps -name "ttt_benchmark-*" -type f -executable ! -name "*.d" -exec cp {} $out/bin/ttt_benchmark${binSuffix} \;
-      '';
-      doCheck = false;
-    } // extraEnv);
+  mkTttBench = {
+    backend,
+    binSuffix ? "",
+    extraBuildInputs ? [],
+    extraNativeBuildInputs ? [],
+    extraEnv ? {},
+  }: let
+    cargoArtifacts = mkCargoArtifacts {inherit backend extraBuildInputs extraNativeBuildInputs extraEnv;};
+  in
+    craneLib.buildPackage (commonArgs
+      // {
+        pname = "ttt-bench${binSuffix}";
+        version = "0.1.0";
+        inherit cargoArtifacts;
+        nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
+        buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
+        cargoExtraArgs = "--no-default-features --features ${backend} --bench ttt_benchmark";
+        installPhaseCommand = ''
+          mkdir -p $out/bin
+          find target/release/deps -name "ttt_benchmark-*" -type f -executable ! -name "*.d" -exec cp {} $out/bin/ttt_benchmark${binSuffix} \;
+        '';
+        doCheck = false;
+      }
+      // extraEnv);
 
-  mkTttDocker = {name, tttPkg, runtimeDeps ? [], extraEnv ? []}:
+  mkTttDocker = {
+    name,
+    tttPkg,
+    runtimeDeps ? [],
+    extraEnv ? [],
+  }:
     pkgs.dockerTools.buildLayeredImage {
       inherit name;
       tag = "latest";
-      contents = with pkgs; [
-        tttPkg cacert bashInteractive fish coreutils bintools file findutils
-        ripgrep fd dust duf tmux stdenv.cc.cc.lib dockerTools.fakeNss
-        bottom htop btop
-        (python313.withPackages (ps: with ps; [huggingface-hub]))
-      ] ++ runtimeDeps;
+      contents = with pkgs;
+        [
+          tttPkg
+          cacert
+          bashInteractive
+          fish
+          coreutils
+          bintools
+          file
+          findutils
+          ripgrep
+          fd
+          dust
+          duf
+          tmux
+          stdenv.cc.cc.lib
+          dockerTools.fakeNss
+          bottom
+          htop
+          btop
+          (python313.withPackages (ps: with ps; [huggingface-hub]))
+        ]
+        ++ runtimeDeps;
       fakeRootCommands = ''
         mkdir -p ./root ./tmp ./usr/lib/x86_64-linux-gnu ./usr/local/nvidia/lib64 ./usr/lib64 ./run/nvidia
         chmod 1777 ./tmp
@@ -92,11 +143,15 @@
       enableFakechroot = true;
       config = {
         Cmd = ["/bin/fish"];
-        Env = [
-          "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
-          "HOME=/root" "USER=root" "TMPDIR=/tmp"
-          "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/lib64:/lib"
-        ] ++ extraEnv;
+        Env =
+          [
+            "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+            "HOME=/root"
+            "USER=root"
+            "TMPDIR=/tmp"
+            "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/lib64:/lib"
+          ]
+          ++ extraEnv;
         WorkingDir = "/root";
       };
     };
@@ -119,28 +174,45 @@
   };
 
   # Build a complete backend package set: {f32.{ttt,ttt-bench}, bf16.{ttt,ttt-bench}, ttt-docker}
-  mkBackendPkgs = {name, backend, buildConfig, runtimeDeps, dockerEnv, nvtop}:
-    let
-      f32 = {
-        ttt = mkTtt (buildConfig // {inherit backend;});
-        ttt-bench = mkTttBench (buildConfig // {inherit backend;});
-      };
-      bf16 = {
-        ttt = mkTtt (buildConfig // {backend = "${backend},bf16"; binSuffix = "-bf16";});
-        ttt-bench = mkTttBench (buildConfig // {backend = "${backend},bf16"; binSuffix = "-bf16";});
-      };
-    in {
-      inherit f32 bf16;
-      ttt-docker = mkTttDocker {
-        inherit name;
-        tttPkg = f32.ttt;
-        runtimeDeps = runtimeDeps ++ [f32.ttt-bench bf16.ttt bf16.ttt-bench nvtop];
-        extraEnv = dockerEnv;
-      };
-      deps = mkCargoArtifacts (buildConfig // {inherit backend;});
+  mkBackendPkgs = {
+    name,
+    backend,
+    buildConfig,
+    runtimeDeps,
+    dockerEnv,
+    nvtop,
+  }: let
+    f32 = {
+      ttt = mkTtt (buildConfig // {inherit backend;});
+      ttt-bench = mkTttBench (buildConfig // {inherit backend;});
     };
+    bf16 = {
+      ttt = mkTtt (buildConfig
+        // {
+          backend = "${backend},bf16";
+          binSuffix = "-bf16";
+        });
+      ttt-bench = mkTttBench (buildConfig
+        // {
+          backend = "${backend},bf16";
+          binSuffix = "-bf16";
+        });
+    };
+  in {
+    inherit f32 bf16;
+    ttt-docker = mkTttDocker {
+      inherit name;
+      tttPkg = f32.ttt;
+      runtimeDeps = runtimeDeps ++ [f32.ttt-bench bf16.ttt bf16.ttt-bench nvtop];
+      extraEnv = dockerEnv;
+    };
+    deps = mkCargoArtifacts (buildConfig // {inherit backend;});
+  };
 
-  mkRocmPkgs = {name, rocmPkgs}:
+  mkRocmPkgs = {
+    name,
+    rocmPkgs,
+  }:
     mkBackendPkgs {
       inherit name;
       backend = "rocm";
@@ -153,14 +225,19 @@
       ];
       nvtop = pkgs.nvtopPackages.amd;
     };
-
 in rec {
   kokkos = pkgs.callPackage ./kokkos.nix {};
   kokkos-kernels = pkgs.callPackage ./kokkos-kernels.nix {inherit kokkos;};
   kokkos-tools = pkgs.callPackage ./kokkos-tools.nix {inherit kokkos;};
 
-  rocm6 = mkRocmPkgs {name = "ttt-rocm6"; rocmPkgs = rocmPackages6;};
-  rocm7 = mkRocmPkgs {name = "ttt-rocm7"; rocmPkgs = rocmPackages7;};
+  rocm6 = mkRocmPkgs {
+    name = "ttt-rocm6";
+    rocmPkgs = rocmPackages6;
+  };
+  rocm7 = mkRocmPkgs {
+    name = "ttt-rocm7";
+    rocmPkgs = rocmPackages7;
+  };
 
   cuda = mkBackendPkgs {
     name = "ttt-cuda";
