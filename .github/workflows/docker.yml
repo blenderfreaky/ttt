@@ -21,10 +21,12 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - name: ttt-rocm
-            package: ttt-rocm-docker
+          - name: ttt-rocm6
+            package: rocm6.ttt-docker
+          - name: ttt-rocm7
+            package: rocm7.ttt-docker
           - name: ttt-cuda
-            package: ttt-cuda-docker
+            package: cuda.ttt-docker
 
     steps:
       - name: Checkout repository
