@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, Shell};
 
 pub mod data;
 pub mod inference;
@@ -49,6 +50,11 @@ enum Commands {
         /// Tokenizer: HuggingFace model name (e.g., "gpt2", "EleutherAI/gpt-neox-20b") or local file path
         #[arg(long, default_value = "gpt2")]
         tokenizer: String,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
     },
 }
 
@@ -392,6 +398,9 @@ fn main() {
                     eprintln!("Error starting interactive session: {}", e);
                 }
             }
+        }
+        Commands::Completions { shell } => {
+            generate(shell, &mut Cli::command(), "ttt", &mut std::io::stdout());
         }
     }
 }
