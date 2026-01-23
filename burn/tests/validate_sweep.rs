@@ -3,11 +3,10 @@
 //! These tests run the Python reference validation with various parameter combinations,
 //! then run the Rust validation to verify correctness across different configurations.
 //!
-//! Tests are parameterized using test_case macros and will fail if validation fails.
+//! Tests are parameterized using test_case/test_matrix macros and will fail if validation fails.
 #![allow(clippy::too_many_arguments)]
-
 use std::{path::PathBuf, process::Command};
-use test_case::test_case;
+use test_case::{test_case, test_matrix};
 
 mod validate_full;
 
@@ -95,6 +94,7 @@ fn run_sweep(
     let dir = format!(
         "validation_data/batch_{b}/layer_{l}/head_{h}/dim_{d}/mini_batch_{mini_batch_size}/seed_{seed}/conv_{conv_kernel}/gate_{use_gate}_pre_conv_{pre_conv}_share_qk_{share_qk}_tie_word_embeddings_{tie_word_embeddings}"
     );
+
     generate_validation_data(
         dir.clone(),
         b,
@@ -115,60 +115,72 @@ fn run_sweep(
 }
 
 // ============================================================================
-// Dimension sweep tests
+// Dimension sweep tests - vary one dimension at a time from baseline
 // ============================================================================
 
-// Baseline configuration
-#[test_case(2, 16, 4, 16, 16, 42; "baseline")]
-// Vary batch size
-#[test_case(1, 16, 4, 16, 16, 42; "batch_1")]
-#[test_case(3, 16, 4, 16, 16, 42; "batch_3")]
-#[test_case(4, 16, 4, 16, 16, 42; "batch_4")]
-// Vary num_heads
-#[test_case(2, 16, 2, 16, 16, 42; "heads_2")]
-#[test_case(2, 16, 3, 16, 16, 42; "heads_3")]
-#[test_case(2, 16, 5, 16, 16, 42; "heads_5")]
-#[test_case(2, 16, 6, 16, 16, 42; "heads_6")]
-#[test_case(2, 16, 8, 16, 16, 42; "heads_8")]
-// Vary head_dim
-#[test_case(2, 16, 4, 8, 16, 42; "head_dim_8")]
-#[test_case(2, 16, 4, 12, 16, 42; "head_dim_12")]
-#[test_case(2, 16, 4, 20, 16, 42; "head_dim_20")]
-#[test_case(2, 16, 4, 32, 16, 42; "head_dim_32")]
-// Vary sequence length with matching mini_batch
-#[test_case(2, 8, 4, 16, 8, 42; "seq_8")]
-#[test_case(2, 24, 4, 16, 24, 42; "seq_24")]
-#[test_case(2, 32, 4, 16, 32, 42; "seq_32")]
-// Multiple mini-batches
-#[test_case(2, 32, 4, 16, 16, 42; "mini_batches_2")]
-#[test_case(2, 48, 4, 16, 16, 42; "mini_batches_3")]
-#[ignore] // Run with: cargo test --test validate_sweep -- --ignored
-fn sweep_dimensions(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) {
-    run_sweep(
-        b,
-        l,
-        h,
-        d,
-        mini_batch_size,
-        seed,
-        true,
-        4,
-        true,
-        false,
-        false,
-    );
+#[test_matrix(
+    [1, 2, 3, 4],           // batch sizes
+    [4],                     // heads (baseline)
+    [16],                    // head_dim (baseline)
+    [16],                    // seq_len (baseline)
+    [16]                     // mini_batch (baseline)
+)]
+#[ignore]
+fn sweep_batch_size(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usize) {
+    run_sweep(b, l, h, d, mini_batch_size, 42, true, 4, true, false, false);
+}
+
+#[test_matrix(
+    [2],                     // batch (baseline)
+    [2, 3, 4, 5, 6, 8],     // heads
+    [16],                    // head_dim (baseline)
+    [16],                    // seq_len (baseline)
+    [16]                     // mini_batch (baseline)
+)]
+#[ignore]
+fn sweep_num_heads(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usize) {
+    run_sweep(b, l, h, d, mini_batch_size, 42, true, 4, true, false, false);
+}
+
+#[test_matrix(
+    [2],                     // batch (baseline)
+    [4],                     // heads (baseline)
+    [8, 12, 16, 20, 32],    // head_dim
+    [16],                    // seq_len (baseline)
+    [16]                     // mini_batch (baseline)
+)]
+#[ignore]
+fn sweep_head_dim(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usize) {
+    run_sweep(b, l, h, d, mini_batch_size, 42, true, 4, true, false, false);
+}
+
+// Sequence length with matching mini_batch
+#[test_matrix(
+    [8, 16, 24, 32]         // seq_len = mini_batch
+)]
+#[ignore]
+fn sweep_seq_len(l: usize) {
+    run_sweep(2, l, 4, 16, l, 42, true, 4, true, false, false);
+}
+
+// Multiple mini-batches (seq_len > mini_batch)
+#[test_matrix(
+    [32, 48, 64]            // seq_len with mini_batch=16
+)]
+#[ignore]
+fn sweep_multi_mini_batch(l: usize) {
+    run_sweep(2, l, 4, 16, 16, 42, true, 4, true, false, false);
 }
 
 // ============================================================================
-// Feature flag sweep tests
+// Feature flag sweep tests - all combinations
 // ============================================================================
 
-#[test_case(true, 4, true; "all_features")]
-#[test_case(false, 4, true; "no_gate")]
-#[test_case(true, 4, false; "no_pre_conv")]
-#[test_case(false, 4, false; "minimal")]
-#[test_case(true, 2, true; "conv_kernel_2")]
-#[test_case(true, 8, true; "conv_kernel_8")]
+#[test_matrix(
+    [true, false],          // use_gate
+    [2, 4, 8],              // conv_kernel
+    [true, false]           // pre_conv
+)]
 #[ignore]
 fn sweep_features(use_gate: bool, conv_kernel: usize, pre_conv: bool) {
     run_sweep(
@@ -187,13 +199,39 @@ fn sweep_features(use_gate: bool, conv_kernel: usize, pre_conv: bool) {
 }
 
 // ============================================================================
-// Combined variation tests (potential edge cases)
+// Weight sharing sweep tests - all combinations
 // ============================================================================
 
-// Tests with default flags (gate=true, conv=4, pre_conv=true)
+#[test_matrix(
+    [true, false],          // share_qk
+    [true, false]           // tie_word_embeddings
+)]
+#[ignore]
+fn sweep_weight_sharing(share_qk: bool, tie_word_embeddings: bool) {
+    run_sweep(
+        2,
+        16,
+        4,
+        16,
+        16,
+        42,
+        true,
+        4,
+        true,
+        share_qk,
+        tie_word_embeddings,
+    );
+}
+
+// ============================================================================
+// Combined variation tests (edge cases with varied dimensions)
+// ============================================================================
+
 #[test_case(2, 16, 5, 8, 16, 42; "h5_d8")]
 #[test_case(3, 20, 5, 8, 10, 42; "complex_1")]
 #[test_case(2, 24, 6, 12, 12, 42; "complex_2")]
+#[test_case(2, 32, 4, 16, 16, 42; "multi_batch_seq32")]
+#[test_case(2, 16, 6, 12, 16, 42; "varied_dims")]
 #[ignore]
 fn sweep_combined(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) {
     run_sweep(
@@ -211,103 +249,54 @@ fn sweep_combined(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize
     );
 }
 
-// Tests with non-default flags
-#[test_case(2, 32, 4, 16, 16, 42, true, 8, true; "multi_batch_large_conv")]
-#[test_case(2, 16, 6, 12, 16, 42, true, 2, true; "varied_dims_small_conv")]
-#[ignore]
-fn sweep_combined_with_flags(
-    b: usize,
-    l: usize,
-    h: usize,
-    d: usize,
-    mini_batch_size: usize,
-    seed: usize,
-    use_gate: bool,
-    conv_kernel: usize,
-    pre_conv: bool,
-) {
-    run_sweep(
-        b,
-        l,
-        h,
-        d,
-        mini_batch_size,
-        seed,
-        use_gate,
-        conv_kernel,
-        pre_conv,
-        false,
-        false,
-    );
-}
-
-// ============================================================================
-// Weight sharing sweep tests
-// ============================================================================
-#[test_case(false, false; "no_sharing")]
-#[test_case(true, false; "share_qk_only")]
-#[test_case(false, true; "tie_embeddings_only")]
-#[test_case(true, true; "share_qk_and_tie_embeddings")]
-#[ignore]
-fn sweep_weight_sharing(share_qk: bool, tie_word_embeddings: bool) {
-    run_sweep(
-        2,
-        16,
-        4,
-        16,
-        16,
-        42,
-        true, // use_gate
-        4,    // conv_kernel
-        true, // pre_conv
-        share_qk,
-        tie_word_embeddings,
-    );
-}
-
 // ============================================================================
 // Weight sharing with varied dimensions
 // ============================================================================
-#[test_case(1, 16, 4, 16, 16, 42, true, false; "batch_1_share_qk")]
-#[test_case(2, 32, 4, 16, 16, 42, true, false; "multi_batch_share_qk")]
-#[test_case(2, 16, 8, 16, 16, 42, true, false; "many_heads_share_qk")]
-#[test_case(2, 16, 4, 32, 16, 42, false, true; "large_head_dim_tie_emb")]
-#[test_case(3, 24, 6, 12, 12, 42, true, true; "complex_all_sharing")]
+
+#[test_matrix(
+    [1, 2, 3],              // batch
+    [16, 32],               // seq_len
+    [4, 8],                 // heads
+    [16, 32],               // head_dim
+    [true, false],          // share_qk
+    [true, false]           // tie_word_embeddings
+)]
 #[ignore]
 fn sweep_sharing_with_dimensions(
     b: usize,
     l: usize,
     h: usize,
     d: usize,
-    mini_batch_size: usize,
-    seed: usize,
     share_qk: bool,
     tie_word_embeddings: bool,
 ) {
+    let mini_batch_size = l.min(16); // Use full seq or 16, whichever is smaller
     run_sweep(
         b,
         l,
         h,
         d,
         mini_batch_size,
-        seed,
-        true, // use_gate
-        4,    // conv_kernel
-        true, // pre_conv
+        42,
+        true,
+        4,
+        true,
         share_qk,
         tie_word_embeddings,
     );
 }
 
 // ============================================================================
-// Full feature matrix tests (weight sharing + other flags)
+// Full feature matrix tests (all flags varied)
 // ============================================================================
-#[test_case(true, 4, true, true, false; "gate_conv4_pre_shareqk")]
-#[test_case(true, 4, true, false, true; "gate_conv4_pre_tieemb")]
-#[test_case(true, 4, true, true, true; "gate_conv4_pre_allsharing")]
-#[test_case(false, 4, true, true, false; "nogate_shareqk")]
-#[test_case(true, 2, false, true, true; "conv2_nopreconv_allsharing")]
-#[test_case(false, 8, false, true, true; "minimal_with_allsharing")]
+
+#[test_matrix(
+    [true, false],          // use_gate
+    [2, 4],                 // conv_kernel (reduced from [2,4,8] to limit explosion)
+    [true, false],          // pre_conv
+    [true, false],          // share_qk
+    [true, false]           // tie_word_embeddings
+)]
 #[ignore]
 fn sweep_full_feature_matrix(
     use_gate: bool,
