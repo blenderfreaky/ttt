@@ -2988,8 +2988,10 @@ dependencies = [
 name = "thundercube"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "criterion",
  "cubecl",
+ "cubecl-hip-sys",
  "half",
  "paste",
  "pollster",

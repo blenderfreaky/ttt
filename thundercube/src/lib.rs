@@ -12,6 +12,8 @@
 pub mod binary_ops;
 pub mod plane;
 pub mod reduction_ops;
+#[cfg(feature = "hip")]
+pub mod streaming;
 pub mod tiles;
 pub mod unary_ops;
 pub mod util;
@@ -37,4 +39,7 @@ pub mod prelude {
     #[cfg(test)]
     pub use crate::test_kernel;
     pub use crate::tiles::*;
+    #[cfg(feature = "hip")]
+    pub use crate::util::gpu_sleep;
+    pub use crate::util::sync_planes;
 }

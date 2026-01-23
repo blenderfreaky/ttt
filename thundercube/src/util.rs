@@ -178,3 +178,33 @@ pub fn slice_3d<T: CubePrimitive>(t: &Tensor<T>, x: usize, y: usize, z: usize) -
     let end = index_3d(t, x + 1, y + 1, z + 1) - 1;
     t.slice(start, end)
 }
+
+/// Sleep for approximately `n * 63` clock cycles. (AMD only)
+///
+/// Uses the AMD `s_sleep` instruction which puts the wavefront to sleep.
+///
+/// # Arguments
+///
+/// * `n` - Sleep duration multiplier (comptime). Actual sleep is ~n*63 clock cycles.
+#[cfg(feature = "hip")]
+#[cube]
+#[allow(unused_variables, reason = "False positive from the cube macro")]
+pub fn gpu_sleep(#[comptime] n: u32) {
+    // This is a truly horrible hack to emit `__builtin_amdgcn_s_sleep(n)`
+    // since CubeCL doesn't have native intrinsic support.
+    // The comment impl automatically uses /* */ when there's a newline,
+    // so we trigger that off purpose, then escape out from the comment
+    // by closing it ourselves.
+    use cubecl::intrinsic;
+    intrinsic!(|scope| {
+        scope.register(cubecl::ir::NonSemantic::Comment {
+            content: format!("*/\n__builtin_amdgcn_s_sleep({});\n/*", n),
+        });
+    });
+}
+
+pub fn wait_for_sync<R: Runtime>(
+    client: &ComputeClient<R>,
+) -> Result<(), cubecl::server::ExecutionError> {
+    pollster::block_on(client.sync())
+}
