@@ -8,10 +8,7 @@ use burn::{
         conv::{Conv1d, Conv1dConfig},
     },
     prelude::*,
-    tensor::{
-        Tensor,
-        activation::sigmoid,
-    },
+    tensor::{Tensor, activation::sigmoid},
 };
 use burn_backend::Distribution;
 
@@ -61,19 +58,6 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
 
         let mini_batch_size = self.get_config().mini_batch_size;
         let num_mini_batch = seq_len / mini_batch_size;
-
-        // TODO: Implement gradient checkpointing when scan_checkpoint_group_size > 0
-        // Reference: https://github.com/test-time-training/ttt-lm-pytorch/blob/main/ttt.py#L449
-        // When enabled, groups `scan_checkpoint_group_size` mini-batches together in one
-        // gradient checkpoint. During backward, the forward pass for each group is recomputed
-        // to save memory. JAX reference uses group_size=4.
-        //
-        // Implementation would require:
-        // 1. Saving state before each checkpoint group
-        // 2. During backward, restoring state and recomputing the group's forward pass
-        // 3. Burn's autodiff doesn't have explicit checkpoint() like PyTorch, so this would
-        //    need custom autodiff integration or a manual save/restore mechanism.
-        let _checkpoint_group_size = self.get_config().scan_checkpoint_group_size;
 
         for i in 0..num_mini_batch {
             let start_idx = i * mini_batch_size;

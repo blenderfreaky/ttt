@@ -406,26 +406,29 @@ const BENCH_PARAMS: &[RuntimeParams] = &[
     },
 ];
 
-/// Runtime parameters for the tiled fused kernel (requires seq_len=16, head_dim=64)
+/// Runtime parameters for the tiled fused kernel (mini_batch_size=16, head_dim=64)
+/// seq_length should be a multiple of 16 (the mini-batch size)
 const BENCH_PARAMS_TILE: &[RuntimeParams] = &[
+    // Small batches, varying sequence lengths
     RuntimeParams {
-        batch_size: 1,
-        seq_length: 16,
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 2,
-        seq_length: 16,
+        batch_size: 4,
+        seq_length: 64,  // 4 mini-batches
         vocab_size: 1000,
     },
     RuntimeParams {
         batch_size: 4,
-        seq_length: 16,
+        seq_length: 128, // 8 mini-batches
+        vocab_size: 1000,
+    },
+    // Larger batches
+    RuntimeParams {
+        batch_size: 8,
+        seq_length: 64,
         vocab_size: 1000,
     },
     RuntimeParams {
         batch_size: 8,
-        seq_length: 16,
+        seq_length: 128,
         vocab_size: 1000,
     },
 ];
