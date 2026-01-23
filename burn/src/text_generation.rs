@@ -225,12 +225,11 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
 
 #[cfg(test)]
 mod tests {
-    use crate::ttt::{GpuAutodiffBackend, cubecl_kernels::Fused, linear::TTTLinear};
+    use crate::ttt::{
+        GpuAutodiffBackend, TEST_VOCAB_SIZE, cubecl_kernels::Fused, linear::TTTLinear,
+    };
 
     use super::*;
-
-    /// GPT-2 vocab size for testing
-    const TEST_VOCAB_SIZE: usize = 50257;
 
     type Inner = Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>;
 
