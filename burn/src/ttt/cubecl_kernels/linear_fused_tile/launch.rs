@@ -9,12 +9,12 @@ use cubecl::prelude::*;
 use std::fmt::Debug;
 use thundercube::prelude::{D4, D8, D16, D32, D64, D128, LINE_SIZE};
 
+use crate::ttt::cubecl_kernels::FusedTttConfig;
 use crate::ttt::cubecl_kernels::bundle::TensorBundle;
 use crate::ttt::cubecl_kernels::kernel::FusedKernel;
 use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttOutputs};
-use crate::ttt::cubecl_kernels::FusedTttConfig;
 
-use super::forward::{fused_ttt_forward_kernel, InputsLaunch, OutputsLaunch, Params};
+use super::forward::{InputsLaunch, OutputsLaunch, Params, fused_ttt_forward_kernel};
 
 /// Declarative macro to define supported tile configurations and generate dispatch code.
 ///
@@ -159,31 +159,6 @@ pub fn launch_tile_forward<R: Runtime, F: Float + CubeElement>(
         seq_len,
         head_dim
     );
-}
-
-/// Launch the tiled TTT forward kernel for 16x64 tiles specifically.
-/// This is kept for backward compatibility.
-#[deprecated(since = "0.2.0", note = "Use launch_tile_forward instead")]
-pub fn launch_tile_forward_64x64<R: Runtime, F: Float + CubeElement>(
-    client: &ComputeClient<R>,
-    xq: TensorHandleRef<R>,
-    xk: TensorHandleRef<R>,
-    xv: TensorHandleRef<R>,
-    weight: TensorHandleRef<R>,
-    bias: TensorHandleRef<R>,
-    token_eta: TensorHandleRef<R>,
-    ttt_lr_eta: TensorHandleRef<R>,
-    ln_weight: TensorHandleRef<R>,
-    ln_bias: TensorHandleRef<R>,
-    output: TensorHandleRef<R>,
-    weight_out: TensorHandleRef<R>,
-    bias_out: TensorHandleRef<R>,
-    config: FusedTttConfig,
-) {
-    launch_tile_forward::<R, F>(
-        client, xq, xk, xv, weight, bias, token_eta, ttt_lr_eta,
-        ln_weight, ln_bias, output, weight_out, bias_out, config,
-    )
 }
 
 /// Forward pass using the tiled kernel.

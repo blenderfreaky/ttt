@@ -21,45 +21,6 @@ fn generate_validation_data(
     pre_conv: bool,
     share_qk: bool,
     tie_word_embeddings: bool,
-}
-
-impl Config {
-    fn new(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) -> Self {
-        Self {
-            b,
-            l,
-            h,
-            d,
-            mini_batch_size,
-            seed,
-            use_gate: true,
-            conv_kernel: 4,
-            pre_conv: true,
-            share_qk: true,
-            tie_word_embeddings: true,
-        }
-    }
-
-    fn with_flags(mut self, use_gate: bool, conv_kernel: usize, pre_conv: bool) -> Self {
-        self.use_gate = use_gate;
-        self.conv_kernel = conv_kernel;
-        self.pre_conv = pre_conv;
-        self
-    }
-
-    fn with_share_qk(mut self, share_qk: bool) -> Self {
-        self.share_qk = share_qk;
-        self
-    }
-
-    fn with_tie_word_embeddings(mut self, tie_word_embeddings: bool) -> Self {
-        self.tie_word_embeddings = tie_word_embeddings;
-        self
-    }
-}
-
-/// Run Python validation data generation with given config
-fn run_python_validation_data_generation(cfg: &Config) -> bool {
 ) -> Result<(), String> {
     let mut args = vec![
         "-m".to_string(),
@@ -92,13 +53,13 @@ fn run_python_validation_data_generation(cfg: &Config) -> bool {
         args.push("--no-pre_conv".to_string());
     }
 
-    if cfg.share_qk {
+    if share_qk {
         args.push("--share_qk".to_string());
     } else {
         args.push("--no-share_qk".to_string());
     }
 
-    if cfg.tie_word_embeddings {
+    if tie_word_embeddings {
         args.push("--tie_word_embeddings".to_string());
     } else {
         args.push("--no-tie_word_embeddings".to_string());
@@ -146,10 +107,24 @@ fn run_sweep(
     use_gate: bool,
     conv_kernel: usize,
     pre_conv: bool,
+    share_qk: bool,
+    tie_word_embeddings: bool,
 ) {
     // Generate validation data
-    generate_validation_data(b, l, h, d, mini_batch_size, seed, use_gate, conv_kernel, pre_conv)
-        .expect("Failed to generate validation data");
+    generate_validation_data(
+        b,
+        l,
+        h,
+        d,
+        mini_batch_size,
+        seed,
+        use_gate,
+        conv_kernel,
+        pre_conv,
+        share_qk,
+        tie_word_embeddings,
+    )
+    .expect("Failed to generate validation data");
 
     // Run Rust validation
     run_rust_validation().expect("Rust validation failed");
@@ -185,7 +160,19 @@ fn run_sweep(
 #[test_case(2, 48, 4, 16, 16, 42; "mini_batches_3")]
 #[ignore] // Run with: cargo test --test validate_sweep -- --ignored
 fn sweep_dimensions(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) {
-    run_sweep(b, l, h, d, mini_batch_size, seed, true, 4, true);
+    run_sweep(
+        b,
+        l,
+        h,
+        d,
+        mini_batch_size,
+        seed,
+        true,
+        4,
+        true,
+        false,
+        false,
+    );
 }
 
 // ============================================================================
@@ -200,7 +187,19 @@ fn sweep_dimensions(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usi
 #[test_case(true, 8, true; "conv_kernel_8")]
 #[ignore]
 fn sweep_features(use_gate: bool, conv_kernel: usize, pre_conv: bool) {
-    run_sweep(2, 16, 4, 16, 16, 42, use_gate, conv_kernel, pre_conv);
+    run_sweep(
+        2,
+        16,
+        4,
+        16,
+        16,
+        42,
+        use_gate,
+        conv_kernel,
+        pre_conv,
+        false,
+        false,
+    );
 }
 
 // ============================================================================
@@ -213,7 +212,19 @@ fn sweep_features(use_gate: bool, conv_kernel: usize, pre_conv: bool) {
 #[test_case(2, 24, 6, 12, 12, 42; "complex_2")]
 #[ignore]
 fn sweep_combined(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) {
-    run_sweep(b, l, h, d, mini_batch_size, seed, true, 4, true);
+    run_sweep(
+        b,
+        l,
+        h,
+        d,
+        mini_batch_size,
+        seed,
+        true,
+        4,
+        true,
+        false,
+        false,
+    );
 }
 
 // Tests with non-default flags
@@ -231,5 +242,17 @@ fn sweep_combined_with_flags(
     conv_kernel: usize,
     pre_conv: bool,
 ) {
-    run_sweep(b, l, h, d, mini_batch_size, seed, use_gate, conv_kernel, pre_conv);
+    run_sweep(
+        b,
+        l,
+        h,
+        d,
+        mini_batch_size,
+        seed,
+        use_gate,
+        conv_kernel,
+        pre_conv,
+        false,
+        false,
+    );
 }
