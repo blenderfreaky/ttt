@@ -7,7 +7,7 @@ use burn_cubecl::tensor::CubeTensor;
 use burn_cubecl::{CubeRuntime, FloatElement};
 use cubecl::prelude::*;
 use std::fmt::Debug;
-use thundercube::prelude::{D4, D8, D16, D64, LINE_SIZE};
+use thundercube::prelude::{D4, D16, D64, LINE_SIZE};
 
 use crate::ttt::cubecl_kernels::bundle::TensorBundle;
 use crate::ttt::cubecl_kernels::kernel::FusedKernel;
@@ -69,23 +69,25 @@ pub fn launch_tile_forward_64x64<R: Runtime, F: Float + CubeElement>(
     // Vectorization factor for Line<F>
     let vectorization = LINE_SIZE;
 
+    // Use the TensorHandleRef's as_tensor_arg which correctly uses elem_size from the handle
+    // (This matches how burn's as_tensor_arg works internally)
     unsafe {
         let inputs_launch = InputsLaunch::<F, R>::new(
-            TensorArg::from_raw_parts::<F>(xq.handle, xq.strides, xq.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(xk.handle, xk.strides, xk.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(xv.handle, xv.strides, xv.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(weight.handle, weight.strides, weight.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(bias.handle, bias.strides, bias.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(token_eta.handle, token_eta.strides, token_eta.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(ttt_lr_eta.handle, ttt_lr_eta.strides, ttt_lr_eta.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(ln_weight.handle, ln_weight.strides, ln_weight.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(ln_bias.handle, ln_bias.strides, ln_bias.shape, vectorization),
+            xq.as_tensor_arg(vectorization),
+            xk.as_tensor_arg(vectorization),
+            xv.as_tensor_arg(vectorization),
+            weight.as_tensor_arg(vectorization),
+            bias.as_tensor_arg(vectorization),
+            token_eta.as_tensor_arg(vectorization),
+            ttt_lr_eta.as_tensor_arg(vectorization),
+            ln_weight.as_tensor_arg(vectorization),
+            ln_bias.as_tensor_arg(vectorization),
         );
 
         let outputs_launch = OutputsLaunch::<F, R>::new(
-            TensorArg::from_raw_parts::<F>(output.handle, output.strides, output.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(weight_out.handle, weight_out.strides, weight_out.shape, vectorization),
-            TensorArg::from_raw_parts::<F>(bias_out.handle, bias_out.strides, bias_out.shape, vectorization),
+            output.as_tensor_arg(vectorization),
+            weight_out.as_tensor_arg(vectorization),
+            bias_out.as_tensor_arg(vectorization),
         );
         fused_ttt_forward_kernel::launch::<P<F>, R>(
             client,

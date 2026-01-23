@@ -6,13 +6,11 @@ use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{
         Fused,
-        backend::FusedTttBackend,
+        backend::{FusedTttBackend, api::fused_ttt_forward},
     },
     layer::{TTTInnerModel, TTTInputsInner},
     linear::TTTLinear,
 };
-
-use super::api::fused_ttt_forward;
 
 impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;

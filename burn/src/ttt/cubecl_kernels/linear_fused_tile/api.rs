@@ -3,7 +3,7 @@
 use burn::tensor::{Tensor, TensorPrimitive};
 
 use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
-use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttOutputs};
+use crate::ttt::cubecl_kernels::ttt::TttInputs;
 
 use super::launch::TttTileKernel;
 
@@ -36,7 +36,7 @@ pub fn fused_ttt_tile_forward<B: FusedKernelBackend<TttTileKernel, 9, 3>>(
         epsilon,
     };
 
-    let outputs: TttOutputs<_> = B::forward(inputs);
+    let outputs = B::forward(inputs);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),

@@ -4,13 +4,13 @@ use std::{marker::PhantomData, sync::Arc};
 
 use burn::tensor::Tensor;
 
+use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
 use crate::ttt::{
     TTTConfig,
     cubecl_kernels::Fused,
     layer::{TTTInnerModel, TTTInputsInner},
     linear::TTTLinear,
 };
-use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
 
 use super::api::fused_ttt_tile_forward;
 use super::launch::TttTileKernel;
