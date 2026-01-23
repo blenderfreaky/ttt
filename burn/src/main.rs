@@ -8,6 +8,7 @@ pub mod ttt;
 
 use burn::config::Config;
 use burn::optim::AdamConfig;
+use burn::tensor::backend::Backend;
 use data::{Tokenizer, TokenizerTrait};
 use training::TTTTrainingConfig;
 use ttt::{PositionEncodingType, TTTConfig, TTTLayerType, TrainingBackend};
@@ -192,6 +193,10 @@ struct TrainArgs {
     /// Resume training from a checkpoint directory (same as artifact dir)
     #[arg(long)]
     resume: Option<String>,
+
+    /// Fixed RNG seed for reproducible training
+    #[arg(long)]
+    seed: Option<u64>,
 }
 
 impl InnerModel {
@@ -277,6 +282,7 @@ fn main() {
             let pretokenized = args.pretokenized;
             let resume_dir = args.resume.clone();
             let tokenizer_name = args.tokenizer.clone();
+            let seed = args.seed;
             let tokenizer = load_tokenizer(&tokenizer_name);
 
             // Determine config and artifact_dir based on whether we're resuming
@@ -329,6 +335,13 @@ fn main() {
             );
 
             let device = Default::default();
+
+            // Set RNG seed for reproducibility if provided
+            if let Some(seed) = seed {
+                println!("Using fixed RNG seed: {seed}");
+                TrainingBackend::seed(&device, seed);
+            }
+
             if pretokenized {
                 training::train_dataset_pretokenized::<TrainingBackend>(
                     &device,
