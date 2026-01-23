@@ -598,6 +598,7 @@ mod test_macro_tests {
     use test_case::{test_case, test_matrix};
 
     use crate::LINE_SIZE;
+    use crate::test_utils::TestFloat;
     use cubecl::num_traits::Zero;
     use cubecl::prelude::*;
 

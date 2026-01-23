@@ -1,7 +1,13 @@
-// For `addr + 0`, it makes some stuff cleaner to read
-#![allow(clippy::identity_op)]
-// Empty tiles aren't a thing, so this method would be confusing
-#![allow(clippy::len_without_is_empty)]
+// #![warn(clippy::pedantic)]
+#![allow(
+    clippy::identity_op,
+    reason = "For `addr + 0`, it makes some stuff cleaner to read"
+)]
+#![allow(
+    clippy::len_without_is_empty,
+    reason = "Empty tiles aren't a thing, so this method would be confusing"
+)]
+#![allow(clippy::needless_range_loop)]
 
 pub mod binary_ops;
 pub mod plane;
