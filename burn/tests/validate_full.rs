@@ -1306,6 +1306,7 @@ fn test_full_model_forward_mlp(dir: Option<PathBuf>) {
     test_full_model_forward_impl::<TTTMLP<GpuBackend>>(dir);
 }
 
+#[allow(dead_code)]
 pub fn test_all(dir: Option<PathBuf>) {
     fn header(s: &str) {
         let len = 70 - s.len();

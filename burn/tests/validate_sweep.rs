@@ -1,3 +1,4 @@
+#![cfg(feature = "sweep_tests")]
 //! Parameter sweep validation tests.
 //!
 //! These tests run the Python reference validation with various parameter combinations,
@@ -125,7 +126,6 @@ fn run_sweep(
     [16],                    // seq_len (baseline)
     [16]                     // mini_batch (baseline)
 )]
-#[ignore]
 fn sweep_batch_size(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usize) {
     run_sweep(b, l, h, d, mini_batch_size, 42, true, 4, true, false, false);
 }
@@ -137,7 +137,6 @@ fn sweep_batch_size(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usi
     [16],                    // seq_len (baseline)
     [16]                     // mini_batch (baseline)
 )]
-#[ignore]
 fn sweep_num_heads(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usize) {
     run_sweep(b, l, h, d, mini_batch_size, 42, true, 4, true, false, false);
 }
@@ -149,7 +148,6 @@ fn sweep_num_heads(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usiz
     [16],                    // seq_len (baseline)
     [16]                     // mini_batch (baseline)
 )]
-#[ignore]
 fn sweep_head_dim(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usize) {
     run_sweep(b, l, h, d, mini_batch_size, 42, true, 4, true, false, false);
 }
@@ -158,7 +156,6 @@ fn sweep_head_dim(b: usize, h: usize, d: usize, l: usize, mini_batch_size: usize
 #[test_matrix(
     [8, 16, 24, 32]         // seq_len = mini_batch
 )]
-#[ignore]
 fn sweep_seq_len(l: usize) {
     run_sweep(2, l, 4, 16, l, 42, true, 4, true, false, false);
 }
@@ -167,7 +164,6 @@ fn sweep_seq_len(l: usize) {
 #[test_matrix(
     [32, 48, 64]            // seq_len with mini_batch=16
 )]
-#[ignore]
 fn sweep_multi_mini_batch(l: usize) {
     run_sweep(2, l, 4, 16, 16, 42, true, 4, true, false, false);
 }
@@ -181,7 +177,6 @@ fn sweep_multi_mini_batch(l: usize) {
     [2, 4, 8],              // conv_kernel
     [true, false]           // pre_conv
 )]
-#[ignore]
 fn sweep_features(use_gate: bool, conv_kernel: usize, pre_conv: bool) {
     run_sweep(
         2,
@@ -206,7 +201,6 @@ fn sweep_features(use_gate: bool, conv_kernel: usize, pre_conv: bool) {
     [true, false],          // share_qk
     [true, false]           // tie_word_embeddings
 )]
-#[ignore]
 fn sweep_weight_sharing(share_qk: bool, tie_word_embeddings: bool) {
     run_sweep(
         2,
@@ -232,7 +226,6 @@ fn sweep_weight_sharing(share_qk: bool, tie_word_embeddings: bool) {
 #[test_case(2, 24, 6, 12, 12, 42; "complex_2")]
 #[test_case(2, 32, 4, 16, 16, 42; "multi_batch_seq32")]
 #[test_case(2, 16, 6, 12, 16, 42; "varied_dims")]
-#[ignore]
 fn sweep_combined(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize, seed: usize) {
     run_sweep(
         b,
@@ -261,7 +254,6 @@ fn sweep_combined(b: usize, l: usize, h: usize, d: usize, mini_batch_size: usize
     [true, false],          // share_qk
     [true, false]           // tie_word_embeddings
 )]
-#[ignore]
 fn sweep_sharing_with_dimensions(
     b: usize,
     l: usize,
@@ -297,7 +289,6 @@ fn sweep_sharing_with_dimensions(
     [true, false],          // share_qk
     [true, false]           // tie_word_embeddings
 )]
-#[ignore]
 fn sweep_full_feature_matrix(
     use_gate: bool,
     conv_kernel: usize,

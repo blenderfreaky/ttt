@@ -29,7 +29,7 @@ serde_json = "1.0"
 num-traits = "0.2"
 derive-new = "0.7"
 memmap2 = "0.9"
-bytemuck = { version = "1.14", features = ["derive"] }
+bytemuck = { version = "1.24", features = ["derive"] }
 dirs = "6.0"
 log = "0.4"
 env_logger = "0.11"
@@ -57,3 +57,5 @@ bf16 = []
 rocm = ["burn/rocm", "cubecl/hip"]
 cuda = ["burn/cuda", "cubecl/cuda"]
 wgpu = ["burn/wgpu"]
+
+sweep_tests = []
