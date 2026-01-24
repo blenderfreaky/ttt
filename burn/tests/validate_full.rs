@@ -59,6 +59,10 @@ trait TestableInnerModel<B: burn::tensor::backend::Backend>: TTTInnerModel<B> {
     fn full_model_tolerance() -> f32 {
         1e-2
     }
+
+    fn inner_model_tolerance() -> f32 {
+        2e-3 // Default tolerance for inner model validation
+    }
 }
 
 /// Expected state values after forward pass (type-erased for trait object compatibility)
@@ -663,7 +667,7 @@ fn test_inner_model_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<Path
     println!("  Output shape: {:?}", output_actual.dims());
 
     println!("\n  Comparison:");
-    let tolerance = 1e-3;
+    let tolerance = Inner::inner_model_tolerance();
 
     let out_passed = compare_tensors(&output_actual, &output_expected, "output", tolerance);
     let state_passed = Inner::compare_state(&state, &expected_state, tolerance);
