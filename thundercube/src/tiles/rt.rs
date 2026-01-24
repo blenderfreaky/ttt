@@ -45,6 +45,15 @@ impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
         }
     }
 
+    /// Create an Rt from existing data array (used for transpose reinterpretation).
+    pub fn from_data(data: Array<Line<F>>) -> Rt<F, R, C> {
+        Rt::<F, R, C> {
+            data,
+            _phantom: PhantomData,
+            len: Self::LEN,
+        }
+    }
+
     pub fn apply_unary_op<O: UnaryOp<F>>(&mut self, op: O) {
         #[unroll(self.len <= UNROLL_LIMIT)]
         for i in 0..self.len {

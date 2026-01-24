@@ -1,6 +1,7 @@
 mod dim;
 mod rt;
 mod st;
+mod transpose;
 
 pub mod mma;
 
