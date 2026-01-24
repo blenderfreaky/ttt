@@ -18,17 +18,17 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 RUN cargo install cargo-chef
 
-WORKDIR /workspace
+WORKDIR /app
 
 # =============================================================================
 # Stage 2: Planner - analyze dependencies
 # =============================================================================
 FROM chef AS planner
 
-COPY thundercube /workspace/thundercube
-COPY burn /workspace/burn
+COPY thundercube /app/thundercube
+COPY burn /app/burn
 
-WORKDIR /workspace/burn
+WORKDIR /app/burn
 RUN cargo chef prepare --recipe-path recipe.json
 
 # =============================================================================
@@ -41,16 +41,16 @@ ENV PATH="${CUDA_PATH}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
 
 # Copy recipe and build dependencies only (this layer is cached)
-COPY --from=planner /workspace/burn/recipe.json /workspace/burn/recipe.json
+COPY --from=planner /app/burn/recipe.json /app/burn/recipe.json
 
 # Need thundercube for the workspace
-COPY thundercube /workspace/thundercube
+COPY thundercube /app/thundercube
 
-WORKDIR /workspace/burn
+WORKDIR /app/burn
 RUN cargo chef cook --release --no-default-features --features cuda --recipe-path recipe.json
 
 # Now copy actual source and build (only this rebuilds on code changes)
-COPY burn /workspace/burn
+COPY burn /app/burn
 RUN cargo build --release --no-default-features --features cuda
 
 # =============================================================================
@@ -96,17 +96,26 @@ ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-WORKDIR /workspace
+WORKDIR /app
 
 # Copy source code for on-server development
-COPY thundercube /workspace/thundercube
-COPY burn /workspace/burn
+COPY thundercube /app/thundercube
+COPY burn /app/burn
 
 # Copy pre-built binary and target directory (includes deps for incremental builds)
-COPY --from=builder /workspace/burn/target /workspace/burn/target
+COPY --from=builder /app/burn/target /app/burn/target
 
 # Create symlink to binary for easy access
-RUN ln -s /workspace/burn/target/release/ttt /usr/local/bin/ttt
+RUN ln -s /app/burn/target/release/ttt /usr/local/bin/ttt
 
-# Default shell
+# Generate shell completions
+RUN mkdir -p /root/.config/fish/completions && \
+    /usr/local/bin/ttt completions fish > /root/.config/fish/completions/ttt.fish && \
+    /usr/local/bin/ttt completions bash > /etc/bash_completion.d/ttt && \
+    mkdir -p /usr/local/share/zsh/site-functions && \
+    /usr/local/bin/ttt completions zsh > /usr/local/share/zsh/site-functions/_ttt
+
+# Set fish as default login shell
+RUN chsh -s /usr/bin/fish
+
 CMD ["fish"]
