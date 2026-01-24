@@ -45,7 +45,8 @@ impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
         }
     }
 
-    /// Create an Rt from existing data array (used for transpose reinterpretation).
+    /// Create an Rt from existing data array, reinterpreting the dimensions.
+    /// Used for transpose where we want to change the type from Rt<F, R, C> to Rt<F, C, R>.
     pub fn from_data(data: Array<Line<F>>) -> Rt<F, R, C> {
         Rt::<F, R, C> {
             data,
