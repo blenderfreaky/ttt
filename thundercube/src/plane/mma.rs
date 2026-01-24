@@ -12,7 +12,8 @@ use cubecl::prelude::*;
 /// The tile is divided into (TileM / ThreadTileM) × (TileN / ThreadTileN) sub-tiles.
 macro_rules! define_plane_mma {
     ($name:ident, $mma_rt_fn:ident,
-     [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident]) => {
+     [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident],
+     [$rt_d0:ident, $rt_d1:ident]) => {
         #[cube]
         pub fn $name<
             F: Float,
@@ -22,7 +23,7 @@ macro_rules! define_plane_mma {
             ThreadTileM: Dim,
             ThreadTileN: Dim,
         >(
-            rt_c: &mut Rt<F, ThreadTileM, ThreadTileN>,
+            rt_c: &mut Rt<F, $rt_d0, $rt_d1>,
             st_a: &St<F, $a_d0, $a_d1>,
             st_b: &St<F, $b_d0, $b_d1>,
         ) {
@@ -48,16 +49,17 @@ macro_rules! define_plane_mma {
 
 // A: a_trans=false → [M,K], a_trans=true → [K,M]
 // B: b_trans=false → [N,K], b_trans=true → [K,N]
+// C: c_trans=false → Rt<M,N>, c_trans=true → Rt<N,M>
 // Naming: A=[M,K], At=[K,M], B=[K,N], Bt=[N,K]
 
-define_plane_mma!(mma_ABt,    mma_rt_ABt,    [TileM, TileK], [TileN, TileK]);
-define_plane_mma!(mma_ABt_t,  mma_rt_ABt_t,  [TileM, TileK], [TileN, TileK]);
-define_plane_mma!(mma_AB,     mma_rt_AB,     [TileM, TileK], [TileK, TileN]);
-define_plane_mma!(mma_AB_t,   mma_rt_AB_t,   [TileM, TileK], [TileK, TileN]);
-define_plane_mma!(mma_AtBt,   mma_rt_AtBt,   [TileK, TileM], [TileN, TileK]);
-define_plane_mma!(mma_AtBt_t, mma_rt_AtBt_t, [TileK, TileM], [TileN, TileK]);
-define_plane_mma!(mma_AtB,    mma_rt_AtB,    [TileK, TileM], [TileK, TileN]);
-define_plane_mma!(mma_AtB_t,  mma_rt_AtB_t,  [TileK, TileM], [TileK, TileN]);
+define_plane_mma!(mma_ABt,    mma_rt_ABt,    [TileM, TileK], [TileN, TileK], [ThreadTileM, ThreadTileN]);
+define_plane_mma!(mma_ABt_t,  mma_rt_ABt_t,  [TileM, TileK], [TileN, TileK], [ThreadTileN, ThreadTileM]);
+define_plane_mma!(mma_AB,     mma_rt_AB,     [TileM, TileK], [TileK, TileN], [ThreadTileM, ThreadTileN]);
+define_plane_mma!(mma_AB_t,   mma_rt_AB_t,   [TileM, TileK], [TileK, TileN], [ThreadTileN, ThreadTileM]);
+define_plane_mma!(mma_AtBt,   mma_rt_AtBt,   [TileK, TileM], [TileN, TileK], [ThreadTileM, ThreadTileN]);
+define_plane_mma!(mma_AtBt_t, mma_rt_AtBt_t, [TileK, TileM], [TileN, TileK], [ThreadTileN, ThreadTileM]);
+define_plane_mma!(mma_AtB,    mma_rt_AtB,    [TileK, TileM], [TileK, TileN], [ThreadTileM, ThreadTileN]);
+define_plane_mma!(mma_AtB_t,  mma_rt_AtB_t,  [TileK, TileM], [TileK, TileN], [ThreadTileN, ThreadTileM]);
 
 #[cfg(test)]
 mod tests {
@@ -136,11 +138,11 @@ mod tests {
                 $load_a(in_a, &mut st_a, 0, 0, 0);
                 $load_b(in_b, &mut st_b, 0, 0, 0);
 
-                // c_trans=true: accumulate into Rt<N, M>, then transpose to get Rt<M, N>
+                // c_trans=true: Rt<N, M>, then transpose to Rt<M, N>
                 let mut rt_c = Rt::<F, ThreadTileN, ThreadTileM>::new();
                 rt_c.zero();
 
-                $mma_fn::<F, TileM, TileK, TileN, ThreadTileN, ThreadTileM>(
+                $mma_fn::<F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(
                     &mut rt_c, &st_a, &st_b,
                 );
 
@@ -194,12 +196,12 @@ mod tests {
         };
     }
 
-    define_plane_test!(test_plane_mma_ABt, test_kernel_ABt);
-    define_plane_test!(test_plane_mma_ABt_t, test_kernel_ABt_t);
-    define_plane_test!(test_plane_mma_AB, test_kernel_AB);
-    define_plane_test!(test_plane_mma_AB_t, test_kernel_AB_t);
-    define_plane_test!(test_plane_mma_AtBt, test_kernel_AtBt);
-    define_plane_test!(test_plane_mma_AtBt_t, test_kernel_AtBt_t);
-    define_plane_test!(test_plane_mma_AtB, test_kernel_AtB);
-    define_plane_test!(test_plane_mma_AtB_t, test_kernel_AtB_t);
+    define_plane_test!(test_mma_ABt, test_kernel_ABt);
+    define_plane_test!(test_mma_ABt_t, test_kernel_ABt_t);
+    define_plane_test!(test_mma_AB, test_kernel_AB);
+    define_plane_test!(test_mma_AB_t, test_kernel_AB_t);
+    define_plane_test!(test_mma_AtBt, test_kernel_AtBt);
+    define_plane_test!(test_mma_AtBt_t, test_kernel_AtBt_t);
+    define_plane_test!(test_mma_AtB, test_kernel_AtB);
+    define_plane_test!(test_mma_AtB_t, test_kernel_AtB_t);
 }

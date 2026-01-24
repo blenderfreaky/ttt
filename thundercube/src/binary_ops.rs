@@ -88,6 +88,8 @@ macro_rules! with_binary_ops {
         $callback! {
             $($($arg)+;)?
 
+            Set<F>(_dst, src) => src;
+
             Add<F>(dst, src) => dst + src;
             Sub<F>(dst, src) => dst - src;
             Mul<F>(dst, src) => dst * src;

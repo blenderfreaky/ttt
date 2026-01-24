@@ -56,8 +56,8 @@ impl Indexer {
 
 /// Accumulate along N: B is vectorized, C is row-major.
 #[cube]
-fn accum_n<F: Float, CM: Dim, CN: Dim>(
-    c: &mut Rt<F, CM, CN>,
+fn accum_n<F: Float, RtR: Dim, RtC: Dim>(
+    c: &mut Rt<F, RtR, RtC>,
     a_data: &SharedMemory<Line<F>>,
     b_data: &SharedMemory<Line<F>>,
     a_idx: &Indexer,
@@ -67,13 +67,16 @@ fn accum_n<F: Float, CM: Dim, CN: Dim>(
     offset_m: usize,
     offset_n: usize,
 ) {
-    #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
-    for nl in 0..CN::LINES {
+    let m_lines = if comptime!(c_idx.transposed) { RtC::LINES } else { RtR::LINES };
+    let n_lines = if comptime!(c_idx.transposed) { RtR::LINES } else { RtC::LINES };
+
+    #[unroll(n_lines <= UNROLL_LIMIT_HOT)]
+    for nl in 0..n_lines {
         let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
 
         if comptime!(a_idx.transposed) {
-            #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
-            for ml in 0..CM::LINES {
+            #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
+            for ml in 0..m_lines {
                 let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
                 #[unroll]
                 for mi in 0..LINE_SIZE {
@@ -84,8 +87,8 @@ fn accum_n<F: Float, CM: Dim, CN: Dim>(
                 }
             }
         } else {
-            #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
-            for ml in 0..CM::LINES {
+            #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
+            for ml in 0..m_lines {
                 #[unroll]
                 for mi in 0..LINE_SIZE {
                     let m = (offset_m + ml) * LINE_SIZE + mi;
@@ -102,8 +105,8 @@ fn accum_n<F: Float, CM: Dim, CN: Dim>(
 
 /// Accumulate along M: A is vectorized, C is column-major.
 #[cube]
-fn accum_m<F: Float, CM: Dim, CN: Dim>(
-    c: &mut Rt<F, CM, CN>,
+fn accum_m<F: Float, RtR: Dim, RtC: Dim>(
+    c: &mut Rt<F, RtR, RtC>,
     a_data: &SharedMemory<Line<F>>,
     b_data: &SharedMemory<Line<F>>,
     a_idx: &Indexer,
@@ -113,13 +116,16 @@ fn accum_m<F: Float, CM: Dim, CN: Dim>(
     offset_m: usize,
     offset_n: usize,
 ) {
-    #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
-    for ml in 0..CM::LINES {
+    let m_lines = if comptime!(c_idx.transposed) { RtC::LINES } else { RtR::LINES };
+    let n_lines = if comptime!(c_idx.transposed) { RtR::LINES } else { RtC::LINES };
+
+    #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
+    for ml in 0..m_lines {
         let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
 
         if comptime!(b_idx.transposed) {
-            #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
-            for nl in 0..CN::LINES {
+            #[unroll(n_lines <= UNROLL_LIMIT_HOT)]
+            for nl in 0..n_lines {
                 let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
                 #[unroll]
                 for ni in 0..LINE_SIZE {
@@ -130,8 +136,8 @@ fn accum_m<F: Float, CM: Dim, CN: Dim>(
                 }
             }
         } else {
-            #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
-            for nl in 0..CN::LINES {
+            #[unroll(n_lines <= UNROLL_LIMIT_HOT)]
+            for nl in 0..n_lines {
                 #[unroll]
                 for ni in 0..LINE_SIZE {
                     let n = (offset_n + nl) * LINE_SIZE + ni;
@@ -148,8 +154,8 @@ fn accum_m<F: Float, CM: Dim, CN: Dim>(
 
 /// Scalar accumulation fallback.
 #[cube]
-fn accum_scalar<F: Float, CM: Dim, CN: Dim>(
-    c: &mut Rt<F, CM, CN>,
+fn accum_scalar<F: Float, RtR: Dim, RtC: Dim>(
+    c: &mut Rt<F, RtR, RtC>,
     a_data: &SharedMemory<Line<F>>,
     b_data: &SharedMemory<Line<F>>,
     a_idx: &Indexer,
@@ -159,8 +165,11 @@ fn accum_scalar<F: Float, CM: Dim, CN: Dim>(
     offset_m: usize,
     offset_n: usize,
 ) {
-    #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
-    for ml in 0..CM::LINES {
+    let m_lines = if comptime!(c_idx.transposed) { RtC::LINES } else { RtR::LINES };
+    let n_lines = if comptime!(c_idx.transposed) { RtR::LINES } else { RtC::LINES };
+
+    #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
+    for ml in 0..m_lines {
         #[unroll]
         for mi in 0..LINE_SIZE {
             let a_val = if comptime!(a_idx.transposed) {
@@ -174,8 +183,8 @@ fn accum_scalar<F: Float, CM: Dim, CN: Dim>(
 
             let c_row = ml * LINE_SIZE + mi;
 
-            #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
-            for nl in 0..CN::LINES {
+            #[unroll(n_lines <= UNROLL_LIMIT_HOT)]
+            for nl in 0..n_lines {
                 #[unroll]
                 for ni in 0..LINE_SIZE {
                     let b_val = if comptime!(b_idx.transposed) {
@@ -210,10 +219,11 @@ fn accum_scalar<F: Float, CM: Dim, CN: Dim>(
 /// offset_m, offset_n: select which sub-tile of the St to operate on
 macro_rules! define_mma_rt {
     ($name:ident, $a_trans:tt, $b_trans:tt, $c_trans:tt,
-     [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident], $accum:ident) => {
+     [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident], $accum:ident,
+     [$c_d0:ident, $c_d1:ident]) => {
         #[cube]
         pub fn $name<F: Float, CM: Dim, CN: Dim, TileM: Dim, TileK: Dim, TileN: Dim>(
-            c: &mut Rt<F, CM, CN>,
+            c: &mut Rt<F, $c_d0, $c_d1>,
             a: &St<F, $a_d0, $a_d1>,
             b: &St<F, $b_d0, $b_d1>,
             offset_m: usize,
@@ -225,7 +235,7 @@ macro_rules! define_mma_rt {
             let c_idx = Indexer::new(c_stride, $c_trans, false);
 
             for k in 0..TileK::VALUE {
-                $accum::<F, CM, CN>(c, &a.data, &b.data, &a_idx, &b_idx, &c_idx, k, offset_m, offset_n);
+                $accum::<F, $c_d0, $c_d1>(c, &a.data, &b.data, &a_idx, &b_idx, &c_idx, k, offset_m, offset_n);
             }
         }
     };
@@ -233,17 +243,18 @@ macro_rules! define_mma_rt {
 
 // A: a_trans=false → [M,K], a_trans=true → [K,M]
 // B: b_trans=false → [N,K], b_trans=true → [K,N]
+// C: c_trans=false → Rt<CM,CN>, c_trans=true → Rt<CN,CM>
 // Naming: A=[M,K], At=[K,M], B=[K,N], Bt=[N,K]
 // Accum strategy: b_trans && !c_trans → accum_n, a_trans && c_trans → accum_m, else → accum_scalar
 
-define_mma_rt!(mma_rt_ABt,    false, false, false, [TileM, TileK], [TileN, TileK], accum_scalar);
-define_mma_rt!(mma_rt_ABt_t,  false, false, true,  [TileM, TileK], [TileN, TileK], accum_scalar);
-define_mma_rt!(mma_rt_AB,     false, true,  false, [TileM, TileK], [TileK, TileN], accum_n);
-define_mma_rt!(mma_rt_AB_t,   false, true,  true,  [TileM, TileK], [TileK, TileN], accum_scalar);
-define_mma_rt!(mma_rt_AtBt,   true,  false, false, [TileK, TileM], [TileN, TileK], accum_scalar);
-define_mma_rt!(mma_rt_AtBt_t, true,  false, true,  [TileK, TileM], [TileN, TileK], accum_m);
-define_mma_rt!(mma_rt_AtB,    true,  true,  false, [TileK, TileM], [TileK, TileN], accum_n);
-define_mma_rt!(mma_rt_AtB_t,  true,  true,  true,  [TileK, TileM], [TileK, TileN], accum_m);
+define_mma_rt!(mma_rt_ABt,    false, false, false, [TileM, TileK], [TileN, TileK], accum_scalar, [CM, CN]);
+define_mma_rt!(mma_rt_ABt_t,  false, false, true,  [TileM, TileK], [TileN, TileK], accum_scalar, [CN, CM]);
+define_mma_rt!(mma_rt_AB,     false, true,  false, [TileM, TileK], [TileK, TileN], accum_n,      [CM, CN]);
+define_mma_rt!(mma_rt_AB_t,   false, true,  true,  [TileM, TileK], [TileK, TileN], accum_scalar, [CN, CM]);
+define_mma_rt!(mma_rt_AtBt,   true,  false, false, [TileK, TileM], [TileN, TileK], accum_scalar, [CM, CN]);
+define_mma_rt!(mma_rt_AtBt_t, true,  false, true,  [TileK, TileM], [TileN, TileK], accum_m,      [CN, CM]);
+define_mma_rt!(mma_rt_AtB,    true,  true,  false, [TileK, TileM], [TileK, TileN], accum_n,      [CM, CN]);
+define_mma_rt!(mma_rt_AtB_t,  true,  true,  true,  [TileK, TileM], [TileK, TileN], accum_m,      [CN, CM]);
 
 #[cfg(test)]
 mod tests {
@@ -310,11 +321,11 @@ mod tests {
                 $load_a(in_a, &mut st_a, 0, 0, 0);
                 $load_b(in_b, &mut st_b, 0, 0, 0);
 
-                // c_trans=true: use Rt<N, M> as accumulator, then transpose to Rt<M, N>
+                        // c_trans=true: use Rt<N,M>, then transpose to Rt<M,N>
                 let mut rt_c = Rt::<F, TileN, TileM>::new();
                 rt_c.zero();
 
-                $mma_fn::<F, TileN, TileM, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
+                $mma_fn::<F, TileM, TileN, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
                 rt_c.transpose().copy_to_array(output);
             }
         };
