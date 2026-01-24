@@ -16,6 +16,7 @@ LR="${LR:-5e-4}"
 SIZE="${SIZE:-60m}"
 GRAD_ACCUM="${GRAD_ACCUM:-1}"
 WORKERS="${WORKERS:-2}"
+SEED="${SEED:42}"
 
 # Base output directory
 OUT_BASE="${OUT_BASE:-./artifacts-experiments}"
@@ -56,6 +57,7 @@ run_experiment() {
         --mlp-expansion $mlp_expansion \
         --grad-accum $GRAD_ACCUM \
         --workers $WORKERS \
+        --seed $SEED \
         --out $out_dir \
         $extra_args"
 
