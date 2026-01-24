@@ -9,14 +9,13 @@ use cubecl::prelude::*;
 #[cube]
 pub fn reduce_st_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
-) -> Rv<F, C> {
+    result: &mut Rv<F, C>,
+) {
     let tid = UNIT_POS as usize;
     let num_threads = PLANE_DIM as usize;
 
     let vec_stride = C::LINES;
     let mask = vec_stride - 1;
-
-    let mut result = Rv::<F, C>::new();
 
     #[unroll(C::LINES <= UNROLL_LIMIT)]
     for c_line in 0..C::LINES {
@@ -30,7 +29,6 @@ pub fn reduce_st_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
         // Combine across threads in plane, broadcast result
         result.data[c_line] = plane_reduce_line::<F, O>(acc);
     }
-    result
 }
 
 /// Cooperatively reduces St across columns, producing one value per row.
@@ -41,14 +39,13 @@ pub fn reduce_st_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 #[cube]
 pub fn reduce_st_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
-) -> Rv<F, R> {
+    result: &mut Rv<F, R>,
+) {
     let tid = UNIT_POS as usize;
     let num_threads = PLANE_DIM as usize;
 
     let vec_stride = C::LINES;
     let mask = vec_stride - 1;
-
-    let mut result = Rv::<F, R>::new();
 
     #[unroll(R::LINES <= UNROLL_LIMIT)]
     for r_line in 0..R::LINES {
@@ -72,19 +69,18 @@ pub fn reduce_st_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
         }
         result.data[r_line] = out_line;
     }
-    result
 }
 
 /// Convenience function: sum St across rows (reduce cols)
 #[cube]
-pub fn sum_st_cols<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>) -> Rv<F, C> {
-    reduce_st_cols::<F, R, C, SumOp>(s_mem)
+pub fn sum_st_cols<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, C>) {
+    reduce_st_cols::<F, R, C, SumOp>(s_mem, result)
 }
 
 /// Convenience function: sum St across columns (reduce rows)
 #[cube]
-pub fn sum_st_rows<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>) -> Rv<F, R> {
-    reduce_st_rows::<F, R, C, SumOp>(s_mem)
+pub fn sum_st_rows<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, R>) {
+    reduce_st_rows::<F, R, C, SumOp>(s_mem, result)
 }
 
 #[cfg(test)]
@@ -119,7 +115,8 @@ mod tests {
 
         sync_planes();
 
-        let result = sum_st_rows::<F, D8, D8>(&st);
+        let mut result = Rv::<F, D8>::new();
+        sum_st_rows::<F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
@@ -150,7 +147,8 @@ mod tests {
 
         sync_planes();
 
-        let result = sum_st_cols::<F, D8, D8>(&st);
+        let mut result = Rv::<F, D8>::new();
+        sum_st_cols::<F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {

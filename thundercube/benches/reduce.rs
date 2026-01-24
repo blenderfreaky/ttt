@@ -7,7 +7,7 @@ use thundercube::{
     LINE_SIZE,
     plane::{load_st_direct, sum_st_cols, sum_st_rows},
     test_utils::{client, get_strides, upload},
-    tiles::{D16, D32, D4, D8, Dim, DimOrOne, Rt, St},
+    tiles::{D16, D32, D4, D8, Dim, DimOrOne, Rt, Rv, St},
     util::sync_planes,
 };
 
@@ -22,7 +22,8 @@ fn bench_rt_sum_rows<F: Float, R: Dim, C: Dim>(
 ) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
-    let result = rt.sum_rows();
+    let mut result = Rv::<F, R>::new();
+    rt.sum_rows(&mut result);
     result.copy_to_array(output);
 }
 
@@ -33,7 +34,8 @@ fn bench_rt_sum_cols<F: Float, R: Dim, C: Dim>(
 ) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
-    let result = rt.sum_cols();
+    let mut result = Rv::<F, C>::new();
+    rt.sum_cols(&mut result);
     result.copy_to_array(output);
 }
 
@@ -48,7 +50,8 @@ fn bench_st_sum_rows<F: Float, R: Dim, C: Dim>(
     load_st_direct(input, &mut st, 0, 0, 0);
     sync_planes();
 
-    let result = sum_st_rows::<F, R, C>(&st);
+    let mut result = Rv::<F, R>::new();
+    sum_st_rows::<F, R, C>(&st, &mut result);
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);
@@ -64,7 +67,8 @@ fn bench_st_sum_cols<F: Float, R: Dim, C: Dim>(
     load_st_direct(input, &mut st, 0, 0, 0);
     sync_planes();
 
-    let result = sum_st_cols::<F, R, C>(&st);
+    let mut result = Rv::<F, C>::new();
+    sum_st_cols::<F, R, C>(&st, &mut result);
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);

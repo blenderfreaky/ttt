@@ -107,9 +107,7 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
         }
     }
 
-    pub fn reduce_rows<O: ReductionOp<F>>(&self) -> Rv<F, R> {
-        let mut result = Rv::<F, R>::new();
-
+    pub fn reduce_rows<O: ReductionOp<F>>(&self, result: &mut Rv<F, R>) {
         #[unroll(R::LINES <= UNROLL_LIMIT)]
         for r_line in 0..R::LINES {
             let mut out_line = Line::<F>::empty(LINE_SIZE);
@@ -127,12 +125,9 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
             }
             result.data[r_line] = out_line;
         }
-        result
     }
 
-    pub fn reduce_cols<O: ReductionOp<F>>(&self) -> Rv<F, C> {
-        let mut result = Rv::<F, C>::new();
-
+    pub fn reduce_cols<O: ReductionOp<F>>(&self, result: &mut Rv<F, C>) {
         #[unroll(C::LINES <= UNROLL_LIMIT)]
         for c_line in 0..C::LINES {
             let mut acc = O::identity();
@@ -143,7 +138,6 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
             }
             result.data[c_line] = acc;
         }
-        result
     }
 }
 

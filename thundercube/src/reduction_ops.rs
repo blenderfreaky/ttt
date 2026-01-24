@@ -88,12 +88,12 @@ macro_rules! impl_reduction_convenience_fns {
             $(
                 #[cube]
                 impl<$t: Float, R: Dim, C: Dim> $ty<$t, R, C> {
-                    pub fn [<$name:snake _rows>](&self) -> Rv<$t, R> {
-                        self.reduce_rows::<[<$name Op>]>()
+                    pub fn [<$name:snake _rows>](&self, result: &mut Rv<$t, R>) {
+                        self.reduce_rows::<[<$name Op>]>(result)
                     }
 
-                    pub fn [<$name:snake _cols>](&self) -> Rv<$t, C> {
-                        self.reduce_cols::<[<$name Op>]>()
+                    pub fn [<$name:snake _cols>](&self, result: &mut Rv<$t, C>) {
+                        self.reduce_cols::<[<$name Op>]>(result)
                     }
                 }
             )+
@@ -134,7 +134,8 @@ mod tests {
     ) {
         let mut rt = Rt::<F, D8, D8>::new();
         rt.copy_from_array(input);
-        let result = rt.sum_rows();
+        let mut result = Rv::<F, D8>::new();
+        rt.sum_rows(&mut result);
         result.copy_to_array(output);
     }
 
@@ -145,7 +146,8 @@ mod tests {
     ) {
         let mut rt = Rt::<F, D8, D8>::new();
         rt.copy_from_array(input);
-        let result = rt.sum_cols();
+        let mut result = Rv::<F, D8>::new();
+        rt.sum_cols(&mut result);
         result.copy_to_array(output);
     }
 
