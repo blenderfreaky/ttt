@@ -144,7 +144,8 @@ pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
     let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
 
     // Step 1: mean = sum_rows(x) / C
-    let mut mean: Rv<F, R> = plane::sum_st_rows(x);
+    let mut mean = Rv::<F, R>::new();
+    plane::sum_st_rows(x, &mut mean);
     mean.mul_scalar(c_inv);
 
     // Step 2: x -= mean (col broadcast)
@@ -154,7 +155,8 @@ pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
     sync_planes();
 
     // Step 3: var = sum_rows(x^2) / C using SumSqOp
-    let mut std: Rv<F, R> = plane::reduce_st_rows::<F, R, C, SumSqOp>(x);
+    let mut std = Rv::<F, R>::new();
+    plane::reduce_st_rows::<F, R, C, SumSqOp>(x, &mut std);
     std.mul_scalar(c_inv);
 
     // Step 4: std = sqrt(var + epsilon)
@@ -210,7 +212,8 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     let c_f = F::cast_from(C::VALUE as f32);
 
     // Step 1: mean = sum_rows(x) / C
-    let mut mean: Rv<F, R> = plane::sum_st_rows(x);
+    let mut mean = Rv::<F, R>::new();
+    plane::sum_st_rows(x, &mut mean);
     mean.mul_scalar(c_inv);
 
     // Step 2: x -= mean (col broadcast)
@@ -220,7 +223,8 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     sync_planes();
 
     // Step 3: var = sum_rows(x^2) / C using SumSqOp
-    let mut std: Rv<F, R> = plane::reduce_st_rows::<F, R, C, SumSqOp>(x);
+    let mut std = Rv::<F, R>::new();
+    plane::reduce_st_rows::<F, R, C, SumSqOp>(x, &mut std);
     std.mul_scalar(c_inv);
 
     // Step 4: std = sqrt(var + epsilon)
@@ -248,7 +252,8 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     sync_planes();
 
     // Step 9: Compute reduction terms
-    let sum_dl_dnorm: Rv<F, R> = plane::sum_st_rows(temp);
+    let mut sum_dl_dnorm = Rv::<F, R>::new();
+    plane::sum_st_rows(temp, &mut sum_dl_dnorm);
 
     // temp = dl_dnorm currently, we need sum(dl_dnorm * norm)
     // Multiply temp by x (norm), sum, then rebuild dl_dnorm
@@ -257,7 +262,8 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     // Sync after modifying temp before reading for reduction
     sync_planes();
 
-    let sum_dl_dnorm_norm: Rv<F, R> = plane::sum_st_rows(temp);
+    let mut sum_dl_dnorm_norm = Rv::<F, R>::new();
+    plane::sum_st_rows(temp, &mut sum_dl_dnorm_norm);
 
     // Recompute dl_dnorm in temp (x still has norm)
     temp.copy_from(x);
@@ -572,8 +578,8 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     sync_planes();
 
-    let bias_update_rv: Rv<P::E, P::F> =
-        plane::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem);
+    let mut bias_update_rv = Rv::<P::E, P::F>::new();
+    plane::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
 
     // Update bias in place
     bias_rv.sub(&bias_update_rv);
