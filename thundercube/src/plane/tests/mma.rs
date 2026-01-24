@@ -42,7 +42,7 @@ fn test_mma_AtB<
     // Load B as [K, N] directly
     load_st_direct(in_b, &mut st_b, 0, 0, 0);
 
-    mma_AtB(&mut rt_c, &st_a, &st_b);
+    mma_AtB::<F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(&mut rt_c, &st_a, &st_b);
 
     // Store directly - function computes per-thread offsets automatically
     store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
@@ -83,7 +83,7 @@ fn test_mma_AB<
     // Load B as [K, N] directly
     load_st_direct(in_b, &mut st_b, 0, 0, 0);
 
-    mma_AB(&mut rt_c, &st_a, &st_b);
+    mma_AB::<F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(&mut rt_c, &st_a, &st_b);
 
     // Store directly - function computes per-thread offsets automatically
     store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);

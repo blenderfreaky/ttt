@@ -1,359 +1,372 @@
 #![allow(non_snake_case)]
 
-use crate::{plane::swizzle, prelude::*, tiles::Dim};
+use crate::{plane::swizzle, prelude::*, tiles::Dim, util::write_into_line};
 use cubecl::prelude::*;
 
-/// C += A * B
-/// Supports arbitrary C-tile sizes (e.g., 8x8, 16x8).
-///
-/// LAYOUT ASSUMPTIONS:
-/// - A: Stored in shared memory as [K, M] row-major with swizzle.
-///      (Loaded from row-major [M, K] via load_st_transpose)
-/// - B: Stored in shared memory as [K, N] row-major with swizzle.
-///      (Loaded from row-major [K, N] via load_st_direct)
-/// - C: Row-Major Register Tile [M, N].
-///
-/// Type parameters:
-/// - CM, CN: C tile dimensions (rows, cols)
-/// - K, AM: A tile dimensions (K rows, M cols) - A is transposed [K, M]
-/// - K, BN: B tile dimensions (K rows, N cols)
-///
-/// 'offset_m/n' are the base offsets (in Lines) for the sub-tile this thread processes.
+/// Indexer for accessing matrices with optional swizzle and transpose.
+#[derive(CubeType, Clone, Copy)]
+struct Indexer {
+    stride: usize,
+    mask: usize,
+    #[cube(comptime)]
+    transposed: bool,
+    #[cube(comptime)]
+    swizzled: bool,
+}
+
 #[cube]
-pub fn mma_AtB_rt<F: Float, CM: Dim, CN: Dim, K: Dim, AM: Dim, BN: Dim>(
-    c: &mut Rt<F, CM, CN>,
-    a: &St<F, K, AM>,
-    b: &St<F, K, BN>,
-    offset_m: usize,
-    offset_n: usize,
-) {
-    // A is [K, M]: K::VALUE rows, AM::VALUE cols
-    // B is [K, N]: K::VALUE rows, BN::VALUE cols
-    let k_dim = K::VALUE;
+impl Indexer {
+    pub fn new(stride: usize, #[comptime] transposed: bool, #[comptime] swizzled: bool) -> Self {
+        Indexer {
+            stride,
+            mask: stride - 1,
+            transposed,
+            swizzled,
+        }
+    }
 
-    let num_m_vecs = CM::LINES;
-    let num_n_vecs = CN::LINES;
+    pub fn vec_index(&self, row: usize, col_vec: usize) -> usize {
+        if comptime!(self.swizzled) {
+            row * self.stride + swizzle(row, col_vec, self.mask)
+        } else {
+            row * self.stride + col_vec
+        }
+    }
 
-    // Row-major strides (in Lines)
-    let a_stride = AM::LINES; // M / LINE_SIZE
-    let b_stride = BN::LINES; // N / LINE_SIZE
-
-    // Swizzle masks
-    let a_mask = a_stride - 1;
-    let b_mask = b_stride - 1;
-
-    for k in 0..k_dim {
-        #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
-        for nl in 0..num_n_vecs {
-            // B-Vector: row k, column (offset_n + nl) in Lines
-            let b_col = offset_n + nl;
-            let b_phys_col = swizzle(k, b_col, b_mask);
-            let b_idx = k * b_stride + b_phys_col;
-            let b_vec = b.data[b_idx];
-
-            #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
-            for ml in 0..num_m_vecs {
-                // A-Vector: row k, column (offset_m + ml) in Lines
-                let a_col = offset_m + ml;
-                let a_phys_col = swizzle(k, a_col, a_mask);
-                let a_idx = k * a_stride + a_phys_col;
-                let a_vec = a.data[a_idx];
-
-                // 4x4 Outer Product on sub-block
-                #[unroll]
-                for i in 0..LINE_SIZE {
-                    let a_val = a_vec[i];
-
-                    let c_row = (ml * LINE_SIZE) + i;
-                    let c_idx = (c_row * num_n_vecs) + nl;
-
-                    c.data[c_idx] += Line::empty(LINE_SIZE).fill(a_val) * b_vec;
-                }
+    pub fn scalar_index(&self, row: usize, col: usize) -> (usize, usize) {
+        if comptime!(self.transposed) {
+            let row_line = row / LINE_SIZE;
+            let row_elem = row % LINE_SIZE;
+            if comptime!(self.swizzled) {
+                (col * self.stride + swizzle(col, row_line, self.mask), row_elem)
+            } else {
+                (col * self.stride + row_line, row_elem)
+            }
+        } else {
+            let col_line = col / LINE_SIZE;
+            let col_elem = col % LINE_SIZE;
+            if comptime!(self.swizzled) {
+                (row * self.stride + swizzle(row, col_line, self.mask), col_elem)
+            } else {
+                (row * self.stride + col_line, col_elem)
             }
         }
     }
 }
 
-/// C += A * B (A is stored in original layout, not transposed)
-/// Supports arbitrary C-tile sizes (e.g., 8x8, 16x8).
-///
-/// LAYOUT ASSUMPTIONS:
-/// - A: Stored in shared memory as [M, K] row-major with swizzle.
-///      (Loaded from row-major [M, K] via load_st_direct)
-/// - B: Stored in shared memory as [K, N] row-major with swizzle.
-///      (Loaded from row-major [K, N] via load_st_direct)
-/// - C: Row-Major Register Tile [M, N].
-///
-/// Type parameters:
-/// - CM, CN: C tile dimensions (rows, cols)
-/// - AM, K: A tile dimensions (M rows, K cols)
-/// - K, BN: B tile dimensions (K rows, N cols)
-///
-/// 'offset_m/n' are the base offsets (in Lines) for the sub-tile this thread processes.
+/// Accumulate along N: B is vectorized, C is row-major.
 #[cube]
-pub fn mma_AB_rt<F: Float, CM: Dim, CN: Dim, AM: Dim, K: Dim, BN: Dim>(
+fn accum_n<F: Float, CM: Dim, CN: Dim>(
     c: &mut Rt<F, CM, CN>,
-    a: &St<F, AM, K>,
-    b: &St<F, K, BN>,
+    a_data: &SharedMemory<Line<F>>,
+    b_data: &SharedMemory<Line<F>>,
+    a_idx: &Indexer,
+    b_idx: &Indexer,
+    c_idx: &Indexer,
+    k: usize,
     offset_m: usize,
     offset_n: usize,
 ) {
-    // A is [M, K]: AM::VALUE rows, K::VALUE cols
-    // B is [K, N]: K::VALUE rows, BN::VALUE cols
+    #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
+    for nl in 0..CN::LINES {
+        let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
 
-    let num_m_vecs = CM::LINES;
-    let num_n_vecs = CN::LINES;
-
-    // Row-major strides (in Lines)
-    let a_stride = K::LINES; // K / LINE_SIZE (cols of A)
-    let b_stride = BN::LINES; // N / LINE_SIZE (cols of B)
-
-    // Swizzle masks
-    let a_mask = a_stride - 1;
-    let b_mask = b_stride - 1;
-
-    // Iterate over K
-    for k in 0..K::VALUE {
-        let k_line = k / LINE_SIZE;
-        let k_elem = k % LINE_SIZE;
-
-        // For each output column (vectorized)
-        #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
-        for nl in 0..num_n_vecs {
-            // B[k, n]: row k, column (offset_n + nl) in Lines
-            let b_col = offset_n + nl;
-            let b_phys_col = swizzle(k, b_col, b_mask);
-            let b_idx = k * b_stride + b_phys_col;
-            let b_vec = b.data[b_idx];
-
-            // For each output row (vectorized)
+        if comptime!(a_idx.transposed) {
             #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
-            for ml in 0..num_m_vecs {
+            for ml in 0..CM::LINES {
+                let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
                 #[unroll]
                 for mi in 0..LINE_SIZE {
-                    // Global row index into A
-                    let m = (offset_m + ml) * LINE_SIZE + mi;
-
-                    // A[m, k]: row m, column k (k_line-th Line, k_elem-th element)
-                    let a_phys_col = swizzle(m, k_line, a_mask);
-                    let a_idx = m * a_stride + a_phys_col;
-                    let a_val = a.data[a_idx][k_elem];
-
-                    // Update C[ml*LINE_SIZE + mi, :]
+                    let a_val = a_vec[mi];
                     let c_row = ml * LINE_SIZE + mi;
-                    let c_idx = c_row * num_n_vecs + nl;
-
-                    c.data[c_idx] += Line::empty(LINE_SIZE).fill(a_val) * b_vec;
+                    let c_line = c_idx.vec_index(c_row, nl);
+                    c.data[c_line] += Line::empty(LINE_SIZE).fill(a_val) * b_vec;
+                }
+            }
+        } else {
+            #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
+            for ml in 0..CM::LINES {
+                #[unroll]
+                for mi in 0..LINE_SIZE {
+                    let m = (offset_m + ml) * LINE_SIZE + mi;
+                    let (a_line, a_elem) = a_idx.scalar_index(m, k);
+                    let a_val = a_data[a_line][a_elem];
+                    let c_row = ml * LINE_SIZE + mi;
+                    let c_line = c_idx.vec_index(c_row, nl);
+                    c.data[c_line] += Line::empty(LINE_SIZE).fill(a_val) * b_vec;
                 }
             }
         }
     }
 }
+
+/// Accumulate along M: A is vectorized, C is column-major.
+#[cube]
+fn accum_m<F: Float, CM: Dim, CN: Dim>(
+    c: &mut Rt<F, CM, CN>,
+    a_data: &SharedMemory<Line<F>>,
+    b_data: &SharedMemory<Line<F>>,
+    a_idx: &Indexer,
+    b_idx: &Indexer,
+    c_idx: &Indexer,
+    k: usize,
+    offset_m: usize,
+    offset_n: usize,
+) {
+    #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
+    for ml in 0..CM::LINES {
+        let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
+
+        if comptime!(b_idx.transposed) {
+            #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
+            for nl in 0..CN::LINES {
+                let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
+                #[unroll]
+                for ni in 0..LINE_SIZE {
+                    let b_val = b_vec[ni];
+                    let c_col = nl * LINE_SIZE + ni;
+                    let c_line = c_idx.vec_index(c_col, ml);
+                    c.data[c_line] += a_vec * Line::empty(LINE_SIZE).fill(b_val);
+                }
+            }
+        } else {
+            #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
+            for nl in 0..CN::LINES {
+                #[unroll]
+                for ni in 0..LINE_SIZE {
+                    let n = (offset_n + nl) * LINE_SIZE + ni;
+                    let (b_line, b_elem) = b_idx.scalar_index(n, k);
+                    let b_val = b_data[b_line][b_elem];
+                    let c_col = nl * LINE_SIZE + ni;
+                    let c_line = c_idx.vec_index(c_col, ml);
+                    c.data[c_line] += a_vec * Line::empty(LINE_SIZE).fill(b_val);
+                }
+            }
+        }
+    }
+}
+
+/// Scalar accumulation fallback.
+#[cube]
+fn accum_scalar<F: Float, CM: Dim, CN: Dim>(
+    c: &mut Rt<F, CM, CN>,
+    a_data: &SharedMemory<Line<F>>,
+    b_data: &SharedMemory<Line<F>>,
+    a_idx: &Indexer,
+    b_idx: &Indexer,
+    c_idx: &Indexer,
+    k: usize,
+    offset_m: usize,
+    offset_n: usize,
+) {
+    #[unroll(CM::LINES <= UNROLL_LIMIT_HOT)]
+    for ml in 0..CM::LINES {
+        #[unroll]
+        for mi in 0..LINE_SIZE {
+            let a_val = if comptime!(a_idx.transposed) {
+                let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
+                a_vec[mi]
+            } else {
+                let m = (offset_m + ml) * LINE_SIZE + mi;
+                let (a_line, a_elem) = a_idx.scalar_index(m, k);
+                a_data[a_line][a_elem]
+            };
+
+            let c_row = ml * LINE_SIZE + mi;
+
+            #[unroll(CN::LINES <= UNROLL_LIMIT_HOT)]
+            for nl in 0..CN::LINES {
+                #[unroll]
+                for ni in 0..LINE_SIZE {
+                    let b_val = if comptime!(b_idx.transposed) {
+                        let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
+                        b_vec[ni]
+                    } else {
+                        let n = (offset_n + nl) * LINE_SIZE + ni;
+                        let (b_line, b_elem) = b_idx.scalar_index(n, k);
+                        b_data[b_line][b_elem]
+                    };
+
+                    let c_col = nl * LINE_SIZE + ni;
+                    let (c_line, c_elem) = c_idx.scalar_index(c_row, c_col);
+                    let current = c.data[c_line][c_elem];
+                    let new_val = current + a_val * b_val;
+                    write_into_line(c.data.to_slice_mut().slice_mut(c_line, c_line + 1), c_elem, new_val);
+                }
+            }
+        }
+    }
+}
+
+/// Generates mma_rt variants for all transpose combinations.
+///
+/// Naming: mma_rt_A{,t}B{,t}{,_t}
+/// - At = A transposed, stored as [K, M]; A = not transposed, stored as [M, K]
+/// - Bt = B transposed, stored as [K, N]; B = not transposed, stored as [N, K]
+/// - _t suffix = C column-major (transposed); no suffix = C row-major
+///
+/// CM, CN: register tile dimensions (can be smaller than St tile)
+/// TileM, TileK, TileN: shared tile dimensions
+/// offset_m, offset_n: select which sub-tile of the St to operate on
+macro_rules! define_mma_rt {
+    ($name:ident, $a_trans:tt, $b_trans:tt, $c_trans:tt,
+     [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident], $accum:ident) => {
+        #[cube]
+        pub fn $name<F: Float, CM: Dim, CN: Dim, TileM: Dim, TileK: Dim, TileN: Dim>(
+            c: &mut Rt<F, CM, CN>,
+            a: &St<F, $a_d0, $a_d1>,
+            b: &St<F, $b_d0, $b_d1>,
+            offset_m: usize,
+            offset_n: usize,
+        ) {
+            let a_idx = Indexer::new($a_d1::LINES, $a_trans, true);
+            let b_idx = Indexer::new($b_d1::LINES, $b_trans, true);
+            let c_stride = if comptime!($c_trans) { CM::LINES } else { CN::LINES };
+            let c_idx = Indexer::new(c_stride, $c_trans, false);
+
+            for k in 0..TileK::VALUE {
+                $accum::<F, CM, CN>(c, &a.data, &b.data, &a_idx, &b_idx, &c_idx, k, offset_m, offset_n);
+            }
+        }
+    };
+}
+
+// A: a_trans=false → [M,K], a_trans=true → [K,M]
+// B: b_trans=false → [N,K], b_trans=true → [K,N]
+// Naming: A=[M,K], At=[K,M], B=[K,N], Bt=[N,K]
+// Accum strategy: b_trans && !c_trans → accum_n, a_trans && c_trans → accum_m, else → accum_scalar
+
+define_mma_rt!(mma_rt_ABt,    false, false, false, [TileM, TileK], [TileN, TileK], accum_scalar);
+define_mma_rt!(mma_rt_ABt_t,  false, false, true,  [TileM, TileK], [TileN, TileK], accum_scalar);
+define_mma_rt!(mma_rt_AB,     false, true,  false, [TileM, TileK], [TileK, TileN], accum_n);
+define_mma_rt!(mma_rt_AB_t,   false, true,  true,  [TileM, TileK], [TileK, TileN], accum_scalar);
+define_mma_rt!(mma_rt_AtBt,   true,  false, false, [TileK, TileM], [TileN, TileK], accum_scalar);
+define_mma_rt!(mma_rt_AtBt_t, true,  false, true,  [TileK, TileM], [TileN, TileK], accum_m);
+define_mma_rt!(mma_rt_AtB,    true,  true,  false, [TileK, TileM], [TileK, TileN], accum_n);
+define_mma_rt!(mma_rt_AtB_t,  true,  true,  true,  [TileK, TileM], [TileK, TileN], accum_m);
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{plane::{load_st_direct, load_st_transpose}, test_kernel};
 
-    /// Test kernel for mma_AB_rt with offset_m=0, offset_n=0 (full tile)
-    #[cube(launch)]
-    fn test_mma_AB_rt_kernel<F: Float, TileM: Dim, TileK: Dim, TileN: Dim>(
-        in_a: &Tensor<Line<F>>,
-        in_b: &Tensor<Line<F>>,
-        output: &mut Array<Line<F>>,
+    fn reference_matmul<F: crate::test_utils::TestFloat>(
+        in_a: &[F], in_b: &[F], output: &mut [F],
+        m: usize, k: usize, n: usize,
     ) {
-        let mut st_a = St::<F, TileM, TileK>::new();
-        let mut st_b = St::<F, TileK, TileN>::new();
-
-        load_st_direct(in_a, &mut st_a, 0, 0, 0);
-        load_st_direct(in_b, &mut st_b, 0, 0, 0);
-
-        let mut rt_c = Rt::<F, TileM, TileN>::new();
-        rt_c.zero();
-
-        mma_AB_rt(&mut rt_c, &st_a, &st_b, 0, 0);
-
-        rt_c.copy_to_array(output);
-    }
-
-    /// Test kernel for mma_AB_rt with non-zero offsets (8x8 tiles, 4x4 sub-tile)
-    #[cube(launch)]
-    fn test_mma_AB_rt_offset_kernel<F: Float>(
-        in_a: &Tensor<Line<F>>,
-        in_b: &Tensor<Line<F>>,
-        output: &mut Array<Line<F>>,
-        offset_m: u32,
-        offset_n: u32,
-    ) {
-        let mut st_a = St::<F, D8, D8>::new();
-        let mut st_b = St::<F, D8, D8>::new();
-
-        load_st_direct(in_a, &mut st_a, 0, 0, 0);
-        load_st_direct(in_b, &mut st_b, 0, 0, 0);
-
-        let mut rt_c = Rt::<F, D4, D4>::new();
-        rt_c.zero();
-
-        mma_AB_rt(&mut rt_c, &st_a, &st_b, offset_m as usize, offset_n as usize);
-
-        rt_c.copy_to_array(output);
-    }
-
-    /// Test kernel for mma_AtB_rt with offset_m=0, offset_n=0 (full tile)
-    #[cube(launch)]
-    fn test_mma_AtB_rt_kernel<F: Float, TileK: Dim, TileM: Dim, TileN: Dim>(
-        in_a: &Tensor<Line<F>>,
-        in_b: &Tensor<Line<F>>,
-        output: &mut Array<Line<F>>,
-    ) {
-        // A is [M, K] in global, transposed to [K, M] in shared
-        let mut st_a = St::<F, TileK, TileM>::new();
-        let mut st_b = St::<F, TileK, TileN>::new();
-
-        load_st_transpose(in_a, &mut st_a, 0, 0, 0);
-        load_st_direct(in_b, &mut st_b, 0, 0, 0);
-
-        let mut rt_c = Rt::<F, TileM, TileN>::new();
-        rt_c.zero();
-
-        mma_AtB_rt(&mut rt_c, &st_a, &st_b, 0, 0);
-
-        rt_c.copy_to_array(output);
-    }
-
-    /// Test kernel for mma_AtB_rt with non-zero offsets (8x8 tiles, 4x4 sub-tile)
-    #[cube(launch)]
-    fn test_mma_AtB_rt_offset_kernel<F: Float>(
-        in_a: &Tensor<Line<F>>,
-        in_b: &Tensor<Line<F>>,
-        output: &mut Array<Line<F>>,
-        offset_m: u32,
-        offset_n: u32,
-    ) {
-        // A is [M, K] = [8, 8] in global, transposed to [K, M] = [8, 8] in shared
-        let mut st_a = St::<F, D8, D8>::new();
-        let mut st_b = St::<F, D8, D8>::new();
-
-        load_st_transpose(in_a, &mut st_a, 0, 0, 0);
-        load_st_direct(in_b, &mut st_b, 0, 0, 0);
-
-        let mut rt_c = Rt::<F, D4, D4>::new();
-        rt_c.zero();
-
-        mma_AtB_rt(&mut rt_c, &st_a, &st_b, offset_m as usize, offset_n as usize);
-
-        rt_c.copy_to_array(output);
-    }
-
-    test_kernel! {
-        #[test]
-        fn test_mma_AB_rt_full() for
-            F in [f32, f64]
-            TileM in [D4, D8]
-            TileK in [D4, D8]
-            TileN in [D4, D8]
-        {
-            let in_a: Tensor = [TileM::VALUE, TileK::VALUE] as Range;
-            let in_b: Tensor = [TileK::VALUE, TileN::VALUE] as Range;
-            let output: Array = [TileM::VALUE * TileN::VALUE];
-
-            assert_eq!(
-                test_mma_AB_rt_kernel(in_a(), in_b(), output()) for (1, 1, 1) @ (1),
-                {
-                    for m in 0..TileM::VALUE {
-                        for n in 0..TileN::VALUE {
-                            let mut sum = F::from_int(0);
-                            for k in 0..TileK::VALUE {
-                                let a_val = in_a[m * TileK::VALUE + k];
-                                let b_val = in_b[k * TileN::VALUE + n];
-                                sum += a_val * b_val;
-                            }
-                            output[m * TileN::VALUE + n] = sum;
-                        }
-                    }
+        for mi in 0..m {
+            for ni in 0..n {
+                let mut sum = F::from_f64(0.0);
+                for ki in 0..k {
+                    sum = F::from_f64(sum.into_f64() + in_a[mi * k + ki].into_f64() * in_b[ki * n + ni].into_f64());
                 }
-            );
-        }
-
-        #[test]
-        fn test_mma_AB_rt_with_offset() for F in [f32, f64] {
-            let in_a: Tensor = [8, 8] as Range;
-            let in_b: Tensor = [8, 8] as Range;
-            let output: Array = [16];
-
-            assert_eq!(
-                test_mma_AB_rt_offset_kernel(in_a(), in_b(), output(), scalar(1u32), scalar(1u32)) for (1, 1, 1) @ (1),
-                {
-                    for mi in 0..4usize {
-                        for ni in 0..4usize {
-                            let m = 4 + mi;
-                            let n = 4 + ni;
-                            let mut sum = F::from_int(0);
-                            for k in 0..8usize {
-                                let a_val = in_a[m * 8 + k];
-                                let b_val = in_b[k * 8 + n];
-                                sum += a_val * b_val;
-                            }
-                            output[mi * 4 + ni] = sum;
-                        }
-                    }
-                }
-            );
-        }
-
-        #[test]
-        fn test_mma_AtB_rt_full() for
-            F in [f32, f64]
-            TileK in [D4, D8]
-            TileM in [D4, D8]
-            TileN in [D4, D8]
-        {
-            let in_a: Tensor = [TileM::VALUE, TileK::VALUE] as Range;
-            let in_b: Tensor = [TileK::VALUE, TileN::VALUE] as Range;
-            let output: Array = [TileM::VALUE * TileN::VALUE];
-
-            assert_eq!(
-                test_mma_AtB_rt_kernel(in_a(), in_b(), output()) for (1, 1, 1) @ (1),
-                {
-                    for m in 0..TileM::VALUE {
-                        for n in 0..TileN::VALUE {
-                            let mut sum = F::from_int(0);
-                            for k in 0..TileK::VALUE {
-                                let a_val = in_a[m * TileK::VALUE + k];
-                                let b_val = in_b[k * TileN::VALUE + n];
-                                sum += a_val * b_val;
-                            }
-                            output[m * TileN::VALUE + n] = sum;
-                        }
-                    }
-                }
-            );
-        }
-
-        #[test]
-        fn test_mma_AtB_rt_with_offset() for F in [f32, f64] {
-            let in_a: Tensor = [8, 8] as Range;
-            let in_b: Tensor = [8, 8] as Range;
-            let output: Array = [16];
-
-            assert_eq!(
-                test_mma_AtB_rt_offset_kernel(in_a(), in_b(), output(), scalar(1u32), scalar(1u32)) for (1, 1, 1) @ (1),
-                {
-                    for mi in 0..4usize {
-                        for ni in 0..4usize {
-                            let m = 4 + mi;
-                            let n = 4 + ni;
-                            let mut sum = F::from_int(0);
-                            for k in 0..8usize {
-                                let a_val = in_a[m * 8 + k];
-                                let b_val = in_b[k * 8 + n];
-                                sum += a_val * b_val;
-                            }
-                            output[mi * 4 + ni] = sum;
-                        }
-                    }
-                }
-            );
+                output[mi * n + ni] = sum;
+            }
         }
     }
+
+    macro_rules! define_test_kernel {
+        ($name:ident, $mma_fn:ident, $c_trans:tt,
+         [$a_d0:ident, $a_d1:ident], $load_a:ident,
+         [$b_d0:ident, $b_d1:ident], $load_b:ident) => {
+            define_test_kernel!(@impl $name, $mma_fn, $c_trans,
+                [$a_d0, $a_d1], $load_a, [$b_d0, $b_d1], $load_b);
+        };
+
+        (@impl $name:ident, $mma_fn:ident, false,
+         [$a_d0:ident, $a_d1:ident], $load_a:ident,
+         [$b_d0:ident, $b_d1:ident], $load_b:ident) => {
+            #[cube(launch)]
+            fn $name<F: Float, TileM: Dim, TileK: Dim, TileN: Dim>(
+                in_a: &Tensor<Line<F>>,
+                in_b: &Tensor<Line<F>>,
+                output: &mut Array<Line<F>>,
+            ) {
+                let mut st_a = St::<F, $a_d0, $a_d1>::new();
+                let mut st_b = St::<F, $b_d0, $b_d1>::new();
+                $load_a(in_a, &mut st_a, 0, 0, 0);
+                $load_b(in_b, &mut st_b, 0, 0, 0);
+
+                let mut rt_c = Rt::<F, TileM, TileN>::new();
+                rt_c.zero();
+
+                // CM=TileM, CN=TileN (full tile per thread in this test)
+                $mma_fn::<F, TileM, TileN, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
+                rt_c.copy_to_array(output);
+            }
+        };
+
+        (@impl $name:ident, $mma_fn:ident, true,
+         [$a_d0:ident, $a_d1:ident], $load_a:ident,
+         [$b_d0:ident, $b_d1:ident], $load_b:ident) => {
+            #[cube(launch)]
+            fn $name<F: Float, TileM: Dim, TileK: Dim, TileN: Dim>(
+                in_a: &Tensor<Line<F>>,
+                in_b: &Tensor<Line<F>>,
+                output: &mut Array<Line<F>>,
+            ) {
+                let mut st_a = St::<F, $a_d0, $a_d1>::new();
+                let mut st_b = St::<F, $b_d0, $b_d1>::new();
+                $load_a(in_a, &mut st_a, 0, 0, 0);
+                $load_b(in_b, &mut st_b, 0, 0, 0);
+
+                // c_trans=true: use Rt<N, M> as accumulator, then transpose to Rt<M, N>
+                let mut rt_c = Rt::<F, TileN, TileM>::new();
+                rt_c.zero();
+
+                $mma_fn::<F, TileN, TileM, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
+                rt_c.transpose().copy_to_array(output);
+            }
+        };
+    }
+
+    // a_trans=false, b_trans=false: A=[M,K] direct, B=[K,N] transpose to [N,K]
+    define_test_kernel!(test_kernel_ABt, mma_rt_ABt, false,
+        [TileM, TileK], load_st_direct, [TileN, TileK], load_st_transpose);
+    define_test_kernel!(test_kernel_ABt_t, mma_rt_ABt_t, true,
+        [TileM, TileK], load_st_direct, [TileN, TileK], load_st_transpose);
+
+    // a_trans=false, b_trans=true: A=[M,K] direct, B=[K,N] direct
+    define_test_kernel!(test_kernel_AB, mma_rt_AB, false,
+        [TileM, TileK], load_st_direct, [TileK, TileN], load_st_direct);
+    define_test_kernel!(test_kernel_AB_t, mma_rt_AB_t, true,
+        [TileM, TileK], load_st_direct, [TileK, TileN], load_st_direct);
+
+    // a_trans=true, b_trans=false: A=[M,K] transpose to [K,M], B=[K,N] transpose to [N,K]
+    define_test_kernel!(test_kernel_AtBt, mma_rt_AtBt, false,
+        [TileK, TileM], load_st_transpose, [TileN, TileK], load_st_transpose);
+    define_test_kernel!(test_kernel_AtBt_t, mma_rt_AtBt_t, true,
+        [TileK, TileM], load_st_transpose, [TileN, TileK], load_st_transpose);
+
+    // a_trans=true, b_trans=true: A=[M,K] transpose to [K,M], B=[K,N] direct
+    define_test_kernel!(test_kernel_AtB, mma_rt_AtB, false,
+        [TileK, TileM], load_st_transpose, [TileK, TileN], load_st_direct);
+    define_test_kernel!(test_kernel_AtB_t, mma_rt_AtB_t, true,
+        [TileK, TileM], load_st_transpose, [TileK, TileN], load_st_direct);
+
+    macro_rules! define_test {
+        ($test_name:ident, $kernel:ident) => {
+            test_kernel! {
+                #[test]
+                fn $test_name() for F in [f32, f64] TileM in [D4, D8] TileK in [D4, D8] TileN in [D4, D8] {
+                    let in_a: Tensor = [TileM::VALUE, TileK::VALUE] as Range;
+                    let in_b: Tensor = [TileK::VALUE, TileN::VALUE] as Range;
+                    let output: Array = [TileM::VALUE * TileN::VALUE];
+                    assert_eq!(
+                        $kernel(in_a(), in_b(), output()) for (1, 1, 1) @ (1),
+                        { reference_matmul(&in_a, &in_b, &mut output, TileM::VALUE, TileK::VALUE, TileN::VALUE); }
+                    );
+                }
+            }
+        };
+    }
+
+    define_test!(test_mma_AB, test_kernel_AB);
+    define_test!(test_mma_AB_t, test_kernel_AB_t);
+    define_test!(test_mma_ABt, test_kernel_ABt);
+    define_test!(test_mma_ABt_t, test_kernel_ABt_t);
+    define_test!(test_mma_AtB, test_kernel_AtB);
+    define_test!(test_mma_AtB_t, test_kernel_AtB_t);
+    define_test!(test_mma_AtBt, test_kernel_AtBt);
+    define_test!(test_mma_AtBt_t, test_kernel_AtBt_t);
 }
