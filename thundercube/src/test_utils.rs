@@ -5,20 +5,23 @@ use std::{
     hash::{DefaultHasher, Hasher},
 };
 
-use cubecl::{TestRuntime, prelude::*, server::Handle};
+use cubecl::{prelude::*, server::Handle};
+
+// Define TestRuntime based on enabled backend feature
+#[cfg(feature = "hip")]
+pub type TestRuntime = cubecl::hip::HipRuntime;
+
+#[cfg(feature = "cuda")]
+pub type TestRuntime = cubecl::cuda::CudaRuntime;
+
+#[cfg(feature = "wgpu")]
+pub type TestRuntime = cubecl::wgpu::WgpuRuntime;
+
+#[cfg(feature = "cpu")]
+pub type TestRuntime = cubecl::cpu::CpuRuntime;
 
 use half::{bf16, f16};
 use rand::{Rng, rngs::StdRng};
-
-#[macro_export]
-macro_rules! float {
-    ([$($x:tt)*]) => { float!($($x)*) };
-    (all) => { float!(f16, bf16, f32, f64) };
-    ($x:ty) => { $x };
-    ($($x:ty),*) => { $(float!($x)),* };
-    (f16) => { ::half::f16 as f16 };
-    (bf16) => { ::half::bf16 as bf16 };
-}
 
 /// A macro for testing CubeCL GPU kernels by comparing their output against reference implementations.
 ///
@@ -250,7 +253,7 @@ macro_rules! test_kernel {
 
             // 3. Launch the kernel
             println!("Launching kernel");
-            $kernel::launch::<$t $(, $($gen_name),*)?, cubecl::TestRuntime>(
+            $kernel::launch::<$t $(, $($gen_name),*)?, $crate::test_utils::TestRuntime>(
                 &client,
                 CubeCount::Static($(($count) as u32),*),
                 test_kernel!{ @dim(client) $($max)? ($($dim),*) },
@@ -330,13 +333,13 @@ macro_rules! test_kernel {
     // ==================== HELPER: KERNEL ARG CONSTRUCTION (@make_arg) ====================
     // Build ArrayArg for `Array` type variables
     { @make_arg($t:ty) Array; $handle:ident, $strides:ident, $shape:ident, $len:ident, $arg:ident } => {
-        let $arg: ArrayArg<'_, cubecl::TestRuntime> = unsafe {
+        let $arg: ArrayArg<'_, $crate::test_utils::TestRuntime> = unsafe {
             ArrayArg::from_raw_parts::<Line<$t>>(&$handle, $len, $crate::LINE_SIZE)
         };
     };
     // Build TensorArg for `Tensor` type variables
     { @make_arg($t:ty) Tensor; $handle:ident, $strides:ident, $shape:ident, $len:ident, $arg:ident } => {
-        let $arg: TensorArg<'_, cubecl::TestRuntime> = unsafe {
+        let $arg: TensorArg<'_, $crate::test_utils::TestRuntime> = unsafe {
             TensorArg::from_raw_parts::<Line<$t>>(&$handle, &$strides, &$shape, $crate::LINE_SIZE)
         };
     };
