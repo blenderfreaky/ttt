@@ -115,21 +115,23 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
         Rt::<F, C, R>::from_data(selff.data)
     }
 
-    /// Transpose using a copy (simpler, may be faster for some sizes).
+    /// Transpose using a copy with vectorized 4×4 block operations.
     pub fn transpose_copy(self) -> Rt<F, C, R> {
         let mut result = Rt::<F, C, R>::new();
+        let src_stride = C::LINES;
+        let dst_stride = R::LINES;
+        let src_len = comptime!(Rt::<F, R, C>::LEN);
+        let dst_len = comptime!(Rt::<F, C, R>::LEN);
 
-        #[unroll(R::VALUE <= UNROLL_LIMIT)]
-        for r in 0..R::VALUE {
-            #[unroll(C::VALUE <= UNROLL_LIMIT)]
-            for c in 0..C::VALUE {
-                let src_line = (r * C::VALUE + c) / LINE_SIZE;
-                let src_idx = (r * C::VALUE + c) % LINE_SIZE;
-                let dst_line = (c * R::VALUE + r) / LINE_SIZE;
-                let dst_idx = (c * R::VALUE + r) % LINE_SIZE;
-
-                let val = self.data[src_line][src_idx];
-                write_into_line(result.data.slice_mut(dst_line, dst_line + 1), dst_idx, val);
+        #[unroll(R::LINES <= UNROLL_LIMIT)]
+        for br in 0..R::LINES {
+            #[unroll(C::LINES <= UNROLL_LIMIT)]
+            for bc in 0..C::LINES {
+                let src_base_row = br * LINE_SIZE;
+                let dst_base_row = bc * LINE_SIZE;
+                LineBlock::load_new(self.data.slice(0, src_len), src_base_row, bc, src_stride)
+                    .transpose()
+                    .store(result.data.slice_mut(0, dst_len), dst_base_row, br, dst_stride);
             }
         }
 
@@ -198,6 +200,16 @@ mod tests {
     }
 
     #[cube(launch)]
+    fn transpose_copy_kernel<F: Float, R: Dim, C: Dim>(
+        input: &Array<Line<F>>,
+        output: &mut Array<Line<F>>,
+    ) {
+        let mut rt = Rt::<F, R, C>::new();
+        rt.copy_from_array(input);
+        rt.transpose_copy().copy_to_array(output);
+    }
+
+    #[cube(launch)]
     fn transpose_square_kernel<F: Float, N: Dim>(
         input: &Array<Line<F>>,
         output: &mut Array<Line<F>>,
@@ -215,6 +227,16 @@ mod tests {
             let output: Array = [R::VALUE * C::VALUE];
             assert_eq!(
                 transpose_kernel(input(), output()) for (1, 1, 1) @ (1),
+                { transpose_ref(&input, &mut output, R::VALUE, C::VALUE) }
+            );
+        }
+
+        #[test]
+        fn test_transpose_copy() for F in all R in [D4, D8] C in [D4, D8, D16] {
+            let input: Array = [R::VALUE * C::VALUE] as Range;
+            let output: Array = [R::VALUE * C::VALUE];
+            assert_eq!(
+                transpose_copy_kernel(input(), output()) for (1, 1, 1) @ (1),
                 { transpose_ref(&input, &mut output, R::VALUE, C::VALUE) }
             );
         }
