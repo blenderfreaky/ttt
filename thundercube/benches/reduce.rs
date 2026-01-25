@@ -53,7 +53,7 @@ fn bench_st_sum_rows<F: Float, R: Dim, C: Dim>(
     let mut result = Rv::<F, R>::new();
     sum_st_rows::<F, R, C>(&st, &mut result);
 
-    if UNIT_POS == 0 {
+    if (UNIT_POS % PLANE_DIM) == 0 {
         result.copy_to_array(output);
     }
 }
@@ -70,7 +70,7 @@ fn bench_st_sum_cols<F: Float, R: Dim, C: Dim>(
     let mut result = Rv::<F, C>::new();
     sum_st_cols::<F, R, C>(&st, &mut result);
 
-    if UNIT_POS == 0 {
+    if (UNIT_POS % PLANE_DIM) == 0 {
         result.copy_to_array(output);
     }
 }
@@ -177,6 +177,7 @@ fn bench_st_reductions(c: &mut Criterion) {
     let mut group = c.benchmark_group("st_reductions");
 
     // Note: ST reductions use plane_reduce, which requires threads >= PLANE_DIM (32)
+    //       for meaningful results.
     // sum_rows
     bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows, D8, D8, D8, 32);
     bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows, D8, D8, D8, 64);

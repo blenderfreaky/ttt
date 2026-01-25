@@ -8,11 +8,11 @@ use cubecl::prelude::*;
 
 /// Cooperatively stores per-thread register tiles into shared memory.
 ///
-/// Each thread stores its Rt to a sub-region of St determined by UNIT_POS.
+/// Each thread stores its Rt to a sub-region of St determined by (UNIT_POS % PLANE_DIM).
 /// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
 /// layout for bank-conflict-free access.
 ///
-/// Threads with UNIT_POS >= num_sub_tiles are safely skipped.
+/// Threads with (UNIT_POS % PLANE_DIM) >= num_sub_tiles are safely skipped.
 ///
 /// # Type Parameters
 /// * `R, C` - Register tile dimensions
@@ -27,8 +27,8 @@ pub fn store_rt_to_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     let num_tiles = tiles_per_row * tiles_per_col;
 
     // Guard: only threads with valid tile indices participate
-    if (UNIT_POS as usize) < num_tiles {
-        let tile_idx = UNIT_POS as usize;
+    if ((UNIT_POS % PLANE_DIM) as usize) < num_tiles {
+        let tile_idx = (UNIT_POS % PLANE_DIM) as usize;
         let tile_row = tile_idx / tiles_per_row;
         let tile_col = tile_idx % tiles_per_row;
 
@@ -80,8 +80,8 @@ pub fn store_st_direct<F: Float, R: Dim, C: Dim>(
     let vec_stride = C::LINES;
     let total_vecs = R::VALUE * vec_stride;
 
-    let num_threads = CUBE_DIM as usize;
-    let tid = UNIT_POS as usize;
+    let num_threads = crate::util::plane_dim() as usize;
+    let tid = (UNIT_POS % PLANE_DIM) as usize;
 
     for i in range_stepped(tid, total_vecs, num_threads) {
         let r = i / vec_stride;
@@ -126,8 +126,8 @@ pub fn store_st_transpose<F: Float, R: Dim, C: Dim>(
     let patches_w = C::LINES;
     let total_patches = patches_h * patches_w;
 
-    let num_threads = CUBE_DIM as usize;
-    let tid = UNIT_POS as usize;
+    let num_threads = crate::util::plane_dim() as usize;
+    let tid = (UNIT_POS % PLANE_DIM) as usize;
 
     for i in range_stepped(tid, total_patches, num_threads) {
         let patch_r = i / patches_w;
@@ -172,8 +172,8 @@ pub fn store_st_transpose<F: Float, R: Dim, C: Dim>(
 /// Cooperatively stores per-thread register tiles to global memory without transposing.
 ///
 /// Each thread stores its own register tile sub-region. Threads are mapped to sub-tiles
-/// in row-major order based on UNIT_POS, matching `load_rt_from_st`. Threads with
-/// UNIT_POS >= num_sub_tiles are safely skipped.
+/// in row-major order based on (UNIT_POS % PLANE_DIM), matching `load_rt_from_st`. Threads with
+/// (UNIT_POS % PLANE_DIM) >= num_sub_tiles are safely skipped.
 ///
 /// Out-of-bounds writes are also skipped, enabling safe stores at matrix boundaries.
 ///
@@ -200,8 +200,8 @@ pub fn store_rt_direct<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     let num_tiles = tiles_per_row * tiles_per_col;
 
     // Guard: only threads with valid tile indices participate
-    if (UNIT_POS as usize) < num_tiles {
-        let tile_idx = UNIT_POS as usize;
+    if ((UNIT_POS % PLANE_DIM) as usize) < num_tiles {
+        let tile_idx = (UNIT_POS % PLANE_DIM) as usize;
         let tile_row = tile_idx / tiles_per_row;
         let tile_col = tile_idx % tiles_per_row;
 
@@ -311,8 +311,8 @@ pub fn store_sv_direct<F: Float, L: Dim>(
     base_offset: usize,
 ) {
     let num_lines = L::LINES;
-    let num_threads = CUBE_DIM as usize;
-    let tid = UNIT_POS as usize;
+    let num_threads = crate::util::plane_dim() as usize;
+    let tid = (UNIT_POS % PLANE_DIM) as usize;
 
     for i in range_stepped(tid, num_lines, num_threads) {
         let line_idx = base_offset / LINE_SIZE + i;
@@ -336,7 +336,7 @@ pub fn store_rv_direct<F: Float, L: Dim>(
     base_offset: usize,
 ) {
     // Only one thread needs to write (all have same data)
-    if UNIT_POS == 0 {
+    if (UNIT_POS % PLANE_DIM) == 0 {
         #[unroll(L::LINES <= UNROLL_LIMIT)]
         for i in 0..L::LINES {
             let line_idx = base_offset / LINE_SIZE + i;

@@ -11,8 +11,8 @@ pub fn reduce_st_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, C>,
 ) {
-    let tid = UNIT_POS as usize;
-    let num_threads = PLANE_DIM as usize;
+    let tid = (UNIT_POS % PLANE_DIM) as usize;
+    let num_threads = crate::util::plane_dim() as usize;
 
     let vec_stride = C::LINES;
     let mask = vec_stride - 1;
@@ -41,8 +41,8 @@ pub fn reduce_st_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, R>,
 ) {
-    let tid = UNIT_POS as usize;
-    let num_threads = PLANE_DIM as usize;
+    let tid = (UNIT_POS % PLANE_DIM) as usize;
+    let num_threads = crate::util::plane_dim() as usize;
 
     let vec_stride = C::LINES;
     let mask = vec_stride - 1;
@@ -100,8 +100,8 @@ mod tests {
         let mut st = St::<F, D8, D8>::new();
 
         // Load input into St (with swizzle)
-        let tid = UNIT_POS as usize;
-        let num_threads = CUBE_DIM as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
+        let num_threads = crate::util::plane_dim() as usize;
         let vec_stride = D8::LINES;
         let mask = vec_stride - 1;
 
@@ -119,7 +119,7 @@ mod tests {
         sum_st_rows::<F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
-        if UNIT_POS == 0 {
+        if (UNIT_POS % PLANE_DIM) == 0 {
             result.copy_to_array(output);
         }
     }
@@ -132,8 +132,8 @@ mod tests {
         let mut st = St::<F, D8, D8>::new();
 
         // Load input into St (with swizzle)
-        let tid = UNIT_POS as usize;
-        let num_threads = CUBE_DIM as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
+        let num_threads = crate::util::plane_dim() as usize;
         let vec_stride = D8::LINES;
         let mask = vec_stride - 1;
 
@@ -151,7 +151,7 @@ mod tests {
         sum_st_cols::<F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
-        if UNIT_POS == 0 {
+        if (UNIT_POS % PLANE_DIM) == 0 {
             result.copy_to_array(output);
         }
     }

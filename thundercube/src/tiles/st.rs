@@ -46,8 +46,8 @@ impl<F: Float, R: Dim, C: DimOrOne> St<F, R, C> {
     }
 
     pub fn apply_unary_op<O: UnaryOp<F>>(&mut self, op: O) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
+        let num_threads = crate::util::plane_dim() as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
 
         for i in range_stepped(tid, self.len, num_threads) {
             self.data[i] = op.apply(self.data[i]);
@@ -55,8 +55,8 @@ impl<F: Float, R: Dim, C: DimOrOne> St<F, R, C> {
     }
 
     pub fn apply_binary_op<O: BinaryOp<F>>(&mut self, op: O, other: &St<F, R, C>) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
+        let num_threads = crate::util::plane_dim() as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
 
         for i in range_stepped(tid, self.len, num_threads) {
             self.data[i] = op.apply(self.data[i], other.data[i]);
@@ -65,8 +65,8 @@ impl<F: Float, R: Dim, C: DimOrOne> St<F, R, C> {
 
     /// Copy contents from another St (cooperative, all threads participate)
     pub fn copy_from(&mut self, other: &St<F, R, C>) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
+        let num_threads = crate::util::plane_dim() as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
 
         for i in range_stepped(tid, self.len, num_threads) {
             self.data[i] = other.data[i];
@@ -78,8 +78,8 @@ impl<F: Float, R: Dim, C: DimOrOne> St<F, R, C> {
 #[cube]
 impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     pub fn apply_row_broadcast<O: BinaryOp<F>>(&mut self, op: O, row: &Rv<F, C>) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
+        let num_threads = crate::util::plane_dim() as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
 
         let vec_stride = C::LINES;
         let mask = vec_stride - 1;
@@ -95,8 +95,8 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     }
 
     pub fn apply_col_broadcast<O: BinaryOp<F>>(&mut self, op: O, col: &Rv<F, R>) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
+        let num_threads = crate::util::plane_dim() as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
 
         let vec_stride = C::LINES;
         let mask = vec_stride - 1;
@@ -121,8 +121,8 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     /// For element (r, c): keep if c <= r, zero if c > r.
     /// Cooperative: all threads participate.
     pub fn tril(&mut self) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
+        let num_threads = crate::util::plane_dim() as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
 
         let vec_stride = C::LINES;
         let mask = vec_stride - 1;
@@ -158,8 +158,8 @@ impl<F: Float, R: Dim, C: Dim> St<F, R, C> {
     /// For element (r, c): keep if c >= r, zero if c < r.
     /// Cooperative: all threads participate.
     pub fn triu(&mut self) {
-        let num_threads = CUBE_DIM as usize;
-        let tid = UNIT_POS as usize;
+        let num_threads = crate::util::plane_dim() as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
 
         let vec_stride = C::LINES;
         let mask = vec_stride - 1;
@@ -214,8 +214,8 @@ mod tests {
         let mut st = St::<F, D8, D8>::new();
 
         // Load input into St (with swizzle)
-        let tid = UNIT_POS as usize;
-        let num_threads = CUBE_DIM as usize;
+        let tid = (UNIT_POS % PLANE_DIM) as usize;
+        let num_threads = crate::util::plane_dim() as usize;
         let vec_stride = D8::LINES;
         let mask = vec_stride - 1;
 

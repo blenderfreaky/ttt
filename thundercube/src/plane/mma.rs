@@ -8,7 +8,7 @@ use cubecl::prelude::*;
 
 /// Generates plane-level MMA functions for all transpose combinations.
 ///
-/// Each thread computes a sub-tile of C based on its UNIT_POS.
+/// Each thread computes a sub-tile of C based on its (UNIT_POS % PLANE_DIM).
 /// The tile is divided into (TileM / ThreadTileM) × (TileN / ThreadTileN) sub-tiles.
 macro_rules! define_plane_mma {
     ($name:ident, $mma_rt_fn:ident,
@@ -31,8 +31,8 @@ macro_rules! define_plane_mma {
             let threads_n = TileN::VALUE / ThreadTileN::VALUE;
             let num_tiles = threads_m * threads_n;
 
-            if (UNIT_POS as usize) < num_tiles {
-                let tid = UNIT_POS as usize;
+            if ((UNIT_POS % PLANE_DIM) as usize) < num_tiles {
+                let tid = (UNIT_POS % PLANE_DIM) as usize;
                 let thread_m = tid / threads_n;
                 let thread_n = tid % threads_n;
 
