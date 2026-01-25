@@ -2,13 +2,6 @@ use cubecl::{prelude::*, std::ReinterpretSliceMut};
 
 use crate::LINE_SIZE;
 
-/// Returns the effective plane dimension for the current launch.
-/// This is min(CUBE_DIM, PLANE_DIM) - handles cases where cube size < hardware plane size.
-#[cube]
-pub fn plane_dim() -> u32 {
-    u32::min(CUBE_DIM, PLANE_DIM)
-}
-
 /// Synchronizes at least within a plane (warp).
 /// Uses `sync_plane()` on CUDA (lighter weight), falls back to `sync_cube()` on other backends.
 #[cfg(feature = "cuda")]

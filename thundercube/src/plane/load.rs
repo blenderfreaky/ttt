@@ -3,11 +3,11 @@ use cubecl::prelude::*;
 
 /// Cooperatively loads from shared memory into per-thread register tiles.
 ///
-/// Each thread loads its Rt from a sub-region of St determined by (UNIT_POS % PLANE_DIM).
+/// Each thread loads its Rt from a sub-region of St determined by UNIT_POS.
 /// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
 /// layout for bank-conflict-free access.
 ///
-/// Threads with (UNIT_POS % PLANE_DIM) >= num_sub_tiles are safely skipped (Rt unchanged).
+/// Threads with UNIT_POS >= num_sub_tiles are safely skipped (Rt unchanged).
 ///
 /// # Type Parameters
 /// * `R, C` - Register tile dimensions
@@ -22,8 +22,8 @@ pub fn load_rt_from_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     let num_tiles = tiles_per_row * tiles_per_col;
 
     // Guard: only threads with valid tile indices participate
-    if ((UNIT_POS % PLANE_DIM) as usize) < num_tiles {
-        let tile_idx = (UNIT_POS % PLANE_DIM) as usize;
+    if (UNIT_POS as usize) < num_tiles {
+        let tile_idx = UNIT_POS as usize;
         let tile_row = tile_idx / tiles_per_row;
         let tile_col = tile_idx % tiles_per_row;
 
@@ -76,8 +76,8 @@ pub fn load_st_direct<F: Float, R: Dim, C: Dim>(
     let total_vecs = R::VALUE * vec_stride;
     let mask = vec_stride - 1;
 
-    let num_threads = crate::util::plane_dim() as usize;
-    let tid = (UNIT_POS % PLANE_DIM) as usize;
+    let num_threads = CUBE_DIM as usize;
+    let tid = UNIT_POS as usize;
 
     for i in range_stepped(tid, total_vecs, num_threads) {
         let r = i / vec_stride;
@@ -122,8 +122,8 @@ pub fn load_st_transpose<F: Float, R: Dim, C: Dim>(
     let patches_w = C::LINES;
     let total_patches = patches_h * patches_w;
 
-    let num_threads = crate::util::plane_dim() as usize;
-    let tid = (UNIT_POS % PLANE_DIM) as usize;
+    let num_threads = CUBE_DIM as usize;
+    let tid = UNIT_POS as usize;
 
     for i in range_stepped(tid, total_patches, num_threads) {
         let patch_r = i / patches_w; // Shared Row Index (in patches)
@@ -287,8 +287,8 @@ pub fn load_sv_direct<F: Float, L: Dim>(
     base_offset: usize,
 ) {
     let num_lines = L::LINES;
-    let num_threads = crate::util::plane_dim() as usize;
-    let tid = (UNIT_POS % PLANE_DIM) as usize;
+    let num_threads = CUBE_DIM as usize;
+    let tid = UNIT_POS as usize;
 
     for i in range_stepped(tid, num_lines, num_threads) {
         let line_idx = base_offset / LINE_SIZE + i;
