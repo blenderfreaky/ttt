@@ -1,6 +1,7 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 
+pub mod artifact_info;
 pub mod data;
 pub mod inference;
 pub mod text_generation;
@@ -56,6 +57,14 @@ enum Commands {
         /// Shell to generate completions for
         shell: Shell,
     },
+    /// Show information about a training run
+    Info {
+        /// Artifact directory to inspect
+        artifact_dir: String,
+        /// Show detailed metrics for each epoch
+        #[arg(long, short)]
+        verbose: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, Default)]
@@ -106,6 +115,7 @@ enum ModelSize {
     M12,
     /// 60M parameter model
     #[default]
+    #[value(name = "60m")]
     M60,
     // -- below are included in the reference --
     /// 125M parameter model
@@ -129,7 +139,7 @@ struct TrainArgs {
     tokenizer: String,
 
     /// Inner model type
-    #[arg(long, default_value = "fused-linear")]
+    #[arg(long, default_value = "linear")]
     inner: InnerModel,
 
     /// Position encoding type
@@ -137,7 +147,7 @@ struct TrainArgs {
     pos_encoding: PosEncoding,
 
     /// Model size
-    #[arg(long, default_value = "tiny")]
+    #[arg(long, default_value = "12m")]
     size: ModelSize,
 
     /// Number of epochs
@@ -401,6 +411,18 @@ fn main() {
         }
         Commands::Completions { shell } => {
             generate(shell, &mut Cli::command(), "ttt", &mut std::io::stdout());
+        }
+        Commands::Info {
+            artifact_dir,
+            verbose,
+        } => {
+            match artifact_info::ArtifactInfo::load(&artifact_dir) {
+                Ok(info) => artifact_info::print_info(&info, verbose),
+                Err(e) => {
+                    eprintln!("Error loading artifact info from {artifact_dir}: {e}");
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }
