@@ -260,9 +260,11 @@ pub fn pretokenized_path(
     split: &str,
     max_seq_len: usize,
 ) -> std::path::PathBuf {
-    let cache_dir = std::env::var("TTT_PRETOKENIZED_PATH").unwrap_or_else(|_| {
-        dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"))
-    });
+    let cache_dir = std::env::var("TTT_PRETOKENIZED_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"))
+        });
     cache_dir
         .join("ttt-burn")
         .join(format!("{dataset_name}_{split}_{max_seq_len}.bin"))
