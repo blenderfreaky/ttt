@@ -10,7 +10,7 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, St},
 };
 
-type TestRuntime = thundercube::test_utils::TestRuntime;
+use thundercube::test_utils::TestRuntime;
 
 /// Benchmark kernel for mma_AtB with configurable tile sizes.
 /// C = A^T * B where A is loaded transposed.

@@ -7,7 +7,6 @@ use std::{
 
 use cubecl::{prelude::*, server::Handle};
 
-// Define TestRuntime based on enabled backend feature
 #[cfg(feature = "hip")]
 pub type TestRuntime = cubecl::hip::HipRuntime;
 

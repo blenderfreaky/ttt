@@ -52,7 +52,7 @@ name = "ttt_benchmark"
 harness = false
 
 [features]
-default = ["rocm"]
+default = []
 bf16 = []
 rocm = ["burn/rocm", "cubecl/hip", "thundercube/hip"]
 cuda = ["burn/cuda", "cubecl/cuda", "thundercube/cuda"]

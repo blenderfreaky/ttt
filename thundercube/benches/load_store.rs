@@ -10,7 +10,7 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, D64, Dim, DimOrOne, St},
 };
 
-type TestRuntime = thundercube::test_utils::TestRuntime;
+use thundercube::test_utils::TestRuntime;
 
 /// Benchmark kernel for direct load (global -> shared -> global)
 #[cube(launch)]

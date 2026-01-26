@@ -10,7 +10,7 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
 };
 
-type TestRuntime = thundercube::test_utils::TestRuntime;
+use thundercube::test_utils::TestRuntime;
 
 // ==================== RT BROADCAST KERNELS ====================
 

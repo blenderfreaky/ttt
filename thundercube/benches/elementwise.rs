@@ -9,7 +9,7 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt},
 };
 
-type TestRuntime = thundercube::test_utils::TestRuntime;
+use thundercube::test_utils::TestRuntime;
 
 // ==================== UNARY OPERATION KERNELS ====================
 
