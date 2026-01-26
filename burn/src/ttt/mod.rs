@@ -49,6 +49,7 @@ pub enum TTTLayerType {
     MLP3,
     MLP4,
     FusedLinear,
+    FusedTileLinear,
 }
 
 #[macro_export]
@@ -68,6 +69,13 @@ macro_rules! dispatch_ttt_layer_type {
                 $crate::ttt::cubecl_kernels::Fused<
                     $backend,
                     $crate::ttt::linear::TTTLinear<$backend>,
+                >,
+                $($other),+
+            >($($args),*),
+            TTTLayerType::FusedTileLinear => $f::<
+                $backend,
+                $crate::ttt::cubecl_kernels::FusedTile<
+                    $backend,
                 >,
                 $($other),+
             >($($args),*),

@@ -5,7 +5,7 @@ use burn::{
     module::{Ignored, Module, Param},
     nn::Initializer,
     prelude::Backend,
-    tensor::{Tensor, s},
+    tensor::{Bool, Tensor, s},
 };
 
 use super::{
@@ -21,6 +21,7 @@ pub struct TTTLinear<B: Backend> {
     /// [num_heads, head_dim]
     pub bias_init: Param<Tensor<B, 2>>,
     pub layer_norm: MultiHeadLayerNorm<B>,
+    // pub tril_mask: Tensor<B, 2, Bool>,
     pub config: Ignored<Arc<TTTConfig>>,
 }
 
@@ -78,6 +79,11 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
             .with_initializer(config.initializer.clone())
             .with_epsilon(global_config.epsilon)
             .init(device),
+            // tril_mask: Tensor::tril_mask(
+            //     [global_config.mini_batch_size, global_config.mini_batch_size],
+            //     0,
+            //     device,
+            // ),
             config: Ignored(global_config.clone()),
         }
     }
@@ -135,15 +141,17 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
 
         let last_eta_col = last_eta_row.transpose(); // [B, H, K, 1]
 
-        state.weight = state.weight.clone()
-            - (last_eta_col.clone() * x1)
+        state.weight.inplace(|x| {
+            x - (last_eta_col.clone() * x1)
                 .transpose()
-                .matmul(grad_l_wrt_z1.clone());
+                .matmul(grad_l_wrt_z1.clone())
+        });
 
-        state.bias = state.bias.clone()
-            - (last_eta_col * grad_l_wrt_z1)
+        state.bias.inplace(|x| {
+            x - (last_eta_col * grad_l_wrt_z1)
                 .sum_dim(2)
-                .squeeze_dim::<3>(2);
+                .squeeze_dim::<3>(2)
+        });
 
         let z1_bar_normalized = self.layer_norm.forward(z1_bar);
 

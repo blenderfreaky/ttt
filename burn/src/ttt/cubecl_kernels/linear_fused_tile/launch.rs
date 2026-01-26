@@ -74,6 +74,7 @@ macro_rules! supported_tile_configs {
             (16, 128, D16, D128, D4, D32),
             // (32,  32, D32, D32,  D8, D8),
             // (32,  64, D32, D64,  D4, D16),
+            (64,  64, D64, D64,  D8, D8),
         )
     };
 }

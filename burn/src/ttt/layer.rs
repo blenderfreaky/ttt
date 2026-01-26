@@ -215,18 +215,9 @@ impl<B: Backend> Qkv<B> {
     pub fn slice_seq(&self, range: Range<usize>) -> Self {
         let [batch_size, num_heads, _, head_dim] = self.xq.shape().dims();
         Self {
-            xq: self
-                .xq
-                .clone()
-                .slice([0..batch_size, 0..num_heads, range.clone(), 0..head_dim]),
-            xk: self
-                .xk
-                .clone()
-                .slice([0..batch_size, 0..num_heads, range.clone(), 0..head_dim]),
-            xv: self
-                .xv
-                .clone()
-                .slice([0..batch_size, 0..num_heads, range, 0..head_dim]),
+            xq: self.xq.clone().slice(s![.., .., range.clone(), ..]),
+            xk: self.xk.clone().slice(s![.., .., range.clone(), ..]),
+            xv: self.xv.clone().slice(s![.., .., range, ..]),
         }
     }
 
@@ -277,12 +268,9 @@ impl<B: Backend> TTTInputsInner<B> {
         let [batch_size, num_heads, _] = self.ttt_lr_eta.shape().dims();
         Self {
             qkv: self.qkv.slice_seq(range.clone()),
-            token_eta: self.token_eta.clone().slice([range.clone()]),
+            token_eta: self.token_eta.clone().slice(s![range.clone()]),
             start_idx: range.start,
-            ttt_lr_eta: self
-                .ttt_lr_eta
-                .clone()
-                .slice([0..batch_size, 0..num_heads, range.clone()]),
+            ttt_lr_eta: self.ttt_lr_eta.clone().slice(s![.., .., range.clone()]),
         }
     }
 

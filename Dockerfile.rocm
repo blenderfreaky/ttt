@@ -41,7 +41,6 @@ ENV HIP_PATH=/opt/rocm
 ENV ROCM_DEVICE_LIB_PATH=/opt/rocm/amdgcn/bitcode
 ENV PATH="${ROCM_PATH}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${ROCM_PATH}/lib:${LD_LIBRARY_PATH}"
-ENV TTT_PRETOKENIZED_PATH=/workspace/dataset
 
 # Copy recipe and build dependencies only (this layer is cached)
 COPY --from=planner /app/burn/recipe.json /app/burn/recipe.json
@@ -103,6 +102,7 @@ ENV HIP_PATH=/opt/rocm
 ENV ROCM_DEVICE_LIB_PATH=/opt/rocm/amdgcn/bitcode
 ENV PATH="${ROCM_PATH}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${ROCM_PATH}/lib:${LD_LIBRARY_PATH}"
+ENV TTT_PRETOKENIZED_PATH=/workspace/dataset
 
 WORKDIR /app
 

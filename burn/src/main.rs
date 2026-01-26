@@ -68,6 +68,7 @@ enum Commands {
 #[derive(Clone, Copy, Debug, ValueEnum, Default)]
 enum InnerModel {
     /// Linear inner model
+    #[default]
     Linear,
     /// Linear inner model with Adam optimizer
     LinearAdam,
@@ -80,8 +81,9 @@ enum InnerModel {
     /// MLP inner model (4 hidden layers)
     Mlp4,
     /// Fused linear (naive CubeCL impl)
-    #[default]
     FusedLinear,
+    /// Fused linear (tile-based CubeCL impl)
+    FusedTileLinear,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, Default)]
@@ -227,6 +229,7 @@ impl InnerModel {
             InnerModel::Mlp3 => TTTLayerType::MLP3,
             InnerModel::Mlp4 => TTTLayerType::MLP4,
             InnerModel::FusedLinear => TTTLayerType::FusedLinear,
+            InnerModel::FusedTileLinear => TTTLayerType::FusedTileLinear,
         }
     }
 }

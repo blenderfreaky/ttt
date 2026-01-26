@@ -43,6 +43,21 @@
             rocmSupport = true;
             allowUnfree = true;
           };
+          overlays = [
+            (final: prev: {
+              rocmPackages =
+                prev.rocmPackages
+                // {
+                  rocprofiler = prev.rocmPackages.rocprofiler.overrideAttrs (oldAttrs: {
+                    postInstall =
+                      oldAttrs.postInstall
+                      + ''
+                        substituteInPlace $out/bin/rocprof --replace-fail '/bin/ls' '${final.coreutils}/bin/ls'
+                      '';
+                  });
+                };
+            })
+          ];
         };
         # ROCm from older nixpkgs to match RunPod kernel driver
         pkgs-rocm = import nixpkgs-rocm {
@@ -52,7 +67,8 @@
             allowUnfree = true;
           };
           # overlays = [
-          #   (final: prev: {
+
+          # (final: prev: {
           #     ccacheStdenv = prev.ccacheStdenv.override {
           #       extraConfig = ''
           #         export CCACHE_COMPRESS=1
@@ -78,7 +94,7 @@
           #         fi
           #       '';
           #     };
-          #   })
+          # })
           #   (_: _: intel-pkgs)
           # ];
         };
@@ -102,7 +118,7 @@
         #   };
       in {
         # legacyPackages for nested structure: .#rocm6.f32.ttt, .#cuda.bf16.ttt-bench, etc.
-        legacyPackages = own-pkgs;
+        legacyPackages = own-pkgs // [pkgs.rocmPackages.rocprofiler];
 
         devShells.default = pkgs.mkShell {
           shellHook = ''
