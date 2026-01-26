@@ -12,6 +12,8 @@ pub trait ReductionOp<F: Float> {
     fn finalize(line: Line<F>) -> F;
     /// Plane-level (warp) reduction of a scalar, broadcasts result to all threads
     fn plane_reduce(val: F) -> F;
+    /// Combine the results of two plane reductions
+    fn plane_combine(a: F, b: F) -> F;
 }
 
 /// Plane-level reduction of a Line (reduces each lane separately across threads)
@@ -34,6 +36,7 @@ macro_rules! impl_reduction_ops {
             combine($a:ident, $b:ident) => $combine:expr;
             finalize($line:ident) => $finalize:expr;
             plane_reduce($val:ident) => $plane_reduce:expr;
+            plane_combine($c:ident, $d:ident) => $plane_combine:expr;
         }
     )+
     } => {
@@ -65,6 +68,10 @@ macro_rules! impl_reduction_ops {
                 fn plane_reduce($val: $t) -> $t {
                     $plane_reduce
                 }
+
+                fn plane_combine($c: $t, $d: $t) -> $t {
+                    $plane_combine
+                }
             }
         }
     )+
@@ -80,6 +87,7 @@ macro_rules! impl_reduction_convenience_fns {
                 combine($a:ident, $b:ident) => $combine:expr;
                 finalize($line:ident) => $finalize:expr;
                 plane_reduce($val:ident) => $plane_reduce:expr;
+                plane_combine($c:ident, $d:ident) => $plane_combine:expr;
             }
         )+
     }
@@ -111,6 +119,7 @@ macro_rules! with_reduction_ops {
                 combine(a, b) => a + b;
                 finalize(line) => line[0] + line[1] + line[2] + line[3];
                 plane_reduce(val) => plane_sum(val);
+                plane_combine(a, b) => a + b;
             }
         }
     };
