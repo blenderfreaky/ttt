@@ -260,7 +260,7 @@ pub fn pretokenized_path(
     split: &str,
     max_seq_len: usize,
 ) -> std::path::PathBuf {
-    let cache_dir = env::var("TTT_PRETOKENIZED_PATH").unwrap_or_else(|_| {
+    let cache_dir = std::env::var("TTT_PRETOKENIZED_PATH").unwrap_or_else(|_| {
         dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"))
     });
     cache_dir
