@@ -54,8 +54,9 @@ harness = false
 [features]
 default = ["rocm"]
 bf16 = []
-rocm = ["burn/rocm", "cubecl/hip"]
-cuda = ["burn/cuda", "cubecl/cuda"]
-wgpu = ["burn/wgpu"]
+rocm = ["burn/rocm", "cubecl/hip", "thundercube/hip"]
+cuda = ["burn/cuda", "cubecl/cuda", "thundercube/cuda"]
+wgpu = ["burn/wgpu", "cubecl/wgpu", "thundercube/wgpu"]
+cpu = ["burn/cpu", "cubecl/cpu", "thundercube/cpu"]
 
 sweep_tests = []
