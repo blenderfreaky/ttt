@@ -1,6 +1,6 @@
 //! TTTInnerModel implementation for the tiled TTT-Linear kernel.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
 
@@ -47,8 +47,11 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
     fn forward_mini_batch(
         &self,
         state: &mut Self::State,
-        inputs: TTTInputsInner<B>,
+        inputs: &TTTInputsInner<B>,
+        range: Range<usize>,
     ) -> Tensor<B, 4> {
+        let inputs = inputs.slice_seq(range);
+
         let inner = &self.inner.inner;
 
         let qkv = inputs.qkv;
@@ -140,7 +143,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
                     .clone()
                     .slice([0..batch_size, 0..num_heads, 0..full_seq_len]);
 
-            // token_eta is [mini_batch_size] and constant across stages - pass directly
+            // token_eta is [mini_batch_size] and constant across stages, pass directly
             let (output, weight_updated, bias_updated) = fused_ttt_tile_forward_multi::<B>(
                 full_qkv.xq,
                 full_qkv.xk,
@@ -161,24 +164,25 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
             if remainder == 0 {
                 output
             } else {
-                // Process remainder with single-stage kernel
-                let remainder_inputs = inputs.slice_seq(full_seq_len..seq_len);
-                let remainder_output = self.forward_mini_batch(state, remainder_inputs);
+                let remainder_output =
+                    self.forward_mini_batch(state, &inputs, full_seq_len..seq_len);
 
-                // Concatenate outputs
                 Tensor::cat(vec![output, remainder_output], 2)
             }
         } else {
             // Sequence shorter than mini_batch_size, use single-stage kernel
-            self.forward_mini_batch(state, inputs)
+            self.forward_mini_batch(state, &inputs, 0..seq_len)
         }
     }
 
     fn forward_mini_batch(
         &self,
         state: &mut Self::State,
-        inputs: TTTInputsInner<B>,
+        inputs: &TTTInputsInner<B>,
+        range: Range<usize>,
     ) -> Tensor<B, 4> {
+        let inputs = inputs.slice_seq(range);
+
         let inner = &self.inner.inner.inner;
 
         let qkv = inputs.qkv;

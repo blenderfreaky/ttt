@@ -61,34 +61,18 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
 
         for i in 0..num_mini_batch {
             let start_idx = i * mini_batch_size;
-            let inputs = inputs.slice_seq(start_idx..start_idx + mini_batch_size);
-            let z = self.forward_mini_batch(state, inputs);
-            output = output.slice_assign(
-                [
-                    0..batch_size,
-                    0..num_heads,
-                    start_idx..start_idx + mini_batch_size,
-                    0..head_dim,
-                ],
-                z,
-            );
+            let r = start_idx..start_idx + mini_batch_size;
+            let z = self.forward_mini_batch(state, &inputs, r.clone());
+            output = output.slice_assign(s![.., .., r, ..,], z);
         }
 
         let last_mini_batch_end = num_mini_batch * mini_batch_size;
 
         // Process any remaining tokens in a single batch (should work for any seq_len < mini_batch_size)
         if last_mini_batch_end < seq_len {
-            let remainder_inputs = inputs.slice_seq(last_mini_batch_end..seq_len);
-            let z = self.forward_mini_batch(state, remainder_inputs);
-            output = output.slice_assign(
-                [
-                    0..batch_size,
-                    0..num_heads,
-                    last_mini_batch_end..seq_len,
-                    0..head_dim,
-                ],
-                z,
-            );
+            let r = last_mini_batch_end..seq_len;
+            let z = self.forward_mini_batch(state, &inputs, r.clone());
+            output = output.slice_assign(s![.., .., r, ..,], z);
         }
 
         output
@@ -97,7 +81,8 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
     fn forward_mini_batch(
         &self,
         state: &mut Self::State,
-        inputs: TTTInputsInner<B>,
+        inputs: &TTTInputsInner<B>,
+        range: Range<usize>,
     ) -> Tensor<B, 4>;
 }
 

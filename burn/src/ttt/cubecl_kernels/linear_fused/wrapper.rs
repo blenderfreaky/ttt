@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
 
@@ -42,8 +42,11 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
     fn forward_mini_batch(
         &self,
         state: &mut Self::State,
-        inputs: TTTInputsInner<B>,
+        inputs: &TTTInputsInner<B>,
+        range: Range<usize>,
     ) -> Tensor<B, 4> {
+        let inputs = inputs.slice_seq(range);
+
         let inner = &self.inner;
 
         let qkv = inputs.qkv;
