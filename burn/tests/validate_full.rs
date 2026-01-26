@@ -662,7 +662,7 @@ fn test_inner_model_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<Path
     };
 
     println!("\n  Running Burn inner model forward...");
-    let output_actual = inner_model.forward_mini_batch(&mut state, inputs);
+    let output_actual = inner_model.forward_mini_batch(&mut state, &inputs, 0..seq_len);
 
     println!("  Output shape: {:?}", output_actual.dims());
 

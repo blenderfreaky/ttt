@@ -345,7 +345,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, inputs_cpu);
+        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
         let output_ref_data: Vec<f32> = output_ref.to_data().to_vec().unwrap();
         let weight_ref_data: Vec<f32> = state_cpu.weight.to_data().to_vec().unwrap();
         let bias_ref_data: Vec<f32> = state_cpu.bias.to_data().to_vec().unwrap();
@@ -413,7 +413,7 @@ mod tests {
         };
 
         // Run tiled fused kernel
-        let output_fused = fused_tile.forward_mini_batch(&mut fused_state, inputs_gpu);
+        let output_fused = fused_tile.forward_mini_batch(&mut fused_state, &inputs_gpu, 0..seq_len);
         let output_fused_data: Vec<f32> = output_fused.to_data().to_vec().unwrap();
         let weight_fused_data: Vec<f32> = fused_state.weight.to_data().to_vec().unwrap();
         let bias_fused_data: Vec<f32> = fused_state.bias.to_data().to_vec().unwrap();
@@ -753,7 +753,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_cpu = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, inputs_cpu);
+        let output_cpu = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
         let loss_cpu = output_cpu.sum();
         let grads_cpu = loss_cpu.backward();
 
@@ -839,7 +839,7 @@ mod tests {
         };
 
         // Run tiled forward and backward
-        let output_gpu = fused_tile.forward_mini_batch(&mut fused_state, inputs_gpu);
+        let output_gpu = fused_tile.forward_mini_batch(&mut fused_state, &inputs_gpu, 0..seq_len);
         let loss_gpu = output_gpu.sum();
         let grads_gpu = loss_gpu.backward();
 

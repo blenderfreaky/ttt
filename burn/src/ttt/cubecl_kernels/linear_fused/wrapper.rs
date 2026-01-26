@@ -207,7 +207,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, inputs_cpu);
+        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
         let output_ref_data: Vec<f32> = output_ref.to_data().to_vec().unwrap();
 
         let gpu_device: <GpuBackend as Backend>::Device = Default::default();
@@ -367,7 +367,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, inputs_cpu);
+        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
         let output_ref_data: Vec<f32> = output_ref.to_data().to_vec().unwrap();
 
         let gpu_device: <GpuBackend as Backend>::Device = Default::default();
@@ -428,7 +428,8 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_fused = fused_linear.forward_mini_batch(&mut fused_state, inputs_gpu);
+        let output_fused =
+            fused_linear.forward_mini_batch(&mut fused_state, &inputs_gpu, 0..seq_len);
         let output_fused_data: Vec<f32> = output_fused.to_data().to_vec().unwrap();
 
         assert_data_close(
@@ -534,7 +535,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_cpu = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, inputs_cpu);
+        let output_cpu = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
 
         let loss_cpu = output_cpu.sum();
         let grads_cpu = loss_cpu.backward();
@@ -611,7 +612,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_gpu = fused_linear.forward_mini_batch(&mut fused_state, inputs_gpu);
+        let output_gpu = fused_linear.forward_mini_batch(&mut fused_state, &inputs_gpu, 0..seq_len);
 
         let loss_gpu = output_gpu.sum();
         let grads_gpu = loss_gpu.backward();
