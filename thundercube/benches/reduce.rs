@@ -5,7 +5,7 @@ use cubecl::prelude::*;
 use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
-    cube::{load_st_direct, sum_st_cols, sum_st_rows},
+    cube::{ReduceBuf, load_st_direct, sum_cols, sum_cols_plane, sum_rows, sum_rows_plane},
     test_utils::{client, get_strides, upload},
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
 };
@@ -50,7 +50,7 @@ fn bench_st_sum_rows<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut result = Rv::<F, R>::new();
-    sum_st_rows::<F, R, C>(&st, &mut result);
+    sum_rows_plane::<F, R, C>(&st, &mut result);
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);
@@ -67,7 +67,43 @@ fn bench_st_sum_cols<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut result = Rv::<F, C>::new();
-    sum_st_cols::<F, R, C>(&st, &mut result);
+    sum_cols_plane::<F, R, C>(&st, &mut result);
+
+    if UNIT_POS == 0 {
+        result.copy_to_array(output);
+    }
+}
+
+#[cube(launch)]
+fn bench_st_sum_rows_cube<F: Float, R: Dim, C: Dim>(
+    input: &Tensor<Line<F>>,
+    output: &mut Array<Line<F>>,
+) {
+    let mut buf = ReduceBuf::<F>::new();
+    let mut st = St::<F, R, C>::new();
+    load_st_direct(input, &mut st, 0, 0, 0);
+    sync_cube();
+
+    let mut result = Rv::<F, R>::new();
+    sum_rows::<F, R, C>(&st, &mut result, &mut buf);
+
+    if UNIT_POS == 0 {
+        result.copy_to_array(output);
+    }
+}
+
+#[cube(launch)]
+fn bench_st_sum_cols_cube<F: Float, R: Dim, C: Dim>(
+    input: &Tensor<Line<F>>,
+    output: &mut Array<Line<F>>,
+) {
+    let mut buf = ReduceBuf::<F>::new();
+    let mut st = St::<F, R, C>::new();
+    load_st_direct(input, &mut st, 0, 0, 0);
+    sync_cube();
+
+    let mut result = Rv::<F, C>::new();
+    sum_cols::<F, R, C>(&st, &mut result, &mut buf);
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);
@@ -195,6 +231,27 @@ fn bench_st_reductions(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_st_reductions_cube(c: &mut Criterion) {
+    let mut group = c.benchmark_group("st_reductions");
+
+    // Note: ST reductions use plane_reduce, which requires threads >= PLANE_DIM (32)
+    // sum_rows
+    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D8, D8, D8, 32);
+    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D8, D8, D8, 64);
+    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D16, D16, D16, 32);
+    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D16, D16, D16, 64);
+    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D32, D32, D32, 64);
+
+    // sum_cols
+    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D8, D8, D8, 32);
+    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D8, D8, D8, 64);
+    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D16, D16, D16, 32);
+    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D16, D16, D16, 64);
+    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D32, D32, D32, 64);
+
+    group.finish();
+}
+
 fn bench_asymmetric_reductions(c: &mut Criterion) {
     let mut group = c.benchmark_group("asymmetric_reductions");
 
@@ -262,6 +319,7 @@ criterion_group!(
     benches,
     bench_rt_reductions,
     bench_st_reductions,
+    bench_st_reductions_cube,
     bench_asymmetric_reductions,
     bench_thread_scaling_reductions,
 );

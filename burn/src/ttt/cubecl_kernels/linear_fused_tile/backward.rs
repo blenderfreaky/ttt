@@ -1,5 +1,3 @@
-#![allow(non_camel_case_types, non_snake_case)]
-
 //! Fused TTT-Linear backward pass kernel (tiled implementation).
 //!
 //! # Mathematical Structure
@@ -105,11 +103,11 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_ln_weight = P::f_reg_big();
-    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
+    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
 
     // grad_ln_bias = sum(grad_output)
     let mut grad_ln_bias = P::f_reg_big();
-    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(grad_output, &mut grad_ln_bias, buf);
+    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(grad_output, &mut grad_ln_bias, buf);
 
     // grad_x_hat = grad_output * ln_weight
     scratch1.copy_from(grad_output);
@@ -119,7 +117,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
 
     // sum(grad_x_hat) per row
     let mut sum_gxh = P::cs_reg_big();
-    cube::sum_st_rows_cube(scratch1, &mut sum_gxh, buf);
+    cube::sum_rows(scratch1, &mut sum_gxh, buf);
 
     // sum(grad_x_hat * x_hat) per row
     scratch2.copy_from(scratch1);
@@ -128,7 +126,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     let mut sum_gxh_xh = P::cs_reg_big();
-    cube::sum_st_rows_cube(scratch2, &mut sum_gxh_xh, buf);
+    cube::sum_rows(scratch2, &mut sum_gxh_xh, buf);
 
     // grad_z1_bar = (grad_x_hat * F - sum_gxh - x_hat * sum_gxh_xh) / (std * F)
     let mut grad_z1_bar = P::cs_f_tile();
@@ -163,7 +161,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
 
     // grad_b_z1bar = sum(grad_z1_bar)
     let mut grad_b_z1bar = P::f_reg_big();
-    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&grad_z1_bar, &mut grad_b_z1bar, buf);
+    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(&grad_z1_bar, &mut grad_b_z1bar, buf);
 
     Stage4Outputs::<P> {
         grad_z1_bar,
@@ -412,7 +410,7 @@ fn backward_stage3_update<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_last_eta = P::cs_reg_big();
-    cube::sum_st_rows_cube(scratch1, &mut grad_last_eta, buf);
+    cube::sum_rows(scratch1, &mut grad_last_eta, buf);
 
     // --- Additional gradient through η from z1_bar ---
     // d_eta = -(grad_z1_bar @ grad_l^T) * (1 + attn), with tril mask
@@ -464,7 +462,7 @@ fn backward_stage3_update<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_ttt_lr_eta_z1bar = P::cs_reg_big();
-    cube::reduce_st_cols_cube::<P::E, P::CS, P::CS, SumOp>(&d_eta, &mut grad_ttt_lr_eta_z1bar, buf);
+    cube::reduce_cols::<P::E, P::CS, P::CS, SumOp>(&d_eta, &mut grad_ttt_lr_eta_z1bar, buf);
 
     // Combine: grad_ttt_lr_eta = grad_last_eta * last_token_eta + grad_z1bar_contribution
     grad_last_eta.mul_scalar(last_token_eta);
@@ -522,14 +520,14 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     sync_cube();
 
     let mut sum1 = P::cs_reg_big();
-    cube::sum_st_rows_cube(scratch1, &mut sum1, buf);
+    cube::sum_rows(scratch1, &mut sum1, buf);
 
     scratch1.mul(x_hat_fused);
 
     sync_cube();
 
     let mut sum2 = P::cs_reg_big();
-    cube::sum_st_rows_cube(scratch1, &mut sum2, buf);
+    cube::sum_rows(scratch1, &mut sum2, buf);
 
     // Build grad_L_grad_x_hat
     let mut grad_L_grad_x_hat = P::cs_f_tile();
@@ -573,11 +571,11 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_ln_weight = P::f_reg_big();
-    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
+    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
 
     // grad_ln_bias = sum(grad_L_y)
     let mut grad_ln_bias = P::f_reg_big();
-    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&grad_L_y, &mut grad_ln_bias, buf);
+    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(&grad_L_y, &mut grad_ln_bias, buf);
 
     // grad_L_x_hat = grad_L_y * ln_weight
     //              + (1/F) * grad_x_hat * sum2
@@ -625,7 +623,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     sync_cube();
 
     let mut sum_grad_L_std = P::cs_reg_big();
-    cube::sum_st_rows_cube(scratch1, &mut sum_grad_L_std, buf);
+    cube::sum_rows(scratch1, &mut sum_grad_L_std, buf);
 
     // grad_Z1 = grad_L_x_hat / std - (1/F) * sum(grad_L_x_hat) / std + (1/F) * sum(grad_L_std) * x_hat
     let mut grad_Z1 = P::cs_f_tile();
@@ -633,7 +631,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     grad_Z1.div_col(std_fused);
 
     let mut sum_grad_L_x_hat = P::cs_reg_big();
-    cube::sum_st_rows_cube(&grad_L_x_hat, &mut sum_grad_L_x_hat, buf);
+    cube::sum_rows(&grad_L_x_hat, &mut sum_grad_L_x_hat, buf);
 
     let mut term2 = sum_grad_L_x_hat;
     term2.div(std_fused);
@@ -746,7 +744,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 
     // grad_b_init = grad_b_last + sum(grad_Z1) + grad_b_z1bar
     let mut grad_b_Z1 = P::f_reg_big();
-    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&stage2.grad_Z1, &mut grad_b_Z1, buf);
+    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(&stage2.grad_Z1, &mut grad_b_Z1, buf);
 
     let mut grad_b_init = P::f_reg_big();
     grad_b_init.set(grad_b_last);
@@ -887,7 +885,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     let mut sum_gxh_xh = P::cs_reg_big();
-    cube::sum_st_rows_cube(&scratch1, &mut sum_gxh_xh, &mut buf);
+    cube::sum_rows(&scratch1, &mut sum_gxh_xh, &mut buf);
 
     // === Stage 4: LN backward ===
     let stage4_out = backward_stage4_ln::<P>(

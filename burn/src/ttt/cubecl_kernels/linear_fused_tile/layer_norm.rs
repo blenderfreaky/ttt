@@ -58,7 +58,7 @@ pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
 
     // Step 1: mean = sum_rows(x) / C
     let mut mean = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(x, &mut mean, buf);
+    cube::sum_rows(x, &mut mean, buf);
     mean.mul_scalar(c_inv);
 
     // Step 2: x -= mean (col broadcast)
@@ -69,7 +69,7 @@ pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
 
     // Step 3: var = sum_rows(x^2) / C using SumSqOp
     let mut std = Rv::<F, R>::new();
-    cube::reduce_st_rows_cube::<F, R, C, SumSqOp>(x, &mut std, buf);
+    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
     std.mul_scalar(c_inv);
 
     // Step 4: std = sqrt(var + epsilon)
@@ -112,7 +112,7 @@ pub fn layer_norm_forward_with_intermediates<F: Float, R: Dim, C: Dim>(
 
     // Step 1: mean = sum_rows(x) / C
     let mut mean = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(x, &mut mean, buf);
+    cube::sum_rows(x, &mut mean, buf);
     mean.mul_scalar(c_inv);
 
     // Step 2: x -= mean (col broadcast)
@@ -121,7 +121,7 @@ pub fn layer_norm_forward_with_intermediates<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     // Step 3: var = sum_rows(x^2) / C
-    cube::reduce_st_rows_cube::<F, R, C, SumSqOp>(x, std_out, buf);
+    cube::reduce_rows::<F, R, C, SumSqOp>(x, std_out, buf);
     std_out.mul_scalar(c_inv);
 
     // Step 4: std = sqrt(var + epsilon)
@@ -179,7 +179,7 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
 
     // Step 1: mean = sum_rows(x) / C
     let mut mean = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(x, &mut mean, buf);
+    cube::sum_rows(x, &mut mean, buf);
     mean.mul_scalar(c_inv);
 
     // Step 2: x -= mean (col broadcast)
@@ -190,7 +190,7 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
 
     // Step 3: var = sum_rows(x^2) / C using SumSqOp
     let mut std = Rv::<F, R>::new();
-    cube::reduce_st_rows_cube::<F, R, C, SumSqOp>(x, &mut std, buf);
+    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
     std.mul_scalar(c_inv);
 
     // Step 4: std = sqrt(var + epsilon)
@@ -219,7 +219,7 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
 
     // Step 9: Compute reduction terms
     let mut sum_dl_dnorm = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp, &mut sum_dl_dnorm, buf);
+    cube::sum_rows(temp, &mut sum_dl_dnorm, buf);
 
     // temp = dl_dnorm currently, we need sum(dl_dnorm * norm)
     // Multiply temp by x (norm), sum, then rebuild dl_dnorm
@@ -229,7 +229,7 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut sum_dl_dnorm_norm = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp, &mut sum_dl_dnorm_norm, buf);
+    cube::sum_rows(temp, &mut sum_dl_dnorm_norm, buf);
 
     // Recompute dl_dnorm in temp (x still has norm)
     temp.copy_from(x);
@@ -301,7 +301,7 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
 
     // Step 1: mean = sum_rows(x) / C
     let mut mean = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(x, &mut mean, buf);
+    cube::sum_rows(x, &mut mean, buf);
     mean.mul_scalar(c_inv);
 
     // Step 2: x -= mean (col broadcast)
@@ -311,7 +311,7 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
 
     // Step 3: var = sum_rows(x^2) / C using SumSqOp
     let mut std = Rv::<F, R>::new();
-    cube::reduce_st_rows_cube::<F, R, C, SumSqOp>(x, &mut std, buf);
+    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
     std.mul_scalar(c_inv);
 
     // Step 4: std = sqrt(var + epsilon)
@@ -352,7 +352,7 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
 
     // Step 9: Compute reduction terms for grad_l
     let mut sum_dl_dnorm = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp, &mut sum_dl_dnorm, buf);
+    cube::sum_rows(temp, &mut sum_dl_dnorm, buf);
 
     // temp = dl_dnorm currently, we need sum(dl_dnorm * norm)
     temp.mul(x);
@@ -360,7 +360,7 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut sum_dl_dnorm_norm = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp, &mut sum_dl_dnorm_norm, buf);
+    cube::sum_rows(temp, &mut sum_dl_dnorm_norm, buf);
 
     // Recompute dl_dnorm in temp (x still has x_hat)
     temp.copy_from(x);
@@ -413,7 +413,7 @@ pub fn layer_norm_forward_save_intermediates<F: Float, R: Dim, C: Dim>(
 
     // Step 1: mean = sum_rows(x) / C
     let mut mean = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(x, &mut mean, buf);
+    cube::sum_rows(x, &mut mean, buf);
     mean.mul_scalar(c_inv);
 
     // Step 2: x -= mean
@@ -423,7 +423,7 @@ pub fn layer_norm_forward_save_intermediates<F: Float, R: Dim, C: Dim>(
 
     // Step 3: var = sum_rows(x^2) / C
     let mut std = Rv::<F, R>::new();
-    cube::reduce_st_rows_cube::<F, R, C, SumSqOp>(x, &mut std, buf);
+    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
     std.mul_scalar(c_inv);
 
     // Step 4: std = sqrt(var + epsilon)
@@ -476,7 +476,7 @@ pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
     let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
 
     // grad_ln_bias = sum_rows(grad_output)
-    cube::reduce_st_cols_cube::<F, R, C, SumOp>(grad_output, grad_ln_bias, buf);
+    cube::reduce_cols::<F, R, C, SumOp>(grad_output, grad_ln_bias, buf);
 
     // grad_ln_weight = sum_rows(grad_output * x_hat)
     temp.copy_from(grad_output);
@@ -484,7 +484,7 @@ pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    cube::reduce_st_cols_cube::<F, R, C, SumOp>(temp, grad_ln_weight, buf);
+    cube::reduce_cols::<F, R, C, SumOp>(temp, grad_ln_weight, buf);
 
     // grad_x_hat = grad_output * weight
     temp.copy_from(grad_output);
@@ -494,7 +494,7 @@ pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
 
     // sum_grad_x_hat = sum_cols(grad_x_hat) per row
     let mut sum_grad_x_hat = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp, &mut sum_grad_x_hat, buf);
+    cube::sum_rows(temp, &mut sum_grad_x_hat, buf);
 
     // Compute sum(grad_x_hat * x_hat) per row
     grad_x.copy_from(temp);
@@ -503,7 +503,7 @@ pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut sum_grad_x_hat_x_hat = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(grad_x, &mut sum_grad_x_hat_x_hat, buf);
+    cube::sum_rows(grad_x, &mut sum_grad_x_hat_x_hat, buf);
 
     // Now compute the final gradient:
     // grad_x = (grad_x_hat * C - sum_grad_x_hat - x_hat * sum_grad_x_hat_x_hat) / (std * C)
@@ -595,7 +595,7 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
     // sum1 = sum(-grad_L_grad_l / std) per row
     let mut sum1 = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp1, &mut sum1, buf);
+    cube::sum_rows(temp1, &mut sum1, buf);
 
     // sum2 = sum(-grad_L_grad_l / std * x_hat) per row
     temp1.mul(x_hat);
@@ -603,7 +603,7 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut sum2 = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp1, &mut sum2, buf);
+    cube::sum_rows(temp1, &mut sum2, buf);
 
     // grad_L_grad_x_hat = (1/std) * grad_L_grad_l + (1/F) * sum1 + (1/F) * x_hat * sum2
     // temp1 = (1/std) * grad_L_grad_l
@@ -654,10 +654,10 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    cube::reduce_st_cols_cube::<F, R, C, SumOp>(grad_L_Z1, grad_L_ln_weight, buf);
+    cube::reduce_cols::<F, R, C, SumOp>(grad_L_Z1, grad_L_ln_weight, buf);
 
     // grad_L_ln_bias = sum(grad_L_y) = sum(temp2)
-    cube::reduce_st_cols_cube::<F, R, C, SumOp>(temp2, grad_L_ln_bias, buf);
+    cube::reduce_cols::<F, R, C, SumOp>(temp2, grad_L_ln_bias, buf);
 
     // grad_L_x_hat = grad_L_y * ln_weight
     //              + (1/F) * grad_x_hat * sum(-grad_L_grad_l / std * x_hat)
@@ -676,7 +676,7 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut sum_gxh_xh = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp2, &mut sum_gxh_xh, buf);
+    cube::sum_rows(temp2, &mut sum_gxh_xh, buf);
 
     // Term 2: (1/F) * grad_x_hat * sum2 (sum2 = sum(-grad_L_grad_l / std * x_hat))
     temp2.copy_from(grad_x_hat);
@@ -709,7 +709,7 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
     // Compute sum(grad_x_hat) per row
     let mut sum_gxh = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(grad_x_hat, &mut sum_gxh, buf);
+    cube::sum_rows(grad_x_hat, &mut sum_gxh, buf);
 
     // grad_l = (grad_x_hat * F - sum_gxh - x_hat * sum_gxh_xh) / (std * F)
     temp2.copy_from(grad_x_hat);
@@ -756,13 +756,13 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
     // Compute sum(grad_L_std) per row
     let mut sum_grad_L_std = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(grad_L_Z1, &mut sum_grad_L_std, buf);
+    cube::sum_rows(grad_L_Z1, &mut sum_grad_L_std, buf);
 
     // Final: grad_L_Z1 = grad_L_x_hat / std - (1/F) * sum(grad_L_x_hat) / std + (1/F) * sum(grad_L_std) * x_hat
 
     // sum(grad_L_x_hat) per row - temp1 still has grad_L_x_hat
     let mut sum_grad_L_x_hat = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp1, &mut sum_grad_L_x_hat, buf);
+    cube::sum_rows(temp1, &mut sum_grad_L_x_hat, buf);
 
     // grad_L_Z1 = temp1 / std
     grad_L_Z1.copy_from(temp1);
@@ -799,14 +799,14 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut sum1_recomputed = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp1, &mut sum1_recomputed, buf);
+    cube::sum_rows(temp1, &mut sum1_recomputed, buf);
 
     temp1.mul(x_hat);
 
     sync_cube();
 
     let mut sum2_recomputed = Rv::<F, R>::new();
-    cube::sum_st_rows_cube(temp1, &mut sum2_recomputed, buf);
+    cube::sum_rows(temp1, &mut sum2_recomputed, buf);
 
     // grad_L_grad_x_hat = (1/std) * grad_L_grad_l + (1/F) * sum1 + (1/F) * x_hat * sum2
     temp1.copy_from(grad_L_grad_l);
@@ -933,7 +933,7 @@ mod tests {
 
         // Compute row means: sum across columns, divide by C
         let mut mean = Rv::<F, D8>::new();
-        cube::sum_st_rows_cube(&x, &mut mean, &mut buf);
+        cube::sum_rows(&x, &mut mean, &mut buf);
         mean.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Output is just the row means (broadcast to full row width)
@@ -957,7 +957,7 @@ mod tests {
 
         // Step 1: mean = sum_rows(x) / C
         let mut mean = Rv::<F, D8>::new();
-        cube::sum_st_rows_cube(&x, &mut mean, &mut buf);
+        cube::sum_rows(&x, &mut mean, &mut buf);
         mean.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Step 2: x -= mean
@@ -979,7 +979,7 @@ mod tests {
 
         // Compute sum of squares per row
         let mut sum_sq = Rv::<F, D8>::new();
-        cube::reduce_st_rows_cube::<F, D8, D32, SumSqOp>(&x, &mut sum_sq, &mut buf);
+        cube::reduce_rows::<F, D8, D32, SumSqOp>(&x, &mut sum_sq, &mut buf);
 
         // Output the sum of squares
         if UNIT_POS == 0 {
@@ -1000,7 +1000,7 @@ mod tests {
 
         // Step 1: mean = sum_rows(x) / C
         let mut mean = Rv::<F, D8>::new();
-        cube::sum_st_rows_cube(&x, &mut mean, &mut buf);
+        cube::sum_rows(&x, &mut mean, &mut buf);
         mean.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Step 2: x -= mean
@@ -1009,7 +1009,7 @@ mod tests {
 
         // Step 3: var = sum_rows(x^2) / C
         let mut std = Rv::<F, D8>::new();
-        cube::reduce_st_rows_cube::<F, D8, D32, SumSqOp>(&x, &mut std, &mut buf);
+        cube::reduce_rows::<F, D8, D32, SumSqOp>(&x, &mut std, &mut buf);
         std.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Step 4: std = sqrt(var + epsilon)

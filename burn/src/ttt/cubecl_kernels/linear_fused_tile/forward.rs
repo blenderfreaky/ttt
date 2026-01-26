@@ -372,7 +372,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     let mut bias_update_rv = P::f_reg_big();
-    cube::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
+    cube::reduce_cols_plane::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
 
     // Update bias in place
     bias_rv.sub(&bias_update_rv);

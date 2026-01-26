@@ -29,7 +29,7 @@ impl<F: Float> ReduceBuf<F> {
 ///
 /// St<F, R, C> -> Rv<F, C>
 #[cube]
-pub fn reduce_st_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
+pub fn reduce_cols_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, C>,
 ) {
@@ -59,7 +59,7 @@ pub fn reduce_st_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 ///
 /// St<F, R, C> -> Rv<F, R>
 #[cube]
-pub fn reduce_st_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
+pub fn reduce_rows_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, R>,
 ) {
@@ -95,14 +95,14 @@ pub fn reduce_st_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 
 /// Convenience function: sum St across rows (reduce cols)
 #[cube]
-pub fn sum_st_cols<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, C>) {
-    reduce_st_cols::<F, R, C, SumOp>(s_mem, result)
+pub fn sum_cols_plane<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, C>) {
+    reduce_cols_plane::<F, R, C, SumOp>(s_mem, result)
 }
 
 /// Convenience function: sum St across columns (reduce rows)
 #[cube]
-pub fn sum_st_rows<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, R>) {
-    reduce_st_rows::<F, R, C, SumOp>(s_mem, result)
+pub fn sum_rows_plane<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, R>) {
+    reduce_rows_plane::<F, R, C, SumOp>(s_mem, result)
 }
 
 // =============================================================================
@@ -148,7 +148,7 @@ fn reduce_across_planes<F: Float, O: ReductionOp<F>>(val: F, buf: &mut ReduceBuf
 ///
 /// St<F, R, C> -> Rv<F, C>
 #[cube]
-pub fn reduce_st_cols_cube<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
+pub fn reduce_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, C>,
     buf: &mut ReduceBuf<F>,
@@ -186,7 +186,7 @@ pub fn reduce_st_cols_cube<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 ///
 /// St<F, R, C> -> Rv<F, R>
 #[cube]
-pub fn reduce_st_rows_cube<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
+pub fn reduce_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, R>,
     buf: &mut ReduceBuf<F>,
@@ -226,22 +226,22 @@ pub fn reduce_st_rows_cube<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 
 /// Convenience function: sum St across rows (reduce cols) across full cube
 #[cube]
-pub fn sum_st_cols_cube<F: Float, R: Dim, C: Dim>(
+pub fn sum_cols<F: Float, R: Dim, C: Dim>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, C>,
     buf: &mut ReduceBuf<F>,
 ) {
-    reduce_st_cols_cube::<F, R, C, SumOp>(s_mem, result, buf)
+    reduce_cols::<F, R, C, SumOp>(s_mem, result, buf)
 }
 
 /// Convenience function: sum St across columns (reduce rows) across full cube
 #[cube]
-pub fn sum_st_rows_cube<F: Float, R: Dim, C: Dim>(
+pub fn sum_rows<F: Float, R: Dim, C: Dim>(
     s_mem: &St<F, R, C>,
     result: &mut Rv<F, R>,
     buf: &mut ReduceBuf<F>,
 ) {
-    reduce_st_rows_cube::<F, R, C, SumOp>(s_mem, result, buf)
+    reduce_rows::<F, R, C, SumOp>(s_mem, result, buf)
 }
 
 #[cfg(test)]
@@ -277,7 +277,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_st_rows::<F, D8, D8>(&st, &mut result);
+        sum_rows_plane::<F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
@@ -309,7 +309,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_st_cols::<F, D8, D8>(&st, &mut result);
+        sum_cols_plane::<F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
@@ -342,7 +342,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_st_rows_cube::<F, D8, D8>(&st, &mut result, &mut reduce_buf);
+        sum_rows::<F, D8, D8>(&st, &mut result, &mut reduce_buf);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
@@ -375,7 +375,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_st_cols_cube::<F, D8, D8>(&st, &mut result, &mut reduce_buf);
+        sum_cols::<F, D8, D8>(&st, &mut result, &mut reduce_buf);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
