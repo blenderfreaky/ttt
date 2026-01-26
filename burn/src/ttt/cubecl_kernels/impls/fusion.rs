@@ -62,12 +62,14 @@ where
 
     fn backward(
         inputs: K::Inputs<FloatTensor<Self>>,
+        outputs: Option<K::Outputs<FloatTensor<Self>>>,
         grad_outputs: K::Outputs<FloatTensor<Self>>,
     ) -> K::Inputs<FloatTensor<Self>> {
         let client = inputs.client().clone();
         let inner_inputs = inputs.map(|t| fusion_in::<B>(t)).into();
+        let inner_outputs = outputs.map(|o| o.map(|t| fusion_in::<B>(t)).into());
         let inner_grad_outputs = grad_outputs.map(|t| fusion_in::<B>(t)).into();
-        let grads = B::backward(inner_inputs, inner_grad_outputs);
+        let grads = B::backward(inner_inputs, inner_outputs, inner_grad_outputs);
         grads.map(|t| fusion_out::<B>(t, &client)).into()
     }
 }

@@ -247,7 +247,7 @@ pub fn sum_st_rows_cube<F: Float, R: Dim, C: Dim>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{test_utils::TestFloat, util::sync_planes};
+    use crate::{test_utils::TestFloat, util::sync_cube};
     use test_case::test_matrix;
 
     const ROWS: usize = 8;
@@ -274,7 +274,7 @@ mod tests {
             st.data[s_idx] = input[i];
         }
 
-        sync_planes();
+        sync_cube();
 
         let mut result = Rv::<F, D8>::new();
         sum_st_rows::<F, D8, D8>(&st, &mut result);
@@ -306,7 +306,7 @@ mod tests {
             st.data[s_idx] = input[i];
         }
 
-        sync_planes();
+        sync_cube();
 
         let mut result = Rv::<F, D8>::new();
         sum_st_cols::<F, D8, D8>(&st, &mut result);

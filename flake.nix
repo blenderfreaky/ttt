@@ -105,6 +105,22 @@
         legacyPackages = own-pkgs;
 
         devShells.default = pkgs.mkShell {
+          shellHook = ''
+            # Generate and source ttt shell completions
+            if command -v ttt &> /dev/null; then
+              case "$SHELL" in
+                */zsh)
+                  eval "$(ttt completions zsh)"
+                  ;;
+                */bash)
+                  eval "$(ttt completions bash)"
+                  ;;
+                */fish)
+                  ttt completions fish | source
+                  ;;
+              esac
+            fi
+          '';
           buildInputs = with pkgs;
             [
               stdenv.cc.cc.lib

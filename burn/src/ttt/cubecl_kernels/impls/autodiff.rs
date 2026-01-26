@@ -10,7 +10,7 @@ use burn_backend::Shape;
 use burn_backend::TensorMetadata;
 
 use crate::ttt::cubecl_kernels::bundle::TensorBundle;
-use crate::ttt::cubecl_kernels::kernel::{FusedKernel, FusedKernelBackend};
+use crate::ttt::cubecl_kernels::kernel::{BackwardImpl, FusedKernel, FusedKernelBackend};
 use std::fmt::Debug;
 
 /// Backward op for a specific output index.
@@ -30,8 +30,9 @@ where
 {
     type State = (
         K::Inputs<B::FloatTensorPrimitive>,
-        [(Vec<usize>, FloatDType); M], // Output shapes for creating zeros
-        [Option<NodeId>; N],           // Input node IDs for gradient registration
+        Option<K::Outputs<B::FloatTensorPrimitive>>, // Saved outputs (if needed)
+        [(Vec<usize>, FloatDType); M],               // Output shapes for creating zeros
+        [Option<NodeId>; N],                         // Input node IDs for gradient registration
     );
 
     fn backward(
@@ -41,7 +42,7 @@ where
         _checkpointer: &mut Checkpointer,
     ) {
         let grad_output = grads.consume::<B>(&ops.node);
-        let (saved_inputs, output_shapes, input_node_ids) = ops.state;
+        let (saved_inputs, saved_outputs, output_shapes, input_node_ids) = ops.state;
 
         // Get device from one of the saved inputs
         let inputs_arr = saved_inputs.into_array();
@@ -64,7 +65,7 @@ where
         // Reconstruct saved_inputs from the array
         let saved_inputs = K::Inputs::from_array(inputs_arr);
 
-        let grad_inputs = B::backward(saved_inputs, grad_outputs);
+        let grad_inputs = B::backward(saved_inputs, saved_outputs, grad_outputs);
 
         // Register gradients for all tracked parents (accumulates if called multiple times)
         for (grad, node_id) in grad_inputs
@@ -107,6 +108,13 @@ where
         // Save inputs for backward (shared by all outputs)
         let saved_inputs = K::Inputs::from_array(primitives);
 
+        // Optionally save outputs for backward (based on kernel's backward requirements)
+        let saved_outputs = if K::Backward::should_save_outputs() {
+            Some(K::Outputs::from_array(output_primitives.clone()))
+        } else {
+            None
+        };
+
         // Track each output separately
         let tracked_outputs: [FloatTensor<Self>; M] = std::array::from_fn(|idx| {
             let backward_op = OutputBackwardOp::<K, N, M> {
@@ -120,7 +128,12 @@ where
                 .stateful()
             {
                 OpsKind::Tracked(prep) => prep.finish(
-                    (saved_inputs.clone(), output_shapes.clone(), input_node_ids),
+                    (
+                        saved_inputs.clone(),
+                        saved_outputs.clone(),
+                        output_shapes.clone(),
+                        input_node_ids,
+                    ),
                     output_primitives[idx].clone(),
                 ),
                 OpsKind::UnTracked(prep) => prep.finish(output_primitives[idx].clone()),
@@ -132,6 +145,7 @@ where
 
     fn backward(
         _inputs: K::Inputs<FloatTensor<Self>>,
+        _outputs: Option<K::Outputs<FloatTensor<Self>>>,
         _grad_outputs: K::Outputs<FloatTensor<Self>>,
     ) -> K::Inputs<FloatTensor<Self>> {
         panic!("Second-order gradients not supported")

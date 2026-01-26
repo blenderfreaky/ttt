@@ -1,4 +1,5 @@
 use cubecl::prelude::*;
+use thundercube::test_utils::TestRuntime;
 use thundercube::{
     LINE_SIZE,
     streaming::{AsyncStream, GpuPtr},
@@ -6,8 +7,6 @@ use thundercube::{
     tiles::{D64, Dim, DimOrOne},
     util::wait_for_sync,
 };
-
-type TestRuntime = cubecl::TestRuntime;
 
 // Control flag indices
 const READY: usize = 0;

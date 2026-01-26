@@ -202,7 +202,7 @@ impl<F: Float, R: Dim, C: DimOrOne> Default for St<F, R, C> {
 mod tests {
     use super::*;
     use crate::test_utils::TestFloat;
-    use crate::util::sync_planes;
+    use crate::util::sync_cube;
 
     const SIZE: usize = 8;
 
@@ -227,11 +227,11 @@ mod tests {
             st.data[s_idx] = input[i];
         }
 
-        sync_planes();
+        sync_cube();
 
         st.tril();
 
-        sync_planes();
+        sync_cube();
 
         // Read back from St (with swizzle)
         for i in range_stepped(tid, D8::VALUE * vec_stride, num_threads) {

@@ -1,3 +1,4 @@
+pub mod broadcast;
 mod load;
 mod mma;
 mod reduce;

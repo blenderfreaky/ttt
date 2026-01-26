@@ -7,8 +7,8 @@ use thundercube::{
     LINE_SIZE,
     plane::{load_st_direct, sum_st_cols, sum_st_rows},
     test_utils::{client, get_strides, upload},
-    tiles::{D16, D32, D4, D8, Dim, DimOrOne, Rt, Rv, St},
-    util::sync_planes,
+    tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
+    util::sync_cube,
 };
 
 type TestRuntime = cubecl::TestRuntime;
@@ -48,7 +48,7 @@ fn bench_st_sum_rows<F: Float, R: Dim, C: Dim>(
 ) {
     let mut st = St::<F, R, C>::new();
     load_st_direct(input, &mut st, 0, 0, 0);
-    sync_planes();
+    sync_cube();
 
     let mut result = Rv::<F, R>::new();
     sum_st_rows::<F, R, C>(&st, &mut result);
@@ -65,7 +65,7 @@ fn bench_st_sum_cols<F: Float, R: Dim, C: Dim>(
 ) {
     let mut st = St::<F, R, C>::new();
     load_st_direct(input, &mut st, 0, 0, 0);
-    sync_planes();
+    sync_cube();
 
     let mut result = Rv::<F, C>::new();
     sum_st_cols::<F, R, C>(&st, &mut result);
@@ -96,8 +96,9 @@ macro_rules! bench_rt_reduce_impl {
             b.iter(|| {
                 let input =
                     unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_in, size, LINE_SIZE) };
-                let output =
-                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_out, out_dim, LINE_SIZE) };
+                let output = unsafe {
+                    ArrayArg::from_raw_parts::<Line<f32>>(&handle_out, out_dim, LINE_SIZE)
+                };
 
                 $kernel::launch::<f32, $rows, $cols, TestRuntime>(
                     &client,
@@ -138,8 +139,9 @@ macro_rules! bench_st_reduce_impl {
                 let input = unsafe {
                     TensorArg::from_raw_parts::<Line<f32>>(&handle_in, &strides, &shape, LINE_SIZE)
                 };
-                let output =
-                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_out, out_dim, LINE_SIZE) };
+                let output = unsafe {
+                    ArrayArg::from_raw_parts::<Line<f32>>(&handle_out, out_dim, LINE_SIZE)
+                };
 
                 $kernel::launch::<f32, $rows, $cols, TestRuntime>(
                     &client,

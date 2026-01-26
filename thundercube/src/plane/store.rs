@@ -320,27 +320,3 @@ pub fn store_sv_direct<F: Float, L: Dim>(
     }
 }
 
-/// Stores a register vector (Rv) to global memory.
-///
-/// Each thread stores the same data (all threads write same values).
-/// Use for small vectors where all threads computed the same result.
-///
-/// # Arguments
-/// * `r_mem` - Source register vector
-/// * `g_mem` - Destination 1D tensor of Lines
-/// * `base_offset` - Scalar offset into the destination tensor
-#[cube]
-pub fn store_rv_direct<F: Float, L: Dim>(
-    r_mem: &Rv<F, L>,
-    g_mem: &mut Tensor<Line<F>>,
-    base_offset: usize,
-) {
-    // Only one thread needs to write (all have same data)
-    if UNIT_POS == 0 {
-        #[unroll(L::LINES <= UNROLL_LIMIT)]
-        for i in 0..L::LINES {
-            let line_idx = base_offset / LINE_SIZE + i;
-            g_mem[line_idx] = r_mem.data[i];
-        }
-    }
-}

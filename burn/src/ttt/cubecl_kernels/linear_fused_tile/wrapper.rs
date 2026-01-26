@@ -212,12 +212,13 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
 mod tests {
     use super::*;
     use crate::ttt::{
-        CpuBackend, GpuBackend,
+        CpuBackend, GpuAutodiffBackend, GpuBackend,
         layer::{Qkv, TTTInnerModel, TTTInputsInner},
         linear::{TTTLinear, TTTLinearConfig},
         util::MultiHeadLayerNorm,
     };
     use burn::{
+        backend::Autodiff,
         module::{Ignored, Param},
         tensor::TensorData,
     };
@@ -250,11 +251,11 @@ mod tests {
 
     #[test]
     fn test_fused_tile_vs_ttt_linear() {
-        // Use 16x64 tiles (CS=16, F=64)
+        // Use 8x64 tiles (CS=8, F=32)
         let batch_size = 2usize;
         let num_heads = 2usize;
-        let head_dim = 64usize;
-        let seq_len = 16usize;
+        let head_dim = 32usize;
+        let seq_len = 8usize;
         let hidden_size = num_heads * head_dim;
         let epsilon = 1e-6f64;
 
@@ -443,11 +444,11 @@ mod tests {
 
     #[test]
     fn test_fused_tile_multi_vs_ttt_linear() {
-        // Test multi-stage kernel: 4 mini-batches of 16 tokens each = 64 total
+        // Test multi-stage kernel: 4 mini-batches of 8 tokens each = 64 total
         let batch_size = 2usize;
         let num_heads = 2usize;
-        let head_dim = 64usize;
-        let mini_batch_size = 16usize;
+        let head_dim = 32usize;
+        let mini_batch_size = 8usize;
         let num_stages = 4usize;
         let seq_len = mini_batch_size * num_stages;
         let hidden_size = num_heads * head_dim;
@@ -646,6 +647,324 @@ mod tests {
             1e-2,
             1e-3,
             "FusedTileMultiTTTLinear vs TTTLinear bias update",
+        );
+    }
+
+    #[test]
+    fn test_fused_tile_backward_gradients_vs_reference() {
+        // Test backward gradients of tiled kernel against CPU autodiff reference
+        // Use 8x32 tiles (CS=8, F=32) - smaller tiles to fit in shared memory
+        let batch_size = 2usize;
+        let num_heads = 2usize;
+        let head_dim = 32usize;
+        let seq_len = 8usize;
+        let hidden_size = num_heads * head_dim;
+        let epsilon = 1e-6f64;
+
+        // Seed RNG for deterministic results
+        let cpu_device: <CpuBackend as Backend>::Device = Default::default();
+        CpuBackend::seed(&cpu_device, 42);
+
+        let config = Arc::new(crate::ttt::TTTConfig {
+            num_heads,
+            hidden_size,
+            token_size: hidden_size,
+            mini_batch_size: seq_len,
+            base_lr: 1.0,
+            epsilon,
+            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
+        });
+        let linear_config = Arc::new(TTTLinearConfig::new());
+
+        // Create CPU reference with autodiff
+        let ttt_linear_cpu: TTTLinear<Autodiff<CpuBackend>> =
+            TTTLinear::new(&config, &linear_config, &cpu_device);
+        let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
+
+        let weight_init_data: Vec<f32> =
+            ttt_linear_cpu.weight_init.val().to_data().to_vec().unwrap();
+        let bias_init_data: Vec<f32> = ttt_linear_cpu.bias_init.val().to_data().to_vec().unwrap();
+        let ln_weight_data: Vec<f32> = ttt_linear_cpu
+            .layer_norm
+            .weight
+            .val()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let ln_weight_data_copy = ln_weight_data.clone();
+        let ln_bias_data: Vec<f32> = ttt_linear_cpu
+            .layer_norm
+            .bias
+            .val()
+            .to_data()
+            .to_vec()
+            .unwrap();
+
+        // Create input tensors with gradients
+        let xq_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &cpu_device,
+        )
+        .require_grad();
+        let xk_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &cpu_device,
+        )
+        .require_grad();
+        let xv_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &cpu_device,
+        )
+        .require_grad();
+        let token_eta_cpu: Tensor<Autodiff<CpuBackend>, 1> =
+            Tensor::arange(1..(seq_len as i64 + 1), &cpu_device)
+                .float()
+                .recip();
+        let ttt_lr_eta_cpu: Tensor<Autodiff<CpuBackend>, 3> = Tensor::random(
+            [batch_size, num_heads, seq_len],
+            burn::tensor::Distribution::Uniform(0.01, 0.05),
+            &cpu_device,
+        )
+        .require_grad();
+
+        // Extract data for GPU
+        let xq_data: Vec<f32> = xq_cpu.clone().inner().to_data().to_vec().unwrap();
+        let xk_data: Vec<f32> = xk_cpu.clone().inner().to_data().to_vec().unwrap();
+        let xv_data: Vec<f32> = xv_cpu.clone().inner().to_data().to_vec().unwrap();
+        let token_eta_data: Vec<f32> = token_eta_cpu.clone().inner().to_data().to_vec().unwrap();
+        let ttt_lr_eta_data: Vec<f32> = ttt_lr_eta_cpu.clone().inner().to_data().to_vec().unwrap();
+
+        // Run CPU forward and backward
+        let inputs_cpu = TTTInputsInner {
+            qkv: Qkv {
+                xq: xq_cpu.clone(),
+                xk: xk_cpu.clone(),
+                xv: xv_cpu.clone(),
+            },
+            token_eta: token_eta_cpu,
+            ttt_lr_eta: ttt_lr_eta_cpu.clone(),
+            start_idx: 0,
+        };
+
+        let output_cpu = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, inputs_cpu);
+        let loss_cpu = output_cpu.sum();
+        let grads_cpu = loss_cpu.backward();
+
+        let grad_xq_cpu: Vec<f32> = xq_cpu.grad(&grads_cpu).unwrap().to_data().to_vec().unwrap();
+        let grad_xk_cpu: Vec<f32> = xk_cpu.grad(&grads_cpu).unwrap().to_data().to_vec().unwrap();
+        let grad_xv_cpu: Vec<f32> = xv_cpu.grad(&grads_cpu).unwrap().to_data().to_vec().unwrap();
+        let grad_ttt_lr_eta_cpu: Vec<f32> = ttt_lr_eta_cpu
+            .grad(&grads_cpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+
+        // Create GPU tensors for tiled kernel with autodiff
+        let gpu_device: <GpuAutodiffBackend as Backend>::Device = Default::default();
+
+        let ttt_linear: TTTLinear<GpuAutodiffBackend> = TTTLinear {
+            weight_init: Param::from_tensor(Tensor::from_data(
+                TensorData::new(weight_init_data, [num_heads, head_dim, head_dim]),
+                &gpu_device,
+            )),
+            bias_init: Param::from_tensor(Tensor::from_data(
+                TensorData::new(bias_init_data, [num_heads, head_dim]),
+                &gpu_device,
+            )),
+            layer_norm: MultiHeadLayerNorm {
+                weight: Param::from_tensor(Tensor::from_data(
+                    TensorData::new(ln_weight_data, [num_heads, head_dim]),
+                    &gpu_device,
+                )),
+                bias: Param::from_tensor(Tensor::from_data(
+                    TensorData::new(ln_bias_data, [num_heads, head_dim]),
+                    &gpu_device,
+                )),
+                epsilon,
+            },
+            config: Ignored(config),
+        };
+
+        // Create double-Fused wrapper for tiled kernel
+        let inner_fused: Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>> =
+            ttt_linear.into();
+        let fused_tile: Fused<
+            GpuAutodiffBackend,
+            Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>,
+        > = inner_fused.into();
+
+        let mut fused_state = fused_tile.init_state(batch_size);
+
+        // Create GPU input tensors with gradients
+        let xq_gpu: Tensor<GpuAutodiffBackend, 4> = Tensor::from_data(
+            TensorData::new(xq_data, [batch_size, num_heads, seq_len, head_dim]),
+            &gpu_device,
+        )
+        .require_grad();
+        let xk_gpu: Tensor<GpuAutodiffBackend, 4> = Tensor::from_data(
+            TensorData::new(xk_data, [batch_size, num_heads, seq_len, head_dim]),
+            &gpu_device,
+        )
+        .require_grad();
+        let xv_gpu: Tensor<GpuAutodiffBackend, 4> = Tensor::from_data(
+            TensorData::new(xv_data, [batch_size, num_heads, seq_len, head_dim]),
+            &gpu_device,
+        )
+        .require_grad();
+        let token_eta_gpu: Tensor<GpuAutodiffBackend, 1> =
+            Tensor::from_data(TensorData::new(token_eta_data, [seq_len]), &gpu_device);
+        let ttt_lr_eta_gpu: Tensor<GpuAutodiffBackend, 3> = Tensor::from_data(
+            TensorData::new(ttt_lr_eta_data, [batch_size, num_heads, seq_len]),
+            &gpu_device,
+        )
+        .require_grad();
+
+        let inputs_gpu = TTTInputsInner {
+            qkv: Qkv {
+                xq: xq_gpu.clone(),
+                xk: xk_gpu.clone(),
+                xv: xv_gpu.clone(),
+            },
+            token_eta: token_eta_gpu,
+            ttt_lr_eta: ttt_lr_eta_gpu.clone(),
+            start_idx: 0,
+        };
+
+        // Run tiled forward and backward
+        let output_gpu = fused_tile.forward_mini_batch(&mut fused_state, inputs_gpu);
+        let loss_gpu = output_gpu.sum();
+        let grads_gpu = loss_gpu.backward();
+
+        let grad_xq_gpu: Vec<f32> = xq_gpu.grad(&grads_gpu).unwrap().to_data().to_vec().unwrap();
+        let grad_xk_gpu: Vec<f32> = xk_gpu.grad(&grads_gpu).unwrap().to_data().to_vec().unwrap();
+        let grad_xv_gpu: Vec<f32> = xv_gpu.grad(&grads_gpu).unwrap().to_data().to_vec().unwrap();
+        let grad_ttt_lr_eta_gpu: Vec<f32> = ttt_lr_eta_gpu
+            .grad(&grads_gpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+
+        // Debug: print ln_weight and verify it matches GPU
+        println!("\n=== Inputs Analysis ===");
+        println!("ln_weight[0..5]: {:?}", &ln_weight_data_copy[0..5]);
+
+        // Debug: print tolerance analysis and ratios for all gradients
+        println!("\n=== Gradient Analysis ===");
+
+        // Analyze xq
+        let xq_ratios: Vec<f32> = grad_xq_cpu
+            .iter()
+            .zip(grad_xq_gpu.iter())
+            .filter(|(c, _)| c.abs() > 1e-6)
+            .map(|(c, g)| g / c)
+            .collect();
+        let xq_mean_ratio: f32 = xq_ratios.iter().sum::<f32>() / xq_ratios.len() as f32;
+        println!("grad_xq: mean ratio GPU/CPU = {:.4}", xq_mean_ratio);
+        println!("grad_xq_cpu[0..5]: {:?}", &grad_xq_cpu[0..5]);
+        println!("grad_xq_gpu[0..5]: {:?}", &grad_xq_gpu[0..5]);
+
+        // Analyze xk
+        let xk_ratios: Vec<f32> = grad_xk_cpu
+            .iter()
+            .zip(grad_xk_gpu.iter())
+            .filter(|(c, _)| c.abs() > 1e-6)
+            .map(|(c, g)| g / c)
+            .collect();
+        let xk_mean_ratio: f32 = xk_ratios.iter().sum::<f32>() / xk_ratios.len() as f32;
+        println!("grad_xk: mean ratio GPU/CPU = {:.4}", xk_mean_ratio);
+        println!("grad_xk_cpu[0..5]: {:?}", &grad_xk_cpu[0..5]);
+        println!("grad_xk_gpu[0..5]: {:?}", &grad_xk_gpu[0..5]);
+
+        // Analyze xv
+        let xv_ratios: Vec<f32> = grad_xv_cpu
+            .iter()
+            .zip(grad_xv_gpu.iter())
+            .filter(|(c, _)| c.abs() > 1e-6)
+            .map(|(c, g)| g / c)
+            .collect();
+        let xv_mean_ratio: f32 = xv_ratios.iter().sum::<f32>() / xv_ratios.len() as f32;
+        println!("grad_xv: mean ratio GPU/CPU = {:.4}", xv_mean_ratio);
+        println!("grad_xv_cpu[0..5]: {:?}", &grad_xv_cpu[0..5]);
+        println!("grad_xv_gpu[0..5]: {:?}", &grad_xv_gpu[0..5]);
+
+        // Analyze ttt_lr_eta
+        let eta_ratios: Vec<f32> = grad_ttt_lr_eta_cpu
+            .iter()
+            .zip(grad_ttt_lr_eta_gpu.iter())
+            .filter(|(c, _)| c.abs() > 1e-6)
+            .map(|(c, g)| g / c)
+            .collect();
+        let eta_mean_ratio: f32 = if !eta_ratios.is_empty() {
+            eta_ratios.iter().sum::<f32>() / eta_ratios.len() as f32
+        } else {
+            0.0
+        };
+        println!(
+            "grad_ttt_lr_eta: mean ratio GPU/CPU = {:.4}",
+            eta_mean_ratio
+        );
+        println!(
+            "grad_eta_cpu[0..5]: {:?}",
+            &grad_ttt_lr_eta_cpu[0..5.min(grad_ttt_lr_eta_cpu.len())]
+        );
+        println!(
+            "grad_eta_gpu[0..5]: {:?}",
+            &grad_ttt_lr_eta_gpu[0..5.min(grad_ttt_lr_eta_gpu.len())]
+        );
+
+        println!("=== End Analysis ===\n");
+
+        for tol_mult in [1.0, 2.0, 5.0, 10.0] {
+            let rtol = 2e-2 * tol_mult;
+            let atol = 1e-3 * tol_mult;
+            let mut xk_mismatches = 0;
+            for i in 0..grad_xk_cpu.len() {
+                let tol = atol + rtol * grad_xk_cpu[i].abs();
+                if (grad_xk_cpu[i] - grad_xk_gpu[i]).abs() > tol {
+                    xk_mismatches += 1;
+                }
+            }
+            println!(
+                "At {}x tolerance: xk mismatches={}/{}",
+                tol_mult,
+                xk_mismatches,
+                grad_xk_cpu.len()
+            );
+        }
+
+        // Compare gradients
+        assert_data_close(
+            &grad_xq_gpu,
+            &grad_xq_cpu,
+            2e-2,
+            1e-3,
+            "grad_xq: tiled fused vs reference",
+        );
+        assert_data_close(
+            &grad_xk_gpu,
+            &grad_xk_cpu,
+            2e-2,
+            1e-3,
+            "grad_xk: tiled fused vs reference",
+        );
+        assert_data_close(
+            &grad_xv_gpu,
+            &grad_xv_cpu,
+            2e-2,
+            1e-3,
+            "grad_xv: tiled fused vs reference",
+        );
+        assert_data_close(
+            &grad_ttt_lr_eta_gpu,
+            &grad_ttt_lr_eta_cpu,
+            2e-2,
+            1e-3,
+            "grad_ttt_lr_eta: tiled fused vs reference",
         );
     }
 }

@@ -18,8 +18,8 @@ use crate::ttt::cubecl_kernels::ttt::TttKernel;
 /// - `GeluTanhKernel` / `GeluBwdKernel` - GELU activation kernels
 pub trait FusedTttBackend:
     FusedKernelBackend<TttKernel, 9, 3>
-    + FusedKernelBackend<TttTileKernel, 9, 3>
-    + FusedKernelBackend<TttTileMultiKernel, 9, 3>
+    + FusedKernelBackend<TttTileKernel, 9, 10>
+    + FusedKernelBackend<TttTileMultiKernel, 9, 10>
     + FusedKernelBackend<GeluTanhKernel, 1, 1>
     + FusedKernelBackend<GeluBwdKernel, 1, 1>
 {
@@ -27,8 +27,8 @@ pub trait FusedTttBackend:
 
 impl<B> FusedTttBackend for B where
     B: FusedKernelBackend<TttKernel, 9, 3>
-        + FusedKernelBackend<TttTileKernel, 9, 3>
-        + FusedKernelBackend<TttTileMultiKernel, 9, 3>
+        + FusedKernelBackend<TttTileKernel, 9, 10>
+        + FusedKernelBackend<TttTileMultiKernel, 9, 10>
         + FusedKernelBackend<GeluTanhKernel, 1, 1>
         + FusedKernelBackend<GeluBwdKernel, 1, 1>
 {

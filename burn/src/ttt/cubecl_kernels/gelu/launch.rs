@@ -8,7 +8,7 @@ use crate::ttt::cubecl_kernels::gelu_tanh::{
     launch_gelu_bwd_forward, launch_gelu_tanh, launch_gelu_tanh_backward,
     launch_gelu_tanh_backward_backward,
 };
-use crate::ttt::cubecl_kernels::kernel::FusedKernel;
+use crate::ttt::cubecl_kernels::kernel::{CanBackwardNoOut, FusedKernel, UseNoOut};
 
 use super::types::{
     GeluBwdKernel, GeluInput, GeluOutput, GeluTanhBackwardBackwardKernel, GeluTanhBackwardKernel,
@@ -27,6 +27,7 @@ fn empty_like<R: CubeRuntime, F: FloatElement>(template: &CubeTensor<R>) -> Cube
 impl FusedKernel<1, 1> for GeluTanhKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
+    type Backward = UseNoOut;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
@@ -38,8 +39,10 @@ impl FusedKernel<1, 1> for GeluTanhKernel {
 
         GeluOutput { output }
     }
+}
 
-    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+impl CanBackwardNoOut<1, 1> for GeluTanhKernel {
+    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
         grad_outputs: GeluOutput<CubeTensor<R>>,
     ) -> GeluInput<CubeTensor<R>> {
@@ -62,6 +65,7 @@ impl FusedKernel<1, 1> for GeluTanhKernel {
 impl FusedKernel<1, 1> for GeluBwdKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
+    type Backward = UseNoOut;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
@@ -77,8 +81,10 @@ impl FusedKernel<1, 1> for GeluBwdKernel {
 
         GeluOutput { output }
     }
+}
 
-    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+impl CanBackwardNoOut<1, 1> for GeluBwdKernel {
+    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
         grad_outputs: GeluOutput<CubeTensor<R>>,
     ) -> GeluInput<CubeTensor<R>> {
@@ -101,6 +107,7 @@ impl FusedKernel<1, 1> for GeluBwdKernel {
 impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
+    type Backward = UseNoOut;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
@@ -117,8 +124,10 @@ impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
 
         GeluOutput { output }
     }
+}
 
-    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+impl CanBackwardNoOut<1, 1> for GeluTanhBackwardKernel {
+    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
         grad_outputs: GeluOutput<CubeTensor<R>>,
     ) -> GeluInput<CubeTensor<R>> {
@@ -141,6 +150,7 @@ impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
 impl FusedKernel<1, 1> for GeluTanhBackwardBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
+    type Backward = UseNoOut;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
@@ -159,8 +169,10 @@ impl FusedKernel<1, 1> for GeluTanhBackwardBackwardKernel {
 
         GeluOutput { output }
     }
+}
 
-    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+impl CanBackwardNoOut<1, 1> for GeluTanhBackwardBackwardKernel {
+    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
         _inputs: GeluInput<CubeTensor<R>>,
         _grad_outputs: GeluOutput<CubeTensor<R>>,
     ) -> GeluInput<CubeTensor<R>> {

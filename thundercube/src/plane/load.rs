@@ -167,48 +167,69 @@ pub fn load_st_transpose<F: Float, R: Dim, C: Dim>(
     }
 }
 
-/// Loads a tile from global memory directly into per-thread registers without transposing.
+/// Cooperatively loads per-thread register tiles from global memory without transposing.
 ///
-/// Unlike `load_st_*`, this is not a cooperative operation - each thread loads its own
-/// private register tile independently. Out-of-bounds accesses are handled by returning
-/// zeros, enabling safe loads at matrix boundaries.
+/// Each thread loads its own register tile sub-region. Threads are mapped to sub-tiles
+/// in row-major order based on UNIT_POS, matching `store_rt_direct`. Threads with
+/// UNIT_POS >= num_sub_tiles are safely skipped (Rt unchanged).
+///
+/// Out-of-bounds reads return zeros, enabling safe loads at matrix boundaries.
+///
+/// # Type Parameters
+/// * `R, C` - Register tile dimensions
+/// * `SR, SC` - Full tile dimensions (determines thread mapping)
 ///
 /// # Arguments
 /// * `g_mem` - Source tensor in global memory (any rank, last 2 dims treated as matrix)
 /// * `rt_mem` - Destination register tile (`Rt`), stored row-major as `[rows, cols/LINE_SIZE]` Lines
 /// * `base_offset` - Scalar offset into `g_mem` from batch dimensions
-/// * `g_offset_row` - Row offset within the matrix for this thread's tile
-/// * `g_offset_col` - Column offset within the matrix for this thread's tile
+/// * `g_offset_row` - Additional row offset within the matrix (usually 0)
+/// * `g_offset_col` - Additional column offset within the matrix (usually 0)
 #[cube]
-pub fn load_rt_direct<F: Float, R: Dim, C: Dim>(
+pub fn load_rt_direct<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
     g_mem: &Tensor<Line<F>>,
     rt_mem: &mut Rt<F, R, C>,
     base_offset: usize,
     g_offset_row: usize,
     g_offset_col: usize,
 ) {
-    let rt_rows = R::VALUE;
-    let num_n_vecs = C::LINES;
+    let tiles_per_row = SC::VALUE / C::VALUE;
+    let tiles_per_col = SR::VALUE / R::VALUE;
+    let num_tiles = tiles_per_row * tiles_per_col;
 
-    let rank = g_mem.rank();
-    let num_rows = g_mem.shape(rank - 2);
-    let num_cols = g_mem.shape(rank - 1);
-    let row_stride = g_mem.stride(rank - 2);
+    // Guard: only threads with valid tile indices participate
+    if (UNIT_POS as usize) < num_tiles {
+        let tile_idx = UNIT_POS as usize;
+        let tile_row = tile_idx / tiles_per_row;
+        let tile_col = tile_idx % tiles_per_row;
 
-    #[unroll(R::VALUE <= UNROLL_LIMIT)]
-    for row in 0..rt_rows {
-        let g_r = g_offset_row + row;
-        #[unroll(C::LINES <= UNROLL_LIMIT)]
-        for nl in 0..num_n_vecs {
-            let g_c = g_offset_col + nl * LINE_SIZE;
-            let rt_idx = row * num_n_vecs + nl;
+        // Compute this thread's offset within the full tile
+        let offset_row = tile_row * R::VALUE;
+        let offset_col = tile_col * C::VALUE;
 
-            if g_r < num_rows && g_c < num_cols {
-                let scalar_idx = base_offset + g_r * row_stride + g_c;
-                let line_idx = scalar_idx / LINE_SIZE;
-                rt_mem.data[rt_idx] = g_mem[line_idx];
-            } else {
-                rt_mem.data[rt_idx] = Line::empty(LINE_SIZE).fill(F::from_int(0));
+        let rt_rows = R::VALUE;
+        let num_n_vecs = C::LINES;
+
+        let rank = g_mem.rank();
+        let num_rows = g_mem.shape(rank - 2);
+        let num_cols = g_mem.shape(rank - 1);
+        let row_stride = g_mem.stride(rank - 2);
+
+        #[unroll(R::VALUE <= UNROLL_LIMIT)]
+        for row in 0..rt_rows {
+            let g_r = g_offset_row + offset_row + row;
+            #[unroll(C::LINES <= UNROLL_LIMIT)]
+            for nl in 0..num_n_vecs {
+                let g_c = g_offset_col + offset_col + nl * LINE_SIZE;
+                let rt_idx = row * num_n_vecs + nl;
+
+                if g_r < num_rows && g_c < num_cols {
+                    let scalar_idx = base_offset + g_r * row_stride + g_c;
+                    let line_idx = scalar_idx / LINE_SIZE;
+                    rt_mem.data[rt_idx] = g_mem[line_idx];
+                } else {
+                    rt_mem.data[rt_idx] = Line::empty(LINE_SIZE).fill(F::from_int(0));
+                }
             }
         }
     }
@@ -296,36 +317,3 @@ pub fn load_sv_direct<F: Float, L: Dim>(
     }
 }
 
-/// Loads from shared memory vector (Sv) into register vector (Rv).
-///
-/// For vectors, all threads get the same data (broadcast).
-/// Each thread copies all L/LINE_SIZE Lines.
-#[cube]
-pub fn load_rv_from_sv<F: Float, L: Dim>(s_mem: &Sv<F, L>, r_mem: &mut Rv<F, L>) {
-    #[unroll(L::LINES <= UNROLL_LIMIT)]
-    for i in 0..L::LINES {
-        r_mem.data[i] = s_mem.data[i];
-    }
-}
-
-/// Loads a 1D vector directly from global memory into a register vector (Rv).
-///
-/// Each thread loads the same data (broadcast). Use for small vectors
-/// where all threads need the same values.
-///
-/// # Arguments
-/// * `g_mem` - Source 1D tensor of Lines
-/// * `r_mem` - Destination register vector
-/// * `base_offset` - Scalar offset into the source tensor
-#[cube]
-pub fn load_rv_direct<F: Float, L: Dim>(
-    g_mem: &Tensor<Line<F>>,
-    r_mem: &mut Rv<F, L>,
-    base_offset: usize,
-) {
-    #[unroll(L::LINES <= UNROLL_LIMIT)]
-    for i in 0..L::LINES {
-        let line_idx = base_offset / LINE_SIZE + i;
-        r_mem.data[i] = g_mem[line_idx];
-    }
-}

@@ -9,7 +9,7 @@ use std::fmt::Debug;
 
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 use crate::ttt::cubecl_kernels::bundle::TensorBundle;
-use crate::ttt::cubecl_kernels::kernel::FusedKernel;
+use crate::ttt::cubecl_kernels::kernel::{CanBackwardNoOut, FusedKernel, UseNoOut};
 use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttKernel, TttOutputs};
 
 use super::backward::launch_fused_ttt_backward;
@@ -166,14 +166,17 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
 impl FusedKernel<9, 3> for TttKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
+    type Backward = UseNoOut;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
     ) -> TttOutputs<CubeTensor<R>> {
         forward::<R, F>(inputs)
     }
+}
 
-    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+impl CanBackwardNoOut<9, 3> for TttKernel {
+    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         grad_outputs: TttOutputs<CubeTensor<R>>,
     ) -> TttInputs<CubeTensor<R>> {

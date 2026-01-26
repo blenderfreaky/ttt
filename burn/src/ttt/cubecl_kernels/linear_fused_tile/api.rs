@@ -38,12 +38,12 @@ pub fn fused_ttt_tile_forward<B: FusedTttBackend>(
         mini_batch_len: 0,
     };
 
-    let outputs = <B as FusedKernelBackend<TttTileKernel, 9, 3>>::forward(inputs);
+    let outputs = <B as FusedKernelBackend<TttTileKernel, 9, 10>>::forward(inputs);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),
-        Tensor::from_primitive(TensorPrimitive::Float(outputs.weight)),
-        Tensor::from_primitive(TensorPrimitive::Float(outputs.bias)),
+        Tensor::from_primitive(TensorPrimitive::Float(outputs.weight_out)),
+        Tensor::from_primitive(TensorPrimitive::Float(outputs.bias_out)),
     )
 }
 
@@ -82,11 +82,11 @@ pub fn fused_ttt_tile_forward_multi<B: FusedTttBackend>(
         mini_batch_len,
     };
 
-    let outputs = <B as FusedKernelBackend<TttTileMultiKernel, 9, 3>>::forward(inputs);
+    let outputs = <B as FusedKernelBackend<TttTileMultiKernel, 9, 10>>::forward(inputs);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),
-        Tensor::from_primitive(TensorPrimitive::Float(outputs.weight)),
-        Tensor::from_primitive(TensorPrimitive::Float(outputs.bias)),
+        Tensor::from_primitive(TensorPrimitive::Float(outputs.weight_out)),
+        Tensor::from_primitive(TensorPrimitive::Float(outputs.bias_out)),
     )
 }
