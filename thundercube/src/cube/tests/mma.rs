@@ -1,11 +1,12 @@
 #![allow(non_snake_case)]
 
+use cubecl::prelude::*;
+
 use crate::{
     cube::{load_st_direct, load_st_transpose, mma_AB, mma_AtB, store_rt_direct},
     prelude::*,
     test_kernel,
 };
-use cubecl::prelude::*;
 
 /// Test kernel that performs C = A * B using the mma_AtB function.
 ///
@@ -58,14 +59,7 @@ fn test_mma_AtB<
 /// The plane divides work among threads, with each thread computing a ThreadTileM x ThreadTileN
 /// sub-tile of the output.
 #[cube(launch)]
-fn test_mma_AB<
-    F: Float,
-    TileM: Dim,
-    TileK: Dim,
-    TileN: Dim,
-    ThreadTileM: Dim,
-    ThreadTileN: Dim,
->(
+fn test_mma_AB<F: Float, TileM: Dim, TileK: Dim, TileN: Dim, ThreadTileM: Dim, ThreadTileN: Dim>(
     in_a: &Tensor<Line<F>>,
     in_b: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,

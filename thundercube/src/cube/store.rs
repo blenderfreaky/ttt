@@ -1,10 +1,11 @@
+use cubecl::prelude::*;
+
 use crate::{
     cube::swizzle,
     prelude::*,
     tiles::Dim,
     util::{transpose_4, write_into_line},
 };
-use cubecl::prelude::*;
 
 /// Cooperatively stores per-thread register tiles into shared memory.
 ///

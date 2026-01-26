@@ -6,11 +6,9 @@ use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
     cube::{load_st_direct, load_st_transpose, store_st_direct, store_st_transpose},
-    test_utils::{client, get_strides, upload},
+    test_utils::{TestRuntime, client, get_strides, upload},
     tiles::{D4, D8, D16, D32, D64, Dim, DimOrOne, St},
 };
-
-use thundercube::test_utils::TestRuntime;
 
 /// Benchmark kernel for direct load (global -> shared -> global)
 #[cube(launch)]

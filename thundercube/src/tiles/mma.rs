@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 
-use crate::{cube::swizzle, prelude::*, tiles::Dim, util::write_into_line};
 use cubecl::prelude::*;
+
+use crate::{cube::swizzle, prelude::*, tiles::Dim, util::write_into_line};
 
 /// Indexer for accessing matrices with optional swizzle and transpose.
 #[derive(CubeType, Clone, Copy)]

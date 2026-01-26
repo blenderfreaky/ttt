@@ -6,11 +6,9 @@ use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
     cube::{load_st_direct, store_st_direct},
-    test_utils::{client, get_strides, upload},
+    test_utils::{TestRuntime, client, get_strides, upload},
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
 };
-
-use thundercube::test_utils::TestRuntime;
 
 // ==================== RT BROADCAST KERNELS ====================
 

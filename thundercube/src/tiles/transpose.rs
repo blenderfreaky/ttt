@@ -2,10 +2,11 @@
 
 use cubecl::prelude::*;
 
-use crate::{prelude::*, util::{LineBlock, write_into_line}};
-
-use super::dim::Dim;
-use super::rt::Rt;
+use super::{dim::Dim, rt::Rt};
+use crate::{
+    prelude::*,
+    util::{LineBlock, write_into_line},
+};
 
 /// Op codes for scalar transpose operations
 const OP_LOAD: u64 = 1; // load to temp (first of multi-element cycle)
@@ -108,7 +109,11 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
                 let val = selff.data[src_line][src_idx];
                 write_into_line(selff.data.slice_mut(dst_line, dst_line + 1), dst_idx, val);
             } else if comptime!(op == OP_STORE) {
-                write_into_line(selff.data.slice_mut(dst_line, dst_line + 1), dst_idx, temp.val);
+                write_into_line(
+                    selff.data.slice_mut(dst_line, dst_line + 1),
+                    dst_idx,
+                    temp.val,
+                );
             }
         }
 
@@ -131,7 +136,12 @@ impl<F: Float, R: Dim, C: Dim> Rt<F, R, C> {
                 let dst_base_row = bc * LINE_SIZE;
                 LineBlock::load_new(self.data.slice(0, src_len), src_base_row, bc, src_stride)
                     .transpose()
-                    .store(result.data.slice_mut(0, dst_len), dst_base_row, br, dst_stride);
+                    .store(
+                        result.data.slice_mut(0, dst_len),
+                        dst_base_row,
+                        br,
+                        dst_stride,
+                    );
             }
         }
 

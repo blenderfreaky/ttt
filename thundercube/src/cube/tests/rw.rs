@@ -1,3 +1,6 @@
+use cubecl::prelude::*;
+use test_case::test_matrix;
+
 use crate::{
     cube::{
         load_rt_direct, load_rt_from_st, load_st_direct, load_st_transpose, store_rt_direct,
@@ -6,8 +9,6 @@ use crate::{
     prelude::*,
     test_kernel,
 };
-use cubecl::prelude::*;
-use test_case::test_matrix;
 
 // =============================================================================
 // St round-trip kernels (Global <-> St)

@@ -5,11 +5,9 @@ use cubecl::prelude::*;
 use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
-    test_utils::{client, upload},
+    test_utils::{TestRuntime, client, upload},
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt},
 };
-
-use thundercube::test_utils::TestRuntime;
 
 // ==================== UNARY OPERATION KERNELS ====================
 

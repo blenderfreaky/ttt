@@ -1,6 +1,6 @@
-use crate::prelude::*;
-use crate::tiles::Dim;
 use cubecl::prelude::*;
+
+use crate::{prelude::*, tiles::Dim};
 
 #[cube]
 pub trait ReductionOp<F: Float> {

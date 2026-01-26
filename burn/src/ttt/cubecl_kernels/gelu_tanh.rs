@@ -2,8 +2,10 @@
 
 use burn_cubecl::CubeRuntime;
 use cubecl::prelude::*;
-use thundercube::LINE_SIZE;
-use thundercube::unary_ops::{gelu, gelu_bwd, gelu_bwd_bwd};
+use thundercube::{
+    LINE_SIZE,
+    unary_ops::{gelu, gelu_bwd, gelu_bwd_bwd},
+};
 
 #[cube(launch)]
 pub fn gelu_tanh_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut Tensor<Line<F>>) {

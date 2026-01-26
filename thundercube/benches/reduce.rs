@@ -6,11 +6,9 @@ use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
     cube::{ReduceBuf, load_st_direct, sum_cols, sum_cols_plane, sum_rows, sum_rows_plane},
-    test_utils::{client, get_strides, upload},
+    test_utils::{TestRuntime, client, get_strides, upload},
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
 };
-
-use thundercube::test_utils::TestRuntime;
 
 // ==================== RT REDUCTION KERNELS ====================
 

@@ -32,14 +32,9 @@ pub const UNROLL_LIMIT: usize = 4;
 pub const UNROLL_LIMIT_HOT: usize = 8;
 
 pub mod prelude {
-    pub use crate::LINE_SIZE;
-    pub use crate::UNROLL_LIMIT;
-    pub use crate::UNROLL_LIMIT_HOT;
-    pub use crate::cube;
     #[cfg(test)]
     pub use crate::test_kernel;
-    pub use crate::tiles::*;
     #[cfg(feature = "hip")]
     pub use crate::util::gpu_sleep;
-    pub use crate::util::sync_planes;
+    pub use crate::{LINE_SIZE, UNROLL_LIMIT, UNROLL_LIMIT_HOT, cube, tiles::*, util::sync_planes};
 }

@@ -1,3 +1,9 @@
+use std::{
+    fs::File,
+    io::{BufWriter, Write},
+    path::Path,
+};
+
 use burn::{
     data::{dataloader::batcher::Batcher, dataset::Dataset},
     nn::attention::generate_padding_mask,
@@ -5,14 +11,11 @@ use burn::{
 };
 use bytemuck::{Pod, Zeroable};
 use memmap2::Mmap;
-use std::{
-    fs::File,
-    io::{BufWriter, Write},
-    path::Path,
-};
 
-use super::batcher::{TextGenerationBatch, TrainingTextGenerationBatch};
-use super::tokenizer::TokenizerTrait;
+use super::{
+    batcher::{TextGenerationBatch, TrainingTextGenerationBatch},
+    tokenizer::TokenizerTrait,
+};
 
 /// File header for pre-tokenized dataset
 /// Format: [magic: 4 bytes][version: u32][num_sequences: u64][max_seq_len: u32][pad: 4 bytes]
@@ -257,7 +260,9 @@ pub fn pretokenized_path(
     split: &str,
     max_seq_len: usize,
 ) -> std::path::PathBuf {
-    let cache_dir = dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"));
+    let cache_dir = env::var("TTT_PRETOKENIZED_PATH").unwrap_or_else(|_| {
+        dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"))
+    });
     cache_dir
         .join("ttt-burn")
         .join(format!("{dataset_name}_{split}_{max_seq_len}.bin"))

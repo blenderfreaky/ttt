@@ -8,9 +8,7 @@ pub mod text_generation;
 pub mod training;
 pub mod ttt;
 
-use burn::config::Config;
-use burn::optim::AdamConfig;
-use burn::tensor::backend::Backend;
+use burn::{config::Config, optim::AdamConfig, tensor::backend::Backend};
 use data::{Tokenizer, TokenizerTrait};
 use training::TTTTrainingConfig;
 use ttt::{PositionEncodingType, TTTConfig, TTTLayerType, TrainingBackend};
@@ -198,7 +196,7 @@ struct TrainArgs {
     #[arg(long, default_value = "./artifacts")]
     out: String,
 
-    /// Use pre-tokenized dataset (faster, recommended)
+    /// Use pre-tokenized dataset
     #[arg(long, default_value = "true")]
     pretokenized: bool,
 

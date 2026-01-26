@@ -1,6 +1,9 @@
-use crate::prelude::*;
-use crate::tiles::{Dim, DimOrOne};
 use cubecl::prelude::*;
+
+use crate::{
+    prelude::*,
+    tiles::{Dim, DimOrOne},
+};
 
 #[cube]
 pub trait BinaryOp<F: Float> {
@@ -111,9 +114,9 @@ with_binary_ops!(impl_broadcast_convenience_fns; for St);
 
 #[cfg(test)]
 mod tests {
-    use crate::binary_ops::*;
-    use crate::test_utils::TestFloat;
     use test_case::test_matrix;
+
+    use crate::{binary_ops::*, test_utils::TestFloat};
 
     macro_rules! generate_binary_kernel {
         ($name:ident, $method:ident) => {

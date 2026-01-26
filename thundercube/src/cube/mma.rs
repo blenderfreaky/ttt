@@ -1,10 +1,11 @@
 #![allow(non_snake_case)]
 
+use cubecl::prelude::*;
+
 use crate::{
     prelude::*,
     tiles::{Dim, mma::*},
 };
-use cubecl::prelude::*;
 
 /// Generates plane-level MMA functions for all transpose combinations.
 ///

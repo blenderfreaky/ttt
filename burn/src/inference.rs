@@ -1,15 +1,16 @@
-use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
-use crate::{
-    data::{Tokenizer, TokenizerTrait},
-    text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
-    training::TTTTrainingConfig,
-    ttt::{layer::TTTInnerModel, linear::TTTLinear},
-};
+use std::sync::Arc;
+
 use burn::{
     prelude::*,
     record::{DefaultRecorder, Recorder},
 };
-use std::sync::Arc;
+
+use crate::{
+    data::{Tokenizer, TokenizerTrait},
+    text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
+    training::TTTTrainingConfig,
+    ttt::{cubecl_kernels::backend::FusedTttBackend, layer::TTTInnerModel, linear::TTTLinear},
+};
 
 pub struct TTTTextGenerator<B: FusedTttBackend, Inner> {
     model: TTTTextGenerationModel<B, Inner>,

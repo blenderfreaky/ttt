@@ -19,25 +19,27 @@
 //!   cargo bench --bench ttt_benchmark -- inner_forward_linear
 //!   cargo bench --bench ttt_benchmark -- full_forward
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use burn::prelude::*;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use paste::paste;
-
-use ttt::data::TrainingTextGenerationBatch;
-use ttt::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
-use ttt::ttt::TTTConfig;
-use ttt::ttt::cubecl_kernels::{Fused, FusedTile, FusedTttBackend};
-use ttt::ttt::layer::{Qkv, TTTInnerModel, TTTInputsInner};
-use ttt::ttt::linear::TTTLinear;
-use ttt::ttt::linear_adam::TTTLinearAdam;
-use ttt::ttt::mlp::TTTMLP;
-use ttt::ttt::mlp2::TTTMLP2;
-use ttt::ttt::mlp3::TTTMLP3;
-use ttt::ttt::mlp4::TTTMLP4;
-use ttt::{GpuAutodiffBackend, GpuBackend};
+use ttt::{
+    GpuAutodiffBackend, GpuBackend,
+    data::TrainingTextGenerationBatch,
+    text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
+    ttt::{
+        TTTConfig,
+        cubecl_kernels::{Fused, FusedTile, FusedTttBackend},
+        layer::{Qkv, TTTInnerModel, TTTInputsInner},
+        linear::TTTLinear,
+        linear_adam::TTTLinearAdam,
+        mlp::TTTMLP,
+        mlp2::TTTMLP2,
+        mlp3::TTTMLP3,
+        mlp4::TTTMLP4,
+    },
+};
 
 pub fn device<B: FusedTttBackend>() -> B::Device {
     Default::default()

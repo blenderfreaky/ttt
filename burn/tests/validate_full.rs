@@ -9,15 +9,15 @@
 //! - Block test: Block.forward() (TTT + FFN + residuals)
 //! - Model test: TTTForCausalLM.forward() (embedding + blocks + LM head)
 
-use burn::module::Param;
-use burn::prelude::*;
-use burn::tensor::Tensor;
-use safetensors::{Dtype, SafeTensors};
-use std::path::Path;
-use std::sync::Arc;
-use std::{fs, path::PathBuf};
-use test_case::test_case;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use burn::{module::Param, prelude::*, tensor::Tensor};
+use safetensors::{Dtype, SafeTensors};
+use test_case::test_case;
 use ttt::{
     GpuBackend,
     ttt::{

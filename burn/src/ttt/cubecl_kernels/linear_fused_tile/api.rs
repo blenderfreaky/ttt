@@ -2,11 +2,8 @@
 
 use burn::tensor::{Tensor, TensorPrimitive};
 
-use crate::ttt::cubecl_kernels::FusedTttBackend;
-use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
-use crate::ttt::cubecl_kernels::ttt::TttInputs;
-
 use super::launch::{TttTileKernel, TttTileMultiKernel};
+use crate::ttt::cubecl_kernels::{FusedTttBackend, kernel::FusedKernelBackend, ttt::TttInputs};
 
 /// Perform fused TTT-Linear forward pass using the tiled kernel.
 ///

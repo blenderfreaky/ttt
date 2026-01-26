@@ -1,9 +1,8 @@
 use cubecl::prelude::*;
-use thundercube::test_utils::TestRuntime;
 use thundercube::{
     LINE_SIZE,
     streaming::{AsyncStream, GpuPtr},
-    test_utils::client,
+    test_utils::{TestRuntime, client},
     tiles::{D64, Dim, DimOrOne},
     util::wait_for_sync,
 };

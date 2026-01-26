@@ -628,12 +628,10 @@ impl TestFloat for bf16 {
 // These tests are for testing the macro, not any actual CubeCL code
 #[cfg(test)]
 mod test_macro_tests {
+    use cubecl::{num_traits::Zero, prelude::*};
     use test_case::{test_case, test_matrix};
 
-    use crate::LINE_SIZE;
-    use crate::test_utils::TestFloat;
-    use cubecl::num_traits::Zero;
-    use cubecl::prelude::*;
+    use crate::{LINE_SIZE, test_utils::TestFloat};
 
     #[cube(launch)]
     fn noop<F: Float>(_x: Tensor<Line<F>>) {}

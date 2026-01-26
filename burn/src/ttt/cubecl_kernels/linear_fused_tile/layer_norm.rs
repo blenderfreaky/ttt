@@ -836,9 +836,10 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use test_case::test_matrix;
     use thundercube::{test_kernel, test_utils::TestFloat};
+
+    use super::*;
 
     const ROWS: usize = 8;
     const COLS: usize = 32;

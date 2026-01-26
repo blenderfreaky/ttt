@@ -1,18 +1,20 @@
-use burn_cubecl::kernel::into_contiguous;
-use burn_cubecl::ops::numeric::empty_device;
-use burn_cubecl::tensor::CubeTensor;
-use burn_cubecl::{CubeRuntime, FloatElement};
 use std::fmt::Debug;
 
-use crate::ttt::cubecl_kernels::gelu_tanh::{
-    launch_gelu_bwd_forward, launch_gelu_tanh, launch_gelu_tanh_backward,
-    launch_gelu_tanh_backward_backward,
+use burn_cubecl::{
+    CubeRuntime, FloatElement, kernel::into_contiguous, ops::numeric::empty_device,
+    tensor::CubeTensor,
 };
-use crate::ttt::cubecl_kernels::kernel::{CanBackwardNoOut, FusedKernel, UseNoOut};
 
 use super::types::{
     GeluBwdKernel, GeluInput, GeluOutput, GeluTanhBackwardBackwardKernel, GeluTanhBackwardKernel,
     GeluTanhKernel,
+};
+use crate::ttt::cubecl_kernels::{
+    gelu_tanh::{
+        launch_gelu_bwd_forward, launch_gelu_tanh, launch_gelu_tanh_backward,
+        launch_gelu_tanh_backward_backward,
+    },
+    kernel::{CanBackwardNoOut, FusedKernel, UseNoOut},
 };
 
 fn empty_like<R: CubeRuntime, F: FloatElement>(template: &CubeTensor<R>) -> CubeTensor<R> {

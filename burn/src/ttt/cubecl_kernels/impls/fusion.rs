@@ -1,12 +1,16 @@
-use burn::backend::ir::{InitOperationIr, OperationIr};
-use burn::tensor::ops::FloatTensor;
+use burn::{
+    backend::ir::{InitOperationIr, OperationIr},
+    tensor::ops::FloatTensor,
+};
 use burn_backend::TensorMetadata;
 use burn_fusion::{
     Fusion, FusionBackend, NoOp, client::GlobalFusionClient, stream::OperationStreams,
 };
 
-use crate::ttt::cubecl_kernels::TensorBundle;
-use crate::ttt::cubecl_kernels::kernel::{FusedKernel, FusedKernelBackend};
+use crate::ttt::cubecl_kernels::{
+    TensorBundle,
+    kernel::{FusedKernel, FusedKernelBackend},
+};
 
 fn fusion_in<B: FusionBackend>(tensor: FloatTensor<Fusion<B>>) -> FloatTensor<B> {
     tensor.client.clone().resolve_tensor_float::<B>(tensor)

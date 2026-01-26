@@ -1,8 +1,7 @@
 use burn::tensor::{Tensor, TensorPrimitive};
 
-use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
-
 use super::types::{GeluBwdKernel, GeluInput, GeluTanhKernel};
+use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
 
 /// GELU activation with tanh approximation.
 pub fn gelu_tanh<B: FusedKernelBackend<GeluTanhKernel, 1, 1>, const D: usize>(

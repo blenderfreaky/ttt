@@ -1,19 +1,24 @@
-use burn_backend::Shape;
-use burn_cubecl::kernel::into_contiguous;
-use burn_cubecl::kernel::reduce::{KernelReduceStrategy, reduce_dim};
-use burn_cubecl::ops::numeric::empty_device;
-use burn_cubecl::tensor::CubeTensor;
-use burn_cubecl::{CubeRuntime, FloatElement};
-use cubek::reduce::components::instructions::ReduceOperationConfig;
 use std::fmt::Debug;
 
-use crate::ttt::cubecl_kernels::FusedTttConfig;
-use crate::ttt::cubecl_kernels::bundle::TensorBundle;
-use crate::ttt::cubecl_kernels::kernel::{CanBackwardNoOut, FusedKernel, UseNoOut};
-use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttKernel, TttOutputs};
+use burn_backend::Shape;
+use burn_cubecl::{
+    CubeRuntime, FloatElement,
+    kernel::{
+        into_contiguous,
+        reduce::{KernelReduceStrategy, reduce_dim},
+    },
+    ops::numeric::empty_device,
+    tensor::CubeTensor,
+};
+use cubek::reduce::components::instructions::ReduceOperationConfig;
 
-use super::backward::launch_fused_ttt_backward;
-use super::forward::launch_fused_ttt_forward;
+use super::{backward::launch_fused_ttt_backward, forward::launch_fused_ttt_forward};
+use crate::ttt::cubecl_kernels::{
+    FusedTttConfig,
+    bundle::TensorBundle,
+    kernel::{CanBackwardNoOut, FusedKernel, UseNoOut},
+    ttt::{TttInputs, TttKernel, TttOutputs},
+};
 
 /// Create an empty tensor with the same client/device as the template.
 pub fn empty_like<R: CubeRuntime, F: FloatElement>(

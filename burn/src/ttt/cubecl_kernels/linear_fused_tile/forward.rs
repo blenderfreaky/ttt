@@ -6,7 +6,6 @@ use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index
 use super::layer_norm::{
     layer_norm_forward_save_intermediates, layer_norm_l2_grad_save_intermediates,
 };
-
 use crate::ttt::cubecl_kernels::{FusedTttConfig, linear_fused_tile::helpers::ParamsTrait};
 
 #[derive(CubeType, CubeLaunch)]

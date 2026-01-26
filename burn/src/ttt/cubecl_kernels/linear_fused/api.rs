@@ -1,8 +1,9 @@
 use burn::tensor::{Tensor, TensorPrimitive};
 
-use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
-
-use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttKernel, TttOutputs};
+use crate::ttt::cubecl_kernels::{
+    kernel::FusedKernelBackend,
+    ttt::{TttInputs, TttKernel, TttOutputs},
+};
 
 pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3>>(
     xq: Tensor<B, 4>,

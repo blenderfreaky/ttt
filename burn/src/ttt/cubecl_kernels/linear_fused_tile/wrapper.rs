@@ -4,14 +4,13 @@ use std::{marker::PhantomData, sync::Arc};
 
 use burn::tensor::Tensor;
 
+use super::api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{Fused, FusedTttBackend},
     layer::{TTTInnerModel, TTTInputsInner},
     linear::TTTLinear,
 };
-
-use super::api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 
 /// TTTInnerModel implementation for the tiled fused kernel.
 /// Uses double Fused wrapper: `Fused<B, Fused<B, TTTLinear<B>>>`.
@@ -210,6 +209,13 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
 
 #[cfg(test)]
 mod tests {
+    use burn::{
+        backend::Autodiff,
+        module::{Ignored, Param},
+        tensor::TensorData,
+    };
+    use burn_backend::Backend;
+
     use super::*;
     use crate::ttt::{
         CpuBackend, GpuAutodiffBackend, GpuBackend,
@@ -217,12 +223,6 @@ mod tests {
         linear::{TTTLinear, TTTLinearConfig},
         util::MultiHeadLayerNorm,
     };
-    use burn::{
-        backend::Autodiff,
-        module::{Ignored, Param},
-        tensor::TensorData,
-    };
-    use burn_backend::Backend;
 
     fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
         assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match");

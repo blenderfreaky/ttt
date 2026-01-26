@@ -2,9 +2,8 @@ use std::marker::PhantomData;
 
 use cubecl::prelude::*;
 
-use crate::{binary_ops::*, cube::swizzle, prelude::*, unary_ops::*};
-
 use super::dim::{Dim, DimOrOne};
+use crate::{binary_ops::*, cube::swizzle, prelude::*, unary_ops::*};
 
 #[derive(CubeType)]
 pub struct St<F: Float, R: Dim, C: DimOrOne> {

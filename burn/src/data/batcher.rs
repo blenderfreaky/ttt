@@ -1,9 +1,11 @@
 // Taken from the burn-rs text-generation example
 
-use super::{dataset::TextGenerationItem, tokenizer::TokenizerTrait};
+use std::sync::Arc;
+
 use burn::{data::dataloader::batcher::Batcher, nn::attention::generate_padding_mask, prelude::*};
 use derive_new::new;
-use std::sync::Arc;
+
+use super::{dataset::TextGenerationItem, tokenizer::TokenizerTrait};
 
 #[derive(Clone, new)]
 pub struct TextGenerationBatcher {

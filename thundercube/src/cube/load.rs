@@ -1,5 +1,6 @@
-use crate::{cube::swizzle, prelude::*, tiles::Dim, util::transpose_4};
 use cubecl::prelude::*;
+
+use crate::{cube::swizzle, prelude::*, tiles::Dim, util::transpose_4};
 
 /// Cooperatively loads from shared memory into per-thread register tiles.
 ///

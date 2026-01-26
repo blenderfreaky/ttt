@@ -6,10 +6,12 @@
 //! - Multi-stage tiled kernel
 //! - GELU activation kernels
 
-use crate::ttt::cubecl_kernels::gelu::{GeluBwdKernel, GeluTanhKernel};
-use crate::ttt::cubecl_kernels::kernel::FusedKernelBackend;
-use crate::ttt::cubecl_kernels::linear_fused_tile::{TttTileKernel, TttTileMultiKernel};
-use crate::ttt::cubecl_kernels::ttt::TttKernel;
+use crate::ttt::cubecl_kernels::{
+    gelu::{GeluBwdKernel, GeluTanhKernel},
+    kernel::FusedKernelBackend,
+    linear_fused_tile::{TttTileKernel, TttTileMultiKernel},
+    ttt::TttKernel,
+};
 
 /// This includes:
 /// - `TttKernel` - the regular fused TTT kernel
@@ -36,6 +38,8 @@ impl<B> FusedTttBackend for B where
 
 /// API module with tensor-level functions for backward compatibility.
 pub mod api {
-    pub use crate::ttt::cubecl_kernels::gelu::{gelu_bwd, gelu_tanh};
-    pub use crate::ttt::cubecl_kernels::linear_fused::fused_ttt_forward;
+    pub use crate::ttt::cubecl_kernels::{
+        gelu::{gelu_bwd, gelu_tanh},
+        linear_fused::fused_ttt_forward,
+    };
 }

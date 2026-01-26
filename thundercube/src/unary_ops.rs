@@ -1,7 +1,12 @@
-use crate::prelude::*;
-use crate::tiles::{Dim, DimOrOne};
-use cubecl::frontend::{Exp, Log, Tanh};
-use cubecl::prelude::*;
+use cubecl::{
+    frontend::{Exp, Log, Tanh},
+    prelude::*,
+};
+
+use crate::{
+    prelude::*,
+    tiles::{Dim, DimOrOne},
+};
 
 macro_rules! impl_unary_ops {
     {
@@ -211,9 +216,9 @@ fn tanh_bwd<F: Float>(x: Line<F>) -> Line<F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_utils::TestFloat;
-    use crate::unary_ops::*;
     use test_case::test_case;
+
+    use crate::{test_utils::TestFloat, unary_ops::*};
 
     macro_rules! generate_kernel {
         ($name:ident, $method:ident $(, $arg:ident)?) => {

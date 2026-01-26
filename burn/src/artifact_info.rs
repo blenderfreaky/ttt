@@ -1,8 +1,9 @@
-use crate::training::TTTTrainingConfig;
-use crate::ttt::TTTConfig;
+use std::path::Path;
+
 use burn::optim::AdamConfig;
 use serde_json::Value;
-use std::path::Path;
+
+use crate::{training::TTTTrainingConfig, ttt::TTTConfig};
 
 /// Recursively merge two JSON values. `overlay` values override `base`.
 fn merge_json(base: Value, overlay: Value) -> Value {

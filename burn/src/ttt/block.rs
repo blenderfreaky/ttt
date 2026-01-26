@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 use burn::{
     config::Config,
     module::{Ignored, Module},
@@ -13,6 +12,7 @@ use super::{
     layer::{TTT, TTTInnerModel},
     util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
 };
+use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 
 // We can't write the trait bound due to a limitation of the Module derive macro
 // but impls enforce it

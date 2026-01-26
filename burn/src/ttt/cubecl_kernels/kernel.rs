@@ -1,7 +1,7 @@
-use burn::tensor::{backend::Backend, ops::FloatTensor};
-use burn_cubecl::tensor::CubeTensor;
-use burn_cubecl::{CubeRuntime, FloatElement};
 use std::fmt::Debug;
+
+use burn::tensor::{backend::Backend, ops::FloatTensor};
+use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
 
 use super::bundle::TensorBundle;
 

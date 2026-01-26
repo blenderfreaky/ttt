@@ -1,16 +1,17 @@
-use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
+use std::sync::Arc;
+
 use burn::{
     module::{Ignored, Module},
     nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     tensor::{Int, Tensor},
 };
-use std::sync::Arc;
 
 use super::{
     PositionEncodingType, TTTConfig,
     block::{TTTBlockConfig, TTTBlockWithSeq},
     layer::TTTInnerModel,
 };
+use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
 
 #[derive(Module, Debug)]
 pub struct TTTModel<B: FusedTttBackend, Inner> {

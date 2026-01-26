@@ -74,6 +74,14 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use burn::{
+        module::{Ignored, Param},
+        tensor::TensorData,
+    };
+    use burn_backend::Backend;
+
     use super::*;
     use crate::ttt::{
         CpuBackend, GpuAutodiffBackend, GpuBackend,
@@ -81,12 +89,6 @@ mod tests {
         linear::{TTTLinear, TTTLinearConfig},
         util::MultiHeadLayerNorm,
     };
-    use burn::{
-        module::{Ignored, Param},
-        tensor::TensorData,
-    };
-    use burn_backend::Backend;
-    use std::sync::Arc;
 
     // Note: A similar function `compare_tensors` exists in tests/validate_full.rs for
     // integration tests. This version uses rtol+atol and panics on failure.

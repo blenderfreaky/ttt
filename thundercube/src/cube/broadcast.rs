@@ -1,5 +1,6 @@
-use crate::{prelude::*, tiles::Dim};
 use cubecl::prelude::*;
+
+use crate::{prelude::*, tiles::Dim};
 
 /// Loads from shared memory vector (Sv) into register vector (Rv).
 ///

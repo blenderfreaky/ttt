@@ -30,6 +30,8 @@
 //! let result = stream.read(data_ptr, n);
 //! ```
 
+use std::marker::PhantomData;
+
 use bytemuck::Pod;
 use cubecl::prelude::*;
 use cubecl_hip_sys::{
@@ -37,7 +39,6 @@ use cubecl_hip_sys::{
     hipMemcpyKind_hipMemcpyHostToDevice, hipStream_t, hipStreamCreate, hipStreamDestroy,
     hipStreamSynchronize,
 };
-use std::marker::PhantomData;
 
 /// Raw GPU pointer for direct memory access.
 ///

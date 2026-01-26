@@ -1,17 +1,20 @@
-use burn::backend::autodiff::{
-    Autodiff, NodeId,
-    checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
-    grads::Gradients,
-    ops::{Backward, Ops, OpsKind},
-};
-use burn::tensor::FloatDType;
-use burn::tensor::ops::FloatTensor;
-use burn_backend::Shape;
-use burn_backend::TensorMetadata;
-
-use crate::ttt::cubecl_kernels::bundle::TensorBundle;
-use crate::ttt::cubecl_kernels::kernel::{BackwardImpl, FusedKernel, FusedKernelBackend};
 use std::fmt::Debug;
+
+use burn::{
+    backend::autodiff::{
+        Autodiff, NodeId,
+        checkpoint::{base::Checkpointer, strategy::CheckpointStrategy},
+        grads::Gradients,
+        ops::{Backward, Ops, OpsKind},
+    },
+    tensor::{FloatDType, ops::FloatTensor},
+};
+use burn_backend::{Shape, TensorMetadata};
+
+use crate::ttt::cubecl_kernels::{
+    bundle::TensorBundle,
+    kernel::{BackwardImpl, FusedKernel, FusedKernelBackend},
+};
 
 /// Backward op for a specific output index.
 /// Each output is tracked separately and runs the backward kernel independently.

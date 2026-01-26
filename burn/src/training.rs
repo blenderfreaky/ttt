@@ -1,14 +1,5 @@
-use crate::{
-    data::{
-        TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher, TokenizedItem,
-        Tokenizer, TokenizerTrait, TrainingTextGenerationBatch, load_or_pretokenize,
-    },
-    dispatch_ttt_layer_type,
-    text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
-    ttt::{
-        TTTConfig, TTTLayerType, cubecl_kernels::backend::FusedTttBackend, layer::TTTInnerModel,
-    },
-};
+use std::sync::Arc;
+
 use burn::{
     data::{
         dataloader::{DataLoaderBuilder, batcher::Batcher},
@@ -25,7 +16,18 @@ use burn::{
         metric::{AccuracyMetric, LearningRateMetric, LossMetric, PerplexityMetric},
     },
 };
-use std::sync::Arc;
+
+use crate::{
+    data::{
+        TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher, TokenizedItem,
+        Tokenizer, TokenizerTrait, TrainingTextGenerationBatch, load_or_pretokenize,
+    },
+    dispatch_ttt_layer_type,
+    text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
+    ttt::{
+        TTTConfig, TTTLayerType, cubecl_kernels::backend::FusedTttBackend, layer::TTTInnerModel,
+    },
+};
 
 #[derive(Config, Debug)]
 pub struct TTTTrainingConfig {

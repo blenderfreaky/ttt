@@ -1,5 +1,6 @@
-use crate::{cube::swizzle, prelude::*, reduction_ops::*, tiles::Dim};
 use cubecl::prelude::*;
+
+use crate::{cube::swizzle, prelude::*, reduction_ops::*, tiles::Dim};
 
 /// Max planes supported (1024 threads / 32 per plane = 32 planes, but 8 is typical max)
 const MAX_PLANES: usize = 32;
@@ -246,9 +247,10 @@ pub fn sum_rows<F: Float, R: Dim, C: Dim>(
 
 #[cfg(test)]
 mod tests {
+    use test_case::test_matrix;
+
     use super::*;
     use crate::test_utils::TestFloat;
-    use test_case::test_matrix;
 
     const ROWS: usize = 8;
     const COLS: usize = 8;

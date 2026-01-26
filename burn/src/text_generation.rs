@@ -1,8 +1,5 @@
-use crate::ttt::cubecl_kernels::backend::FusedTttBackend;
-use crate::{
-    data::{TokenizerTrait, TrainingTextGenerationBatch},
-    ttt::{TTTConfig, layer::TTTInnerModel, lm::TTTModel},
-};
+use std::sync::Arc;
+
 use burn::{
     module::AutodiffModule,
     nn::loss::CrossEntropyLossConfig,
@@ -10,7 +7,13 @@ use burn::{
     tensor::{Distribution, backend::AutodiffBackend},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
-use std::sync::Arc;
+
+use crate::{
+    data::{TokenizerTrait, TrainingTextGenerationBatch},
+    ttt::{
+        TTTConfig, cubecl_kernels::backend::FusedTttBackend, layer::TTTInnerModel, lm::TTTModel,
+    },
+};
 
 #[derive(Config, Debug)]
 pub struct TTTTextGenerationConfig {
@@ -225,11 +228,10 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::ttt::{
         GpuAutodiffBackend, TEST_VOCAB_SIZE, cubecl_kernels::Fused, linear::TTTLinear,
     };
-
-    use super::*;
 
     type Inner = Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>;
 

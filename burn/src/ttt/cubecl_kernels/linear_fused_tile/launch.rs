@@ -1,30 +1,35 @@
 //! Launch functions for the tiled TTT-Linear forward kernel.
 
-use burn_backend::Shape;
-use burn_cubecl::kernel::into_contiguous;
-use burn_cubecl::ops::numeric::empty_device;
-use burn_cubecl::tensor::CubeTensor;
-use burn_cubecl::{CubeRuntime, FloatElement};
-use cubecl::prelude::*;
 use std::fmt::Debug;
+
+use burn_backend::Shape;
+use burn_cubecl::{
+    CubeRuntime, FloatElement, kernel::into_contiguous, ops::numeric::empty_device,
+    tensor::CubeTensor,
+};
+use cubecl::prelude::*;
 use thundercube::prelude::{D4, D8, D16, D32, D64, D128, LINE_SIZE};
 
-use crate::ttt::cubecl_kernels::FusedTttConfig;
-use crate::ttt::cubecl_kernels::bundle::TensorBundle;
-use crate::ttt::cubecl_kernels::kernel::{CanBackwardWithOut, FusedKernel, UseWithOut};
-use crate::ttt::cubecl_kernels::linear_fused_tile::helpers::Params;
-use crate::ttt::cubecl_kernels::ttt::{TttInputs, TttOutputs};
-
-use super::backward::{
-    GradOutputsLaunch, SavedTensorsLaunch, fused_ttt_backward_kernel,
-    fused_ttt_backward_kernel_multi,
+use super::{
+    backward::{
+        GradOutputsLaunch, SavedTensorsLaunch, fused_ttt_backward_kernel,
+        fused_ttt_backward_kernel_multi,
+    },
+    forward::{
+        ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch, fused_ttt_forward_kernel,
+        fused_ttt_forward_kernel_multi,
+    },
 };
-use super::forward::{
-    ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch, fused_ttt_forward_kernel,
-    fused_ttt_forward_kernel_multi,
+use crate::{
+    tensor_bundle,
+    ttt::cubecl_kernels::{
+        FusedTttConfig,
+        bundle::TensorBundle,
+        kernel::{CanBackwardWithOut, FusedKernel, UseWithOut},
+        linear_fused_tile::helpers::Params,
+        ttt::{TttInputs, TttOutputs},
+    },
 };
-
-use crate::tensor_bundle;
 
 tensor_bundle! {
     /// Extended outputs including forward intermediates for backward.
