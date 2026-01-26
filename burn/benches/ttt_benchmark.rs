@@ -455,34 +455,7 @@ define_all_benches!(
     mlp3 => TTTMLP3<_>,
     mlp4 => TTTMLP4<_>,
     fused_linear => Fused<_, TTTLinear<_>>,
+    fused_linear_tile => FusedTile<_>,
 );
 
-/// Generate all 4 benchmark variants for the tiled kernel
-macro_rules! define_tile_model_benches {
-    ($suffix:ident, $inner:ty) => {
-        paste! {
-            define_bench!(forward, inner, [<bench_inner_forward_ $suffix>], $inner);
-            // Note: backward not yet implemented for tile kernel
-            // define_tile_bench!(backward, inner, [<bench_inner_backward_ $suffix>], $inner);
-            define_bench!(forward, full, [<bench_full_forward_ $suffix>], $inner);
-            // define_tile_bench!(backward, full, [<bench_full_backward_ $suffix>], $inner);
-        }
-    };
-}
-
-// Generate tiled kernel benchmarks
-define_tile_model_benches!(fused_tile, FusedTile<_>);
-
-criterion_group!(
-    tile_forward,
-    bench_inner_forward_fused_tile,
-    bench_full_forward_fused_tile
-);
-
-criterion_main!(
-    inner_forward,
-    inner_backward,
-    full_forward,
-    full_backward,
-    tile_forward
-);
+criterion_main!(inner_forward, inner_backward, full_forward, full_backward);

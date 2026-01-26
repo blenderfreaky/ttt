@@ -23,6 +23,9 @@ pub trait ParamsTrait: Send + Sync + 'static {
     fn f_f_reg() -> Rt<Self::E, Self::F_Reg, Self::F_Reg>;
     fn cs_reg() -> Rv<Self::E, Self::CS_Reg>;
     fn f_reg() -> Rv<Self::E, Self::F_Reg>;
+
+    fn cs_reg_big() -> Rv<Self::E, Self::CS>;
+    fn f_reg_big() -> Rv<Self::E, Self::F>;
 }
 
 pub struct Params<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> {
@@ -74,7 +77,15 @@ impl<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> ParamsTrait
     fn f_reg() -> Rv<Self::E, Self::F_Reg> {
         Rv::new()
     }
+
+    fn cs_reg_big() -> Rv<Self::E, Self::CS> {
+        Rv::new()
+    }
+    fn f_reg_big() -> Rv<Self::E, Self::F> {
+        Rv::new()
+    }
 }
+
 /// Build eta matrix: η[i,j] = token_eta[i] * ttt_lr_eta[j], with triangular mask.
 ///
 /// When `transposed` is false: builds lower triangular η (tril)
@@ -99,16 +110,20 @@ pub fn build_eta_matrix<P: ParamsTrait>(
 
     if comptime!(transposed) {
         // η^T[i,j] = ttt_lr_eta[i] * token_eta[j]
-        let row_offset = ttt_lr_eta_idx + tile_row * P::CS_Reg::VALUE;
-        let col_offset = tile_col * P::CS_Reg::VALUE;
-        cube::broadcast::load_rv_direct(ttt_lr_eta, &mut row_vec, row_offset);
-        cube::broadcast::load_rv_direct(token_eta, &mut col_vec, col_offset);
+        cube::broadcast::load_rv_direct(
+            ttt_lr_eta,
+            &mut row_vec,
+            ttt_lr_eta_idx + tile_row * P::CS_Reg::VALUE,
+        );
+        cube::broadcast::load_rv_direct(token_eta, &mut col_vec, tile_col * P::CS_Reg::VALUE);
     } else {
         // η[i,j] = token_eta[i] * ttt_lr_eta[j]
-        let row_offset = tile_row * P::CS_Reg::VALUE;
-        let col_offset = ttt_lr_eta_idx + tile_col * P::CS_Reg::VALUE;
-        cube::broadcast::load_rv_direct(token_eta, &mut row_vec, row_offset);
-        cube::broadcast::load_rv_direct(ttt_lr_eta, &mut col_vec, col_offset);
+        cube::broadcast::load_rv_direct(token_eta, &mut row_vec, tile_row * P::CS_Reg::VALUE);
+        cube::broadcast::load_rv_direct(
+            ttt_lr_eta,
+            &mut col_vec,
+            ttt_lr_eta_idx + tile_col * P::CS_Reg::VALUE,
+        );
     }
 
     eta_reg.add_col(&row_vec);

@@ -91,11 +91,11 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     // Intermediate tiles for layer norm - to be saved for backward pass
     let mut x_hat_fused_smem = P::cs_f_tile();
-    let mut std_fused_rv = Rv::<P::E, P::CS>::new();
+    let mut std_fused_rv = P::cs_reg_big();
     let mut grad_output_fused_smem = P::cs_f_tile();
     let mut grad_x_hat_fused_smem = P::cs_f_tile();
     let mut x_hat_ln_smem = P::cs_f_tile();
-    let mut std_ln_rv = Rv::<P::E, P::CS>::new();
+    let mut std_ln_rv = P::cs_reg_big();
 
     // Load QKV for this stage
     cube::load_st_transpose(&inputs.xq, &mut q_smem, stage_offset, 0, 0);
@@ -333,7 +333,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let last_token_eta_scalar = token_eta_line[last_elem_in_line];
 
     // Load ttt_lr_eta and scale by token_eta[last]
-    let mut last_eta_rv = Rv::<P::E, P::CS>::new();
+    let mut last_eta_rv = P::cs_reg_big();
     cube::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta_scalar);
 
@@ -371,7 +371,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut bias_update_rv = Rv::<P::E, P::F>::new();
+    let mut bias_update_rv = P::f_reg_big();
     cube::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
 
     // Update bias in place
@@ -418,13 +418,13 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     sync_cube();
 
     // Initialize bias in register vector
-    let mut bias_rv = Rv::<P::E, P::F>::new();
+    let mut bias_rv = P::f_reg_big();
     cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
     // Load layer norm params
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-    let mut ln_weight_rv = Rv::<P::E, P::F>::new();
-    let mut ln_bias_rv = Rv::<P::E, P::F>::new();
+    let mut ln_weight_rv = P::f_reg_big();
+    let mut ln_bias_rv = P::f_reg_big();
     cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
     cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
@@ -490,13 +490,13 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     sync_cube();
 
     // Initialize bias in register vector
-    let mut bias_rv = Rv::<P::E, P::F>::new();
+    let mut bias_rv = P::f_reg_big();
     cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
     // Load layer norm params (shared across all stages)
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-    let mut ln_weight_rv = Rv::<P::E, P::F>::new();
-    let mut ln_bias_rv = Rv::<P::E, P::F>::new();
+    let mut ln_weight_rv = P::f_reg_big();
+    let mut ln_bias_rv = P::f_reg_big();
     cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
     cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 

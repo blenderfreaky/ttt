@@ -21,7 +21,8 @@ pub fn load_rv_from_sv<F: Float, L: Dim>(s_mem: &Sv<F, L>, r_mem: &mut Rv<F, L>)
 /// **Broadcast operation**: All threads load the same data.
 /// Use for small vectors where all threads need the same values.
 ///
-/// This is NOT a cooperative operation.
+/// This is NOT a cooperative operation by default.
+/// To make it cooperative, pass different base offsets for each thread.
 ///
 /// # Arguments
 /// * `g_mem` - Source 1D tensor of Lines
@@ -45,7 +46,8 @@ pub fn load_rv_direct<F: Float, L: Dim>(
 /// **Single-thread operation**: Only thread 0 writes (all threads have same data).
 /// Use for small vectors where all threads computed the same result.
 ///
-/// This is NOT a cooperative operation.
+/// This is NOT a cooperative operation by default.
+/// To make it cooperative, pass different base offsets for each thread.
 ///
 /// # Arguments
 /// * `r_mem` - Source register vector
