@@ -163,7 +163,7 @@ struct TrainArgs {
     seq_len: usize,
 
     /// Learning rate
-    #[arg(long, default_value = "5e-4")]
+    #[arg(long, default_value = "2e-3")]
     lr: f64,
 
     /// Base learning rate for TTT
@@ -213,6 +213,10 @@ struct TrainArgs {
     /// Fixed RNG seed for reproducible training
     #[arg(long)]
     seed: Option<u64>,
+
+    /// Learning rate warmup steps
+    #[arg(long, default_value = "5000")]
+    warmup_steps: usize,
 }
 
 impl InnerModel {
@@ -279,7 +283,7 @@ impl TrainArgs {
             batch_size: self.batch,
             num_epochs: self.epochs,
             grad_accumulation: self.grad_accum,
-            warmup_steps: 100,
+            warmup_steps: self.warmup_steps,
             learning_rate: self.lr,
             max_seq_len: self.seq_len,
             train_samples: self.samples,
@@ -415,14 +419,12 @@ fn main() {
         Commands::Info {
             artifact_dir,
             verbose,
-        } => {
-            match artifact_info::ArtifactInfo::load(&artifact_dir) {
-                Ok(info) => artifact_info::print_info(&info, verbose),
-                Err(e) => {
-                    eprintln!("Error loading artifact info from {artifact_dir}: {e}");
-                    std::process::exit(1);
-                }
+        } => match artifact_info::ArtifactInfo::load(&artifact_dir) {
+            Ok(info) => artifact_info::print_info(&info, verbose),
+            Err(e) => {
+                eprintln!("Error loading artifact info from {artifact_dir}: {e}");
+                std::process::exit(1);
             }
-        }
+        },
     }
 }

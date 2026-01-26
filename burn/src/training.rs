@@ -40,10 +40,10 @@ pub struct TTTTrainingConfig {
     #[config(default = 10)]
     pub num_epochs: usize,
     /// Gradient accumulation steps
-    #[config(default = 4)]
+    #[config(default = 1)]
     pub grad_accumulation: usize,
     /// Learning rate warmup steps
-    #[config(default = 1000)]
+    #[config(default = 5000)]
     pub warmup_steps: usize,
     /// Peak learning rate
     #[config(default = 5e-4)]
