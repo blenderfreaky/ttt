@@ -194,7 +194,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     eta_reg.zero();
 
     let tiles_per_row_eta = P::CS::VALUE / P::CS_Reg::VALUE;
-    let num_cs_cs_tiles = tiles_per_row_eta * tiles_per_row_eta;
 
     let tile_row_eta = (UNIT_POS as usize) / tiles_per_row_eta;
     let tile_col_eta = (UNIT_POS as usize) % tiles_per_row_eta;

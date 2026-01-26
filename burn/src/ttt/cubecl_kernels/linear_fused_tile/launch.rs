@@ -47,6 +47,7 @@ pub struct FwdIntermediates<T> {
     pub std_ln: T,
 }
 
+// TODO: 64 subtiles (full cubes?)
 /// Supported tile configurations.
 /// Format: (mini_batch_len, head_dim, CS_dim, F_dim, CS_Reg_dim, F_Reg_dim)
 ///
@@ -62,10 +63,10 @@ macro_rules! supported_tile_configs {
     ($callback:ident!($($args:tt)*)) => {
         $callback!($($args)*
             ( 8,  32, D8,  D32,  D4, D8),
-            // ( 8,  64, D8,  D64,  D4, D16),
+            ( 8,  64, D8,  D64,  D4, D16),
             // (16,  32, D16, D32,  D4, D8),
             // (16,  64, D16, D64,  D4, D16),
-            // (16, 128, D16, D128, D4, D32),
+            (16, 128, D16, D128, D4, D32),
             // (32,  32, D32, D32,  D8, D8),
             // (32,  64, D32, D64,  D4, D16),
         )

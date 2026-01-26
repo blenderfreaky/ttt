@@ -8,6 +8,7 @@
     clippy::pub_underscore_fields,
     reason = "False positive on Module derive"
 )]
+#![allow(non_camel_case_types, non_snake_case)]
 
 use std::marker::PhantomData;
 
