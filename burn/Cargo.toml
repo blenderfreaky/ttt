@@ -38,10 +38,13 @@ clap_complete = "4"
 
 thundercube = { version = "0.1", path = "../thundercube" }
 paste = "1"
+burn-import = "0.20"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports", "csv_output"] }
-burn-import = "0.20"
+burn-import = { version = "0.20", default-features = false, features = [
+    "safetensors",
+] }
 safetensors = "0.7"
 thundercube = { path = "../thundercube", features = ["test-utils"] }
 rand = "0.9"
