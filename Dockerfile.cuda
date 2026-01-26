@@ -39,6 +39,7 @@ FROM chef AS builder
 ENV CUDA_PATH=/usr/local/cuda
 ENV PATH="${CUDA_PATH}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
+ENV TTT_PRETOKENIZED_PATH=/workspace/dataset
 
 # Copy recipe and build dependencies only (this layer is cached)
 COPY --from=planner /app/burn/recipe.json /app/burn/recipe.json
@@ -77,6 +78,11 @@ RUN apt-get update && apt-get install -y \
     fd-find \
     libssl-dev \
     ca-certificates \
+    nvtop \
+    btm \
+    htop \
+    btop \
+    neovim \
     python3 \
     python3-pip \
     python3-venv \
