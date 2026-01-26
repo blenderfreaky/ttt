@@ -101,19 +101,19 @@ pub fn build_eta_matrix<P: ParamsTrait>(
         // η^T[i,j] = ttt_lr_eta[i] * token_eta[j]
         let row_offset = ttt_lr_eta_idx + tile_row * P::CS_Reg::VALUE;
         let col_offset = tile_col * P::CS_Reg::VALUE;
-        plane::broadcast::load_rv_direct(ttt_lr_eta, &mut row_vec, row_offset);
-        plane::broadcast::load_rv_direct(token_eta, &mut col_vec, col_offset);
+        cube::broadcast::load_rv_direct(ttt_lr_eta, &mut row_vec, row_offset);
+        cube::broadcast::load_rv_direct(token_eta, &mut col_vec, col_offset);
     } else {
         // η[i,j] = token_eta[i] * ttt_lr_eta[j]
         let row_offset = tile_row * P::CS_Reg::VALUE;
         let col_offset = ttt_lr_eta_idx + tile_col * P::CS_Reg::VALUE;
-        plane::broadcast::load_rv_direct(token_eta, &mut row_vec, row_offset);
-        plane::broadcast::load_rv_direct(ttt_lr_eta, &mut col_vec, col_offset);
+        cube::broadcast::load_rv_direct(token_eta, &mut row_vec, row_offset);
+        cube::broadcast::load_rv_direct(ttt_lr_eta, &mut col_vec, col_offset);
     }
 
     eta_reg.add_col(&row_vec);
     eta_reg.mul_row(&col_vec);
-    plane::store_rt_to_st(&eta_reg, output);
+    cube::store_rt_to_st(&eta_reg, output);
 
     sync_cube();
 
@@ -142,15 +142,15 @@ pub fn build_attn_matrix<P: ParamsTrait>(
 
     if comptime!(transposed) {
         // attn^T = XK @ XQ^T = k_smem^T @ q_smem
-        plane::mma_AtB(&mut attn_reg, k_smem, q_smem);
+        cube::mma_AtB(&mut attn_reg, k_smem, q_smem);
     } else {
         // attn = XQ @ XK^T = q_smem^T @ k_smem
-        plane::mma_AtB(&mut attn_reg, q_smem, k_smem);
+        cube::mma_AtB(&mut attn_reg, q_smem, k_smem);
     }
 
     sync_cube();
 
-    plane::store_rt_to_st(&attn_reg, output);
+    cube::store_rt_to_st(&attn_reg, output);
 
     sync_cube();
 
@@ -176,7 +176,7 @@ pub fn extract_last_row<F: Float, R: Dim, C: Dim>(st: &St<F, R, C>) -> Rv<F, C> 
 
     #[unroll]
     for c_line in 0..C::LINES {
-        let phys_col = plane::swizzle(last_row, c_line, mask);
+        let phys_col = cube::swizzle(last_row, c_line, mask);
         let s_idx = last_row * vec_stride + phys_col;
         result.data[c_line] = st.data[s_idx];
     }

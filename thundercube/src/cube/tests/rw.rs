@@ -1,11 +1,10 @@
 use crate::{
-    plane::{
+    cube::{
         load_rt_direct, load_rt_from_st, load_st_direct, load_st_transpose, store_rt_direct,
         store_rt_to_st, store_st_direct, store_st_transpose,
     },
     prelude::*,
     test_kernel,
-    util::sync_cube,
 };
 use cubecl::prelude::*;
 use test_case::test_matrix;
@@ -224,7 +223,7 @@ fn mma_then_store_rt_direct<F: Float, M: Dim, K: Dim, N: Dim, RtM: Dim, RtN: Dim
 
     // C = A @ B
     c_rt.zero();
-    crate::plane::mma_AB(&mut c_rt, &a_st, &b_st);
+    crate::cube::mma_AB(&mut c_rt, &a_st, &b_st);
 
     sync_cube();
 
@@ -250,7 +249,7 @@ fn mma_then_store_via_st<F: Float, M: Dim, K: Dim, N: Dim, RtM: Dim, RtN: Dim>(
     sync_cube();
 
     c_rt.zero();
-    crate::plane::mma_AB(&mut c_rt, &a_st, &b_st);
+    crate::cube::mma_AB(&mut c_rt, &a_st, &b_st);
 
     sync_cube();
 
@@ -285,7 +284,7 @@ fn mma_then_store_rt_direct_batched<F: Float, M: Dim, K: Dim, N: Dim, RtM: Dim, 
     sync_cube();
 
     c_rt.zero();
-    crate::plane::mma_AB(&mut c_rt, &a_st, &b_st);
+    crate::cube::mma_AB(&mut c_rt, &a_st, &b_st);
 
     sync_cube();
 

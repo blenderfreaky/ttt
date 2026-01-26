@@ -1,4 +1,4 @@
-use crate::{plane::swizzle, prelude::*, tiles::Dim, util::transpose_4};
+use crate::{cube::swizzle, prelude::*, tiles::Dim, util::transpose_4};
 use cubecl::prelude::*;
 
 /// Cooperatively loads from shared memory into per-thread register tiles.
@@ -316,4 +316,3 @@ pub fn load_sv_direct<F: Float, L: Dim>(
         s_mem.data[i] = g_mem[line_idx];
     }
 }
-

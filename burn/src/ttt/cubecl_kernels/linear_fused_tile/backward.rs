@@ -24,7 +24,7 @@
 //! - Stage 1: MatMul backward (Z1 → inputs)
 
 use cubecl::prelude::*;
-use thundercube::{plane::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
+use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
 use super::forward::ForwardIntermediates;
 use crate::ttt::cubecl_kernels::{FusedTttConfig, linear_fused_tile::helpers::ParamsTrait};
@@ -91,19 +91,19 @@ fn build_eta_matrix<P: ParamsTrait>(
         // η^T[i,j] = ttt_lr_eta[i] * token_eta[j]
         let row_offset = ttt_lr_eta_idx + tile_row * P::CS_Reg::VALUE;
         let col_offset = tile_col * P::CS_Reg::VALUE;
-        plane::broadcast::load_rv_direct(ttt_lr_eta, &mut row_vec, row_offset);
-        plane::broadcast::load_rv_direct(token_eta, &mut col_vec, col_offset);
+        cube::broadcast::load_rv_direct(ttt_lr_eta, &mut row_vec, row_offset);
+        cube::broadcast::load_rv_direct(token_eta, &mut col_vec, col_offset);
     } else {
         // η[i,j] = token_eta[i] * ttt_lr_eta[j]
         let row_offset = tile_row * P::CS_Reg::VALUE;
         let col_offset = ttt_lr_eta_idx + tile_col * P::CS_Reg::VALUE;
-        plane::broadcast::load_rv_direct(token_eta, &mut row_vec, row_offset);
-        plane::broadcast::load_rv_direct(ttt_lr_eta, &mut col_vec, col_offset);
+        cube::broadcast::load_rv_direct(token_eta, &mut row_vec, row_offset);
+        cube::broadcast::load_rv_direct(ttt_lr_eta, &mut col_vec, col_offset);
     }
 
     eta_reg.add_col(&row_vec);
     eta_reg.mul_row(&col_vec);
-    plane::store_rt_to_st(&eta_reg, output);
+    cube::store_rt_to_st(&eta_reg, output);
 
     sync_cube();
 
@@ -132,15 +132,15 @@ fn build_attn_matrix<P: ParamsTrait>(
 
     if comptime!(transposed) {
         // attn^T = XK @ XQ^T = k_smem^T @ q_smem
-        plane::mma_AtB(&mut attn_reg, k_smem, q_smem);
+        cube::mma_AtB(&mut attn_reg, k_smem, q_smem);
     } else {
         // attn = XQ @ XK^T = q_smem^T @ k_smem
-        plane::mma_AtB(&mut attn_reg, q_smem, k_smem);
+        cube::mma_AtB(&mut attn_reg, q_smem, k_smem);
     }
 
     sync_cube();
 
-    plane::store_rt_to_st(&attn_reg, output);
+    cube::store_rt_to_st(&attn_reg, output);
 
     sync_cube();
 
@@ -195,11 +195,11 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_ln_weight = Rv::<P::E, P::F>::new();
-    plane::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
+    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
 
     // grad_ln_bias = sum(grad_output)
     let mut grad_ln_bias = Rv::<P::E, P::F>::new();
-    plane::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(grad_output, &mut grad_ln_bias, buf);
+    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(grad_output, &mut grad_ln_bias, buf);
 
     // grad_x_hat = grad_output * ln_weight
     scratch1.copy_from(grad_output);
@@ -209,7 +209,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
 
     // sum(grad_x_hat) per row
     let mut sum_gxh = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(scratch1, &mut sum_gxh, buf);
+    cube::sum_st_rows_cube(scratch1, &mut sum_gxh, buf);
 
     // sum(grad_x_hat * x_hat) per row
     scratch2.copy_from(scratch1);
@@ -218,7 +218,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     let mut sum_gxh_xh = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(scratch2, &mut sum_gxh_xh, buf);
+    cube::sum_st_rows_cube(scratch2, &mut sum_gxh_xh, buf);
 
     // grad_z1_bar = (grad_x_hat * F - sum_gxh - x_hat * sum_gxh_xh) / (std * F)
     let mut grad_z1_bar = P::cs_f_tile();
@@ -242,18 +242,18 @@ fn backward_stage4_ln<P: ParamsTrait>(
     // grad_W_z1bar = XQ^T @ grad_z1_bar
     let mut dW_reg = P::f_f_reg();
     dW_reg.zero();
-    plane::mma_AB(&mut dW_reg, q_smem, &grad_z1_bar);
+    cube::mma_AB(&mut dW_reg, q_smem, &grad_z1_bar);
 
     sync_cube();
 
     let mut grad_W_z1bar = P::f_f_tile();
-    plane::store_rt_to_st(&dW_reg, &mut grad_W_z1bar);
+    cube::store_rt_to_st(&dW_reg, &mut grad_W_z1bar);
 
     sync_cube();
 
     // grad_b_z1bar = sum(grad_z1_bar)
     let mut grad_b_z1bar = Rv::<P::E, P::F>::new();
-    plane::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&grad_z1_bar, &mut grad_b_z1bar, buf);
+    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&grad_z1_bar, &mut grad_b_z1bar, buf);
 
     Stage4Outputs::<P> {
         grad_z1_bar,
@@ -320,12 +320,12 @@ fn backward_stage3_update<P: ParamsTrait>(
     // Term A: η^T @ grad_z1_bar
     let mut term_a_reg = P::cs_f_reg();
     term_a_reg.zero();
-    plane::mma_AB(&mut term_a_reg, &eta_upper, grad_z1_bar);
+    cube::mma_AB(&mut term_a_reg, &eta_upper, grad_z1_bar);
 
     sync_cube();
 
     let mut grad_grad_l = P::cs_f_tile();
-    plane::store_rt_to_st(&term_a_reg, &mut grad_grad_l);
+    cube::store_rt_to_st(&term_a_reg, &mut grad_grad_l);
 
     sync_cube();
 
@@ -336,11 +336,11 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     let mut term_b_reg = P::cs_f_reg();
     term_b_reg.zero();
-    plane::mma_AB(&mut term_b_reg, &eta_upper, grad_z1_bar);
+    cube::mma_AB(&mut term_b_reg, &eta_upper, grad_z1_bar);
 
     sync_cube();
 
-    plane::store_rt_to_st(&term_b_reg, scratch1);
+    cube::store_rt_to_st(&term_b_reg, scratch1);
 
     sync_cube();
 
@@ -358,11 +358,11 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     let mut src12_reg = P::cs_f_reg();
     src12_reg.zero();
-    plane::mma_AB(&mut src12_reg, scratch1, grad_W_last);
+    cube::mma_AB(&mut src12_reg, scratch1, grad_W_last);
 
     sync_cube();
 
-    plane::store_rt_to_st(&src12_reg, scratch1);
+    cube::store_rt_to_st(&src12_reg, scratch1);
 
     sync_cube();
 
@@ -380,12 +380,12 @@ fn backward_stage3_update<P: ParamsTrait>(
     // --- grad_xq_mini = grad_z1_bar @ W_init^T ---
     let mut grad_xq_reg = P::cs_f_reg();
     grad_xq_reg.zero();
-    plane::mma_ABt(&mut grad_xq_reg, grad_z1_bar, weight_init);
+    cube::mma_ABt(&mut grad_xq_reg, grad_z1_bar, weight_init);
 
     sync_cube();
 
     let mut grad_xq_mini = P::cs_f_tile();
-    plane::store_rt_to_st(&grad_xq_reg, &mut grad_xq_mini);
+    cube::store_rt_to_st(&grad_xq_reg, &mut grad_xq_mini);
 
     sync_cube();
 
@@ -399,12 +399,12 @@ fn backward_stage3_update<P: ParamsTrait>(
     // d_attn_base = grad_z1_bar @ grad_l^T
     let mut d_attn_reg = P::cs_cs_reg();
     d_attn_reg.zero();
-    plane::mma_ABt(&mut d_attn_reg, grad_z1_bar, grad_l);
+    cube::mma_ABt(&mut d_attn_reg, grad_z1_bar, grad_l);
 
     sync_cube();
 
     let mut d_attn = P::cs_cs_tile();
-    plane::store_rt_to_st(&d_attn_reg, &mut d_attn);
+    cube::store_rt_to_st(&d_attn_reg, &mut d_attn);
 
     sync_cube();
 
@@ -417,11 +417,11 @@ fn backward_stage3_update<P: ParamsTrait>(
     // d_xq (from attn) = d_attn @ XK
     let mut d_xq_attn_reg = P::cs_f_reg();
     d_xq_attn_reg.zero();
-    plane::mma_AB(&mut d_xq_attn_reg, &d_attn, xk_smem);
+    cube::mma_AB(&mut d_xq_attn_reg, &d_attn, xk_smem);
 
     sync_cube();
 
-    plane::store_rt_to_st(&d_xq_attn_reg, scratch1);
+    cube::store_rt_to_st(&d_xq_attn_reg, scratch1);
 
     sync_cube();
 
@@ -433,12 +433,12 @@ fn backward_stage3_update<P: ParamsTrait>(
     // Build d_attn^T via swapped computation
     let mut d_attn_t_reg = P::cs_cs_reg();
     d_attn_t_reg.zero();
-    plane::mma_ABt(&mut d_attn_t_reg, grad_l, grad_z1_bar);
+    cube::mma_ABt(&mut d_attn_t_reg, grad_l, grad_z1_bar);
 
     sync_cube();
 
     let mut d_attn_t = P::cs_cs_tile();
-    plane::store_rt_to_st(&d_attn_t_reg, &mut d_attn_t);
+    cube::store_rt_to_st(&d_attn_t_reg, &mut d_attn_t);
 
     sync_cube();
 
@@ -454,12 +454,12 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     let mut d_xk_attn_reg = P::cs_f_reg();
     d_xk_attn_reg.zero();
-    plane::mma_AB(&mut d_xk_attn_reg, &d_attn_t, xq_smem);
+    cube::mma_AB(&mut d_xk_attn_reg, &d_attn_t, xq_smem);
 
     sync_cube();
 
     let mut grad_xk_attn = P::cs_f_tile();
-    plane::store_rt_to_st(&d_xk_attn_reg, &mut grad_xk_attn);
+    cube::store_rt_to_st(&d_xk_attn_reg, &mut grad_xk_attn);
 
     sync_cube();
 
@@ -467,12 +467,12 @@ fn backward_stage3_update<P: ParamsTrait>(
     // grad_l_Last = grad_l @ grad_W_last^T
     let mut grad_l_last_reg = P::cs_f_reg();
     grad_l_last_reg.zero();
-    plane::mma_ABt(&mut grad_l_last_reg, grad_l, grad_W_last);
+    cube::mma_ABt(&mut grad_l_last_reg, grad_l, grad_W_last);
 
     sync_cube();
 
     let mut grad_l_last = P::cs_f_tile();
-    plane::store_rt_to_st(&grad_l_last_reg, &mut grad_l_last);
+    cube::store_rt_to_st(&grad_l_last_reg, &mut grad_l_last);
 
     sync_cube();
 
@@ -502,7 +502,7 @@ fn backward_stage3_update<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_last_eta = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(scratch1, &mut grad_last_eta, buf);
+    cube::sum_st_rows_cube(scratch1, &mut grad_last_eta, buf);
 
     // --- Additional gradient through η from z1_bar ---
     // d_eta = -(grad_z1_bar @ grad_l^T) * (1 + attn), with tril mask
@@ -514,12 +514,12 @@ fn backward_stage3_update<P: ParamsTrait>(
     // d_eta_base = grad_z1_bar @ grad_l^T
     let mut d_eta_base_reg = P::cs_cs_reg();
     d_eta_base_reg.zero();
-    plane::mma_ABt(&mut d_eta_base_reg, grad_z1_bar, grad_l);
+    cube::mma_ABt(&mut d_eta_base_reg, grad_z1_bar, grad_l);
 
     sync_cube();
 
     let mut d_eta_base = P::cs_cs_tile();
-    plane::store_rt_to_st(&d_eta_base_reg, &mut d_eta_base);
+    cube::store_rt_to_st(&d_eta_base_reg, &mut d_eta_base);
 
     sync_cube();
 
@@ -545,7 +545,7 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     // d_ttt_lr_eta[j] = sum_i(d_eta[i,j] * token_eta[i])
     let mut token_eta_full = Rv::<P::E, P::CS>::new();
-    plane::broadcast::load_rv_direct(token_eta, &mut token_eta_full, 0);
+    cube::broadcast::load_rv_direct(token_eta, &mut token_eta_full, 0);
 
     sync_cube();
 
@@ -554,11 +554,7 @@ fn backward_stage3_update<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_ttt_lr_eta_z1bar = Rv::<P::E, P::CS>::new();
-    plane::reduce_st_cols_cube::<P::E, P::CS, P::CS, SumOp>(
-        &d_eta,
-        &mut grad_ttt_lr_eta_z1bar,
-        buf,
-    );
+    cube::reduce_st_cols_cube::<P::E, P::CS, P::CS, SumOp>(&d_eta, &mut grad_ttt_lr_eta_z1bar, buf);
 
     // Combine: grad_ttt_lr_eta = grad_last_eta * last_token_eta + grad_z1bar_contribution
     grad_last_eta.mul_scalar(last_token_eta);
@@ -616,14 +612,14 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     sync_cube();
 
     let mut sum1 = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(scratch1, &mut sum1, buf);
+    cube::sum_st_rows_cube(scratch1, &mut sum1, buf);
 
     scratch1.mul(x_hat_fused);
 
     sync_cube();
 
     let mut sum2 = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(scratch1, &mut sum2, buf);
+    cube::sum_st_rows_cube(scratch1, &mut sum2, buf);
 
     // Build grad_L_grad_x_hat
     let mut grad_L_grad_x_hat = P::cs_f_tile();
@@ -667,11 +663,11 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     sync_cube();
 
     let mut grad_ln_weight = Rv::<P::E, P::F>::new();
-    plane::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
+    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
 
     // grad_ln_bias = sum(grad_L_y)
     let mut grad_ln_bias = Rv::<P::E, P::F>::new();
-    plane::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&grad_L_y, &mut grad_ln_bias, buf);
+    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&grad_L_y, &mut grad_ln_bias, buf);
 
     // grad_L_x_hat = grad_L_y * ln_weight
     //              + (1/F) * grad_x_hat * sum2
@@ -719,7 +715,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     sync_cube();
 
     let mut sum_grad_L_std = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(scratch1, &mut sum_grad_L_std, buf);
+    cube::sum_st_rows_cube(scratch1, &mut sum_grad_L_std, buf);
 
     // grad_Z1 = grad_L_x_hat / std - (1/F) * sum(grad_L_x_hat) / std + (1/F) * sum(grad_L_std) * x_hat
     let mut grad_Z1 = P::cs_f_tile();
@@ -727,7 +723,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     grad_Z1.div_col(std_fused);
 
     let mut sum_grad_L_x_hat = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(&grad_L_x_hat, &mut sum_grad_L_x_hat, buf);
+    cube::sum_st_rows_cube(&grad_L_x_hat, &mut sum_grad_L_x_hat, buf);
 
     let mut term2 = sum_grad_L_x_hat;
     term2.div(std_fused);
@@ -806,12 +802,12 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     // grad_XK = -grad_target + grad_xk_mini + grad_xk_attn + grad_Z1 @ W_init^T
     let mut grad_XK_matmul_reg = P::cs_f_reg();
     grad_XK_matmul_reg.zero();
-    plane::mma_ABt(&mut grad_XK_matmul_reg, &stage2.grad_Z1, weight_init);
+    cube::mma_ABt(&mut grad_XK_matmul_reg, &stage2.grad_Z1, weight_init);
 
     sync_cube();
 
     let mut grad_XK_matmul = P::cs_f_tile();
-    plane::store_rt_to_st(&grad_XK_matmul_reg, &mut grad_XK_matmul);
+    cube::store_rt_to_st(&grad_XK_matmul_reg, &mut grad_XK_matmul);
 
     sync_cube();
 
@@ -827,12 +823,12 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     // grad_W_init = grad_W_last + XK^T @ grad_Z1 + grad_W_z1bar
     let mut dW_init_reg = P::f_f_reg();
     dW_init_reg.zero();
-    plane::mma_AB(&mut dW_init_reg, k_smem, &stage2.grad_Z1);
+    cube::mma_AB(&mut dW_init_reg, k_smem, &stage2.grad_Z1);
 
     sync_cube();
 
     let mut grad_W_init = P::f_f_tile();
-    plane::store_rt_to_st(&dW_init_reg, &mut grad_W_init);
+    cube::store_rt_to_st(&dW_init_reg, &mut grad_W_init);
 
     sync_cube();
 
@@ -843,7 +839,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 
     // grad_b_init = grad_b_last + sum(grad_Z1) + grad_b_z1bar
     let mut grad_b_Z1 = Rv::<P::E, P::F>::new();
-    plane::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&stage2.grad_Z1, &mut grad_b_Z1, buf);
+    cube::reduce_st_cols_cube::<P::E, P::CS, P::F, SumOp>(&stage2.grad_Z1, &mut grad_b_Z1, buf);
 
     let mut grad_b_init = Rv::<P::E, P::F>::new();
     grad_b_init.set(grad_b_last);
@@ -858,16 +854,16 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     grad_ln_bias_acc.add(&stage2.grad_ln_bias);
 
     // Store output gradients
-    plane::store_st_direct(&grad_XQ, &mut grads.grad_xq, stage_offset, 0, 0);
-    plane::store_st_direct(&stage2.grad_target, &mut grads.grad_xv, stage_offset, 0, 0);
-    plane::store_st_direct(&grad_XK, &mut grads.grad_xk, stage_offset, 0, 0);
+    cube::store_st_direct(&grad_XQ, &mut grads.grad_xq, stage_offset, 0, 0);
+    cube::store_st_direct(&stage2.grad_target, &mut grads.grad_xv, stage_offset, 0, 0);
+    cube::store_st_direct(&grad_XK, &mut grads.grad_xk, stage_offset, 0, 0);
 
     let grad_weight_base = index_2d(&grads.grad_weight, CUBE_POS_X as usize, CUBE_POS_Y as usize);
     let grad_bias_base = index_2d(&grads.grad_bias, CUBE_POS_X as usize, CUBE_POS_Y as usize);
 
-    plane::store_st_direct(&grad_W_init, &mut grads.grad_weight, grad_weight_base, 0, 0);
-    plane::broadcast::store_rv_direct(&grad_b_init, &mut grads.grad_bias, grad_bias_base);
-    plane::broadcast::store_rv_direct(
+    cube::store_st_direct(&grad_W_init, &mut grads.grad_weight, grad_weight_base, 0, 0);
+    cube::broadcast::store_rv_direct(&grad_b_init, &mut grads.grad_bias, grad_bias_base);
+    cube::broadcast::store_rv_direct(
         &stage3.grad_ttt_lr_eta,
         &mut grads.grad_ttt_lr_eta,
         ttt_lr_eta_idx,
@@ -916,16 +912,16 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut grad_output_smem = P::cs_f_tile();
     let mut weight_init_smem = P::f_f_tile();
 
-    plane::load_st_transpose(&saved.xq, &mut q_smem, stage_offset, 0, 0);
-    plane::load_st_transpose(&saved.xk, &mut k_smem, stage_offset, 0, 0);
-    plane::load_st_direct(&saved.xk, &mut xk_smem, stage_offset, 0, 0);
-    plane::load_st_direct(&saved.xq, &mut xq_smem, stage_offset, 0, 0);
-    plane::load_st_direct(grad_L_XQW, &mut grad_output_smem, stage_offset, 0, 0);
+    cube::load_st_transpose(&saved.xq, &mut q_smem, stage_offset, 0, 0);
+    cube::load_st_transpose(&saved.xk, &mut k_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&saved.xk, &mut xk_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&saved.xq, &mut xq_smem, stage_offset, 0, 0);
+    cube::load_st_direct(grad_L_XQW, &mut grad_output_smem, stage_offset, 0, 0);
 
     let base_weight_init = index_2d(&saved.weight_init, CUBE_POS_X as usize, CUBE_POS_Y as usize);
     let base_ln = index_2d(&saved.ln_weight, CUBE_POS_Y as usize, 0);
 
-    plane::load_st_direct(
+    cube::load_st_direct(
         &saved.weight_init,
         &mut weight_init_smem,
         base_weight_init,
@@ -934,7 +930,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     );
 
     let mut ln_weight_rv = Rv::<P::E, P::F>::new();
-    plane::broadcast::load_rv_direct(&saved.ln_weight, &mut ln_weight_rv, base_ln);
+    cube::broadcast::load_rv_direct(&saved.ln_weight, &mut ln_weight_rv, base_ln);
 
     // Load forward intermediates
     let mut x_hat_fused = P::cs_f_tile();
@@ -943,28 +939,28 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut grad_l_smem = P::cs_f_tile();
     let mut x_hat_ln = P::cs_f_tile();
 
-    plane::load_st_direct(&fwd.x_hat_fused, &mut x_hat_fused, stage_offset, 0, 0);
-    plane::load_st_direct(
+    cube::load_st_direct(&fwd.x_hat_fused, &mut x_hat_fused, stage_offset, 0, 0);
+    cube::load_st_direct(
         &fwd.grad_output_fused,
         &mut grad_output_fused,
         stage_offset,
         0,
         0,
     );
-    plane::load_st_direct(
+    cube::load_st_direct(
         &fwd.grad_x_hat_fused,
         &mut grad_x_hat_fused,
         stage_offset,
         0,
         0,
     );
-    plane::load_st_direct(&fwd.grad_l_wrt_Z1, &mut grad_l_smem, stage_offset, 0, 0);
-    plane::load_st_direct(&fwd.x_hat_ln, &mut x_hat_ln, stage_offset, 0, 0);
+    cube::load_st_direct(&fwd.grad_l_wrt_Z1, &mut grad_l_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&fwd.x_hat_ln, &mut x_hat_ln, stage_offset, 0, 0);
 
     let mut std_fused = Rv::<P::E, P::CS>::new();
     let mut std_ln = Rv::<P::E, P::CS>::new();
-    plane::broadcast::load_rv_direct(&fwd.std_fused, &mut std_fused, ttt_lr_eta_idx);
-    plane::broadcast::load_rv_direct(&fwd.std_ln, &mut std_ln, ttt_lr_eta_idx);
+    cube::broadcast::load_rv_direct(&fwd.std_fused, &mut std_fused, ttt_lr_eta_idx);
+    cube::broadcast::load_rv_direct(&fwd.std_ln, &mut std_ln, ttt_lr_eta_idx);
 
     // Load last_eta = token_eta[-1] * ttt_lr_eta[:]
     let last_token_idx = P::CS::VALUE - 1;
@@ -974,7 +970,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let last_token_eta = token_eta_line[last_elem_in_line];
 
     let mut last_eta_rv = Rv::<P::E, P::CS>::new();
-    plane::broadcast::load_rv_direct(&saved.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
+    cube::broadcast::load_rv_direct(&saved.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta);
 
     sync_cube();
@@ -986,7 +982,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     let mut sum_gxh_xh = Rv::<P::E, P::CS>::new();
-    plane::sum_st_rows_cube(&scratch1, &mut sum_gxh_xh, &mut buf);
+    cube::sum_st_rows_cube(&scratch1, &mut sum_gxh_xh, &mut buf);
 
     // === Stage 4: LN backward ===
     let stage4_out = backward_stage4_ln::<P>(
@@ -1106,8 +1102,8 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
     sync_cube();
 
     let base_ln = index_2d(&grads.grad_ln_weight, batch_idx, head_idx);
-    plane::broadcast::store_rv_direct(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
-    plane::broadcast::store_rv_direct(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
+    cube::broadcast::store_rv_direct(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
+    cube::broadcast::store_rv_direct(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
 }
 
 /// Fused TTT-Linear backward pass kernel (multi-stage).
@@ -1166,6 +1162,6 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     }
 
     let base_ln = index_2d(&grads.grad_ln_weight, batch_idx, head_idx);
-    plane::broadcast::store_rv_direct(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
-    plane::broadcast::store_rv_direct(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
+    cube::broadcast::store_rv_direct(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
+    cube::broadcast::store_rv_direct(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
 }

@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use crate::{
-    plane::{load_st_direct, load_st_transpose, mma_AB, mma_AtB, store_rt_direct},
+    cube::{load_st_direct, load_st_transpose, mma_AB, mma_AtB, store_rt_direct},
     prelude::*,
     test_kernel,
 };

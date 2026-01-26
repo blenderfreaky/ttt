@@ -5,12 +5,12 @@ use cubecl::prelude::*;
 use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
-    plane::{load_st_direct, store_st_direct},
+    cube::{load_st_direct, store_st_direct},
     test_utils::{client, get_strides, upload},
-    tiles::{D16, D32, D4, D8, Dim, DimOrOne, Rt, Rv, St},
+    tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
 };
 
-type TestRuntime = cubecl::TestRuntime;
+type TestRuntime = thundercube::test_utils::TestRuntime;
 
 // ==================== RT BROADCAST KERNELS ====================
 
@@ -150,9 +150,11 @@ macro_rules! bench_rt_broadcast_impl {
         $c.throughput(Throughput::Elements(size as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
-                let a = unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_a, size, LINE_SIZE) };
-                let vec =
-                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_vec, vec_dim, LINE_SIZE) };
+                let a =
+                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_a, size, LINE_SIZE) };
+                let vec = unsafe {
+                    ArrayArg::from_raw_parts::<Line<f32>>(&handle_vec, vec_dim, LINE_SIZE)
+                };
                 let output =
                     unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_out, size, LINE_SIZE) };
 
@@ -199,8 +201,9 @@ macro_rules! bench_st_broadcast_impl {
                 let a = unsafe {
                     TensorArg::from_raw_parts::<Line<f32>>(&handle_a, &strides, &shape, LINE_SIZE)
                 };
-                let vec =
-                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_vec, vec_dim, LINE_SIZE) };
+                let vec = unsafe {
+                    ArrayArg::from_raw_parts::<Line<f32>>(&handle_vec, vec_dim, LINE_SIZE)
+                };
                 let output = unsafe {
                     TensorArg::from_raw_parts::<Line<f32>>(&handle_out, &strides, &shape, LINE_SIZE)
                 };

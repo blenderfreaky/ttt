@@ -1,5 +1,5 @@
 use crate::{
-    plane::swizzle,
+    cube::swizzle,
     prelude::*,
     tiles::Dim,
     util::{transpose_4, write_into_line},
@@ -319,4 +319,3 @@ pub fn store_sv_direct<F: Float, L: Dim>(
         g_mem[line_idx] = s_mem.data[i];
     }
 }
-

@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use cubecl::prelude::*;
 
-use crate::{binary_ops::*, plane::swizzle, prelude::*, unary_ops::*};
+use crate::{binary_ops::*, cube::swizzle, prelude::*, unary_ops::*};
 
 use super::dim::{Dim, DimOrOne};
 
@@ -202,7 +202,6 @@ impl<F: Float, R: Dim, C: DimOrOne> Default for St<F, R, C> {
 mod tests {
     use super::*;
     use crate::test_utils::TestFloat;
-    use crate::util::sync_cube;
 
     const SIZE: usize = 8;
 

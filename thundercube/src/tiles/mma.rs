@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use crate::{plane::swizzle, prelude::*, tiles::Dim, util::write_into_line};
+use crate::{cube::swizzle, prelude::*, tiles::Dim, util::write_into_line};
 use cubecl::prelude::*;
 
 /// Indexer for accessing matrices with optional swizzle and transpose.
@@ -38,7 +38,10 @@ impl Indexer {
             let row_line = row / LINE_SIZE;
             let row_elem = row % LINE_SIZE;
             if comptime!(self.swizzled) {
-                (col * self.stride + swizzle(col, row_line, self.mask), row_elem)
+                (
+                    col * self.stride + swizzle(col, row_line, self.mask),
+                    row_elem,
+                )
             } else {
                 (col * self.stride + row_line, row_elem)
             }
@@ -46,7 +49,10 @@ impl Indexer {
             let col_line = col / LINE_SIZE;
             let col_elem = col % LINE_SIZE;
             if comptime!(self.swizzled) {
-                (row * self.stride + swizzle(row, col_line, self.mask), col_elem)
+                (
+                    row * self.stride + swizzle(row, col_line, self.mask),
+                    col_elem,
+                )
             } else {
                 (row * self.stride + col_line, col_elem)
             }
@@ -67,8 +73,16 @@ fn accum_n<F: Float, RtR: Dim, RtC: Dim>(
     offset_m: usize,
     offset_n: usize,
 ) {
-    let m_lines = if comptime!(c_idx.transposed) { RtC::LINES } else { RtR::LINES };
-    let n_lines = if comptime!(c_idx.transposed) { RtR::LINES } else { RtC::LINES };
+    let m_lines = if comptime!(c_idx.transposed) {
+        RtC::LINES
+    } else {
+        RtR::LINES
+    };
+    let n_lines = if comptime!(c_idx.transposed) {
+        RtR::LINES
+    } else {
+        RtC::LINES
+    };
 
     #[unroll(n_lines <= UNROLL_LIMIT_HOT)]
     for nl in 0..n_lines {
@@ -116,8 +130,16 @@ fn accum_m<F: Float, RtR: Dim, RtC: Dim>(
     offset_m: usize,
     offset_n: usize,
 ) {
-    let m_lines = if comptime!(c_idx.transposed) { RtC::LINES } else { RtR::LINES };
-    let n_lines = if comptime!(c_idx.transposed) { RtR::LINES } else { RtC::LINES };
+    let m_lines = if comptime!(c_idx.transposed) {
+        RtC::LINES
+    } else {
+        RtR::LINES
+    };
+    let n_lines = if comptime!(c_idx.transposed) {
+        RtR::LINES
+    } else {
+        RtC::LINES
+    };
 
     #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
     for ml in 0..m_lines {
@@ -165,8 +187,16 @@ fn accum_scalar<F: Float, RtR: Dim, RtC: Dim>(
     offset_m: usize,
     offset_n: usize,
 ) {
-    let m_lines = if comptime!(c_idx.transposed) { RtC::LINES } else { RtR::LINES };
-    let n_lines = if comptime!(c_idx.transposed) { RtR::LINES } else { RtC::LINES };
+    let m_lines = if comptime!(c_idx.transposed) {
+        RtC::LINES
+    } else {
+        RtR::LINES
+    };
+    let n_lines = if comptime!(c_idx.transposed) {
+        RtR::LINES
+    } else {
+        RtC::LINES
+    };
 
     #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
     for ml in 0..m_lines {
@@ -200,7 +230,11 @@ fn accum_scalar<F: Float, RtR: Dim, RtC: Dim>(
                     let (c_line, c_elem) = c_idx.scalar_index(c_row, c_col);
                     let current = c.data[c_line][c_elem];
                     let new_val = current + a_val * b_val;
-                    write_into_line(c.data.to_slice_mut().slice_mut(c_line, c_line + 1), c_elem, new_val);
+                    write_into_line(
+                        c.data.to_slice_mut().slice_mut(c_line, c_line + 1),
+                        c_elem,
+                        new_val,
+                    );
                 }
             }
         }
@@ -231,11 +265,17 @@ macro_rules! define_mma_rt {
         ) {
             let a_idx = Indexer::new($a_d1::LINES, $a_trans, true);
             let b_idx = Indexer::new($b_d1::LINES, $b_trans, true);
-            let c_stride = if comptime!($c_trans) { CM::LINES } else { CN::LINES };
+            let c_stride = if comptime!($c_trans) {
+                CM::LINES
+            } else {
+                CN::LINES
+            };
             let c_idx = Indexer::new(c_stride, $c_trans, false);
 
             for k in 0..TileK::VALUE {
-                $accum::<F, $c_d0, $c_d1>(c, &a.data, &b.data, &a_idx, &b_idx, &c_idx, k, offset_m, offset_n);
+                $accum::<F, $c_d0, $c_d1>(
+                    c, &a.data, &b.data, &a_idx, &b_idx, &c_idx, k, offset_m, offset_n,
+                );
             }
         }
     };
@@ -247,29 +287,111 @@ macro_rules! define_mma_rt {
 // Naming: A=[M,K], At=[K,M], B=[K,N], Bt=[N,K]
 // Accum strategy: b_trans && !c_trans → accum_n, a_trans && c_trans → accum_m, else → accum_scalar
 
-define_mma_rt!(mma_rt_ABt,    false, false, false, [TileM, TileK], [TileN, TileK], accum_scalar, [CM, CN]);
-define_mma_rt!(mma_rt_ABt_t,  false, false, true,  [TileM, TileK], [TileN, TileK], accum_scalar, [CN, CM]);
-define_mma_rt!(mma_rt_AB,     false, true,  false, [TileM, TileK], [TileK, TileN], accum_n,      [CM, CN]);
-define_mma_rt!(mma_rt_AB_t,   false, true,  true,  [TileM, TileK], [TileK, TileN], accum_scalar, [CN, CM]);
-define_mma_rt!(mma_rt_AtBt,   true,  false, false, [TileK, TileM], [TileN, TileK], accum_scalar, [CM, CN]);
-define_mma_rt!(mma_rt_AtBt_t, true,  false, true,  [TileK, TileM], [TileN, TileK], accum_m,      [CN, CM]);
-define_mma_rt!(mma_rt_AtB,    true,  true,  false, [TileK, TileM], [TileK, TileN], accum_n,      [CM, CN]);
-define_mma_rt!(mma_rt_AtB_t,  true,  true,  true,  [TileK, TileM], [TileK, TileN], accum_m,      [CN, CM]);
+define_mma_rt!(
+    mma_rt_ABt,
+    false,
+    false,
+    false,
+    [TileM, TileK],
+    [TileN, TileK],
+    accum_scalar,
+    [CM, CN]
+);
+define_mma_rt!(
+    mma_rt_ABt_t,
+    false,
+    false,
+    true,
+    [TileM, TileK],
+    [TileN, TileK],
+    accum_scalar,
+    [CN, CM]
+);
+define_mma_rt!(
+    mma_rt_AB,
+    false,
+    true,
+    false,
+    [TileM, TileK],
+    [TileK, TileN],
+    accum_n,
+    [CM, CN]
+);
+define_mma_rt!(
+    mma_rt_AB_t,
+    false,
+    true,
+    true,
+    [TileM, TileK],
+    [TileK, TileN],
+    accum_scalar,
+    [CN, CM]
+);
+define_mma_rt!(
+    mma_rt_AtBt,
+    true,
+    false,
+    false,
+    [TileK, TileM],
+    [TileN, TileK],
+    accum_scalar,
+    [CM, CN]
+);
+define_mma_rt!(
+    mma_rt_AtBt_t,
+    true,
+    false,
+    true,
+    [TileK, TileM],
+    [TileN, TileK],
+    accum_m,
+    [CN, CM]
+);
+define_mma_rt!(
+    mma_rt_AtB,
+    true,
+    true,
+    false,
+    [TileK, TileM],
+    [TileK, TileN],
+    accum_n,
+    [CM, CN]
+);
+define_mma_rt!(
+    mma_rt_AtB_t,
+    true,
+    true,
+    true,
+    [TileK, TileM],
+    [TileK, TileN],
+    accum_m,
+    [CN, CM]
+);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{plane::{load_st_direct, load_st_transpose}, test_kernel};
+    use crate::{
+        cube::{load_st_direct, load_st_transpose},
+        test_kernel,
+    };
 
     fn reference_matmul<F: crate::test_utils::TestFloat>(
-        in_a: &[F], in_b: &[F], output: &mut [F],
-        m: usize, k: usize, n: usize,
+        in_a: &[F],
+        in_b: &[F],
+        output: &mut [F],
+        m: usize,
+        k: usize,
+        n: usize,
     ) {
         for mi in 0..m {
             for ni in 0..n {
                 let mut sum = F::from_f64(0.0);
                 for ki in 0..k {
-                    sum = F::from_f64(sum.into_f64() + in_a[mi * k + ki].into_f64() * in_b[ki * n + ni].into_f64());
+                    sum = F::from_f64(
+                        sum.into_f64()
+                            + in_a[mi * k + ki].into_f64() * in_b[ki * n + ni].into_f64(),
+                    );
                 }
                 output[mi * n + ni] = sum;
             }
@@ -332,28 +454,84 @@ mod tests {
     }
 
     // a_trans=false, b_trans=false: A=[M,K] direct, B=[K,N] transpose to [N,K]
-    define_test_kernel!(test_kernel_ABt, mma_rt_ABt, false,
-        [TileM, TileK], load_st_direct, [TileN, TileK], load_st_transpose);
-    define_test_kernel!(test_kernel_ABt_t, mma_rt_ABt_t, true,
-        [TileM, TileK], load_st_direct, [TileN, TileK], load_st_transpose);
+    define_test_kernel!(
+        test_kernel_ABt,
+        mma_rt_ABt,
+        false,
+        [TileM, TileK],
+        load_st_direct,
+        [TileN, TileK],
+        load_st_transpose
+    );
+    define_test_kernel!(
+        test_kernel_ABt_t,
+        mma_rt_ABt_t,
+        true,
+        [TileM, TileK],
+        load_st_direct,
+        [TileN, TileK],
+        load_st_transpose
+    );
 
     // a_trans=false, b_trans=true: A=[M,K] direct, B=[K,N] direct
-    define_test_kernel!(test_kernel_AB, mma_rt_AB, false,
-        [TileM, TileK], load_st_direct, [TileK, TileN], load_st_direct);
-    define_test_kernel!(test_kernel_AB_t, mma_rt_AB_t, true,
-        [TileM, TileK], load_st_direct, [TileK, TileN], load_st_direct);
+    define_test_kernel!(
+        test_kernel_AB,
+        mma_rt_AB,
+        false,
+        [TileM, TileK],
+        load_st_direct,
+        [TileK, TileN],
+        load_st_direct
+    );
+    define_test_kernel!(
+        test_kernel_AB_t,
+        mma_rt_AB_t,
+        true,
+        [TileM, TileK],
+        load_st_direct,
+        [TileK, TileN],
+        load_st_direct
+    );
 
     // a_trans=true, b_trans=false: A=[M,K] transpose to [K,M], B=[K,N] transpose to [N,K]
-    define_test_kernel!(test_kernel_AtBt, mma_rt_AtBt, false,
-        [TileK, TileM], load_st_transpose, [TileN, TileK], load_st_transpose);
-    define_test_kernel!(test_kernel_AtBt_t, mma_rt_AtBt_t, true,
-        [TileK, TileM], load_st_transpose, [TileN, TileK], load_st_transpose);
+    define_test_kernel!(
+        test_kernel_AtBt,
+        mma_rt_AtBt,
+        false,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileN, TileK],
+        load_st_transpose
+    );
+    define_test_kernel!(
+        test_kernel_AtBt_t,
+        mma_rt_AtBt_t,
+        true,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileN, TileK],
+        load_st_transpose
+    );
 
     // a_trans=true, b_trans=true: A=[M,K] transpose to [K,M], B=[K,N] direct
-    define_test_kernel!(test_kernel_AtB, mma_rt_AtB, false,
-        [TileK, TileM], load_st_transpose, [TileK, TileN], load_st_direct);
-    define_test_kernel!(test_kernel_AtB_t, mma_rt_AtB_t, true,
-        [TileK, TileM], load_st_transpose, [TileK, TileN], load_st_direct);
+    define_test_kernel!(
+        test_kernel_AtB,
+        mma_rt_AtB,
+        false,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileK, TileN],
+        load_st_direct
+    );
+    define_test_kernel!(
+        test_kernel_AtB_t,
+        mma_rt_AtB_t,
+        true,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileK, TileN],
+        load_st_direct
+    );
 
     macro_rules! define_test {
         ($test_name:ident, $kernel:ident) => {

@@ -2,7 +2,7 @@
 
 use crate::{
     prelude::*,
-    tiles::{mma::*, Dim},
+    tiles::{Dim, mma::*},
 };
 use cubecl::prelude::*;
 
@@ -52,20 +52,68 @@ macro_rules! define_plane_mma {
 // C: c_trans=false → Rt<M,N>, c_trans=true → Rt<N,M>
 // Naming: A=[M,K], At=[K,M], B=[K,N], Bt=[N,K]
 
-define_plane_mma!(mma_ABt,    mma_rt_ABt,    [TileM, TileK], [TileN, TileK], [ThreadTileM, ThreadTileN]);
-define_plane_mma!(mma_ABt_t,  mma_rt_ABt_t,  [TileM, TileK], [TileN, TileK], [ThreadTileN, ThreadTileM]);
-define_plane_mma!(mma_AB,     mma_rt_AB,     [TileM, TileK], [TileK, TileN], [ThreadTileM, ThreadTileN]);
-define_plane_mma!(mma_AB_t,   mma_rt_AB_t,   [TileM, TileK], [TileK, TileN], [ThreadTileN, ThreadTileM]);
-define_plane_mma!(mma_AtBt,   mma_rt_AtBt,   [TileK, TileM], [TileN, TileK], [ThreadTileM, ThreadTileN]);
-define_plane_mma!(mma_AtBt_t, mma_rt_AtBt_t, [TileK, TileM], [TileN, TileK], [ThreadTileN, ThreadTileM]);
-define_plane_mma!(mma_AtB,    mma_rt_AtB,    [TileK, TileM], [TileK, TileN], [ThreadTileM, ThreadTileN]);
-define_plane_mma!(mma_AtB_t,  mma_rt_AtB_t,  [TileK, TileM], [TileK, TileN], [ThreadTileN, ThreadTileM]);
+define_plane_mma!(
+    mma_ABt,
+    mma_rt_ABt,
+    [TileM, TileK],
+    [TileN, TileK],
+    [ThreadTileM, ThreadTileN]
+);
+define_plane_mma!(
+    mma_ABt_t,
+    mma_rt_ABt_t,
+    [TileM, TileK],
+    [TileN, TileK],
+    [ThreadTileN, ThreadTileM]
+);
+define_plane_mma!(
+    mma_AB,
+    mma_rt_AB,
+    [TileM, TileK],
+    [TileK, TileN],
+    [ThreadTileM, ThreadTileN]
+);
+define_plane_mma!(
+    mma_AB_t,
+    mma_rt_AB_t,
+    [TileM, TileK],
+    [TileK, TileN],
+    [ThreadTileN, ThreadTileM]
+);
+define_plane_mma!(
+    mma_AtBt,
+    mma_rt_AtBt,
+    [TileK, TileM],
+    [TileN, TileK],
+    [ThreadTileM, ThreadTileN]
+);
+define_plane_mma!(
+    mma_AtBt_t,
+    mma_rt_AtBt_t,
+    [TileK, TileM],
+    [TileN, TileK],
+    [ThreadTileN, ThreadTileM]
+);
+define_plane_mma!(
+    mma_AtB,
+    mma_rt_AtB,
+    [TileK, TileM],
+    [TileK, TileN],
+    [ThreadTileM, ThreadTileN]
+);
+define_plane_mma!(
+    mma_AtB_t,
+    mma_rt_AtB_t,
+    [TileK, TileM],
+    [TileK, TileN],
+    [ThreadTileN, ThreadTileM]
+);
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        plane::{load_st_direct, load_st_transpose, store_rt_direct},
+        cube::{load_st_direct, load_st_transpose, store_rt_direct},
         test_kernel,
         tiles::Rt,
     };
@@ -83,7 +131,8 @@ mod tests {
                 let mut sum = F::from_f64(0.0);
                 for ki in 0..k {
                     sum = F::from_f64(
-                        sum.into_f64() + in_a[mi * k + ki].into_f64() * in_b[ki * n + ni].into_f64(),
+                        sum.into_f64()
+                            + in_a[mi * k + ki].into_f64() * in_b[ki * n + ni].into_f64(),
                     );
                 }
                 output[mi * n + ni] = sum;
@@ -153,28 +202,84 @@ mod tests {
     }
 
     // a_trans=false, b_trans=false: A=[M,K] direct, B=[K,N] transpose to [N,K]
-    define_plane_test_kernel!(test_kernel_ABt, mma_ABt, false,
-        [TileM, TileK], load_st_direct, [TileN, TileK], load_st_transpose);
-    define_plane_test_kernel!(test_kernel_ABt_t, mma_ABt_t, true,
-        [TileM, TileK], load_st_direct, [TileN, TileK], load_st_transpose);
+    define_plane_test_kernel!(
+        test_kernel_ABt,
+        mma_ABt,
+        false,
+        [TileM, TileK],
+        load_st_direct,
+        [TileN, TileK],
+        load_st_transpose
+    );
+    define_plane_test_kernel!(
+        test_kernel_ABt_t,
+        mma_ABt_t,
+        true,
+        [TileM, TileK],
+        load_st_direct,
+        [TileN, TileK],
+        load_st_transpose
+    );
 
     // a_trans=false, b_trans=true: A=[M,K] direct, B=[K,N] direct
-    define_plane_test_kernel!(test_kernel_AB, mma_AB, false,
-        [TileM, TileK], load_st_direct, [TileK, TileN], load_st_direct);
-    define_plane_test_kernel!(test_kernel_AB_t, mma_AB_t, true,
-        [TileM, TileK], load_st_direct, [TileK, TileN], load_st_direct);
+    define_plane_test_kernel!(
+        test_kernel_AB,
+        mma_AB,
+        false,
+        [TileM, TileK],
+        load_st_direct,
+        [TileK, TileN],
+        load_st_direct
+    );
+    define_plane_test_kernel!(
+        test_kernel_AB_t,
+        mma_AB_t,
+        true,
+        [TileM, TileK],
+        load_st_direct,
+        [TileK, TileN],
+        load_st_direct
+    );
 
     // a_trans=true, b_trans=false: A=[M,K] transpose to [K,M], B=[K,N] transpose to [N,K]
-    define_plane_test_kernel!(test_kernel_AtBt, mma_AtBt, false,
-        [TileK, TileM], load_st_transpose, [TileN, TileK], load_st_transpose);
-    define_plane_test_kernel!(test_kernel_AtBt_t, mma_AtBt_t, true,
-        [TileK, TileM], load_st_transpose, [TileN, TileK], load_st_transpose);
+    define_plane_test_kernel!(
+        test_kernel_AtBt,
+        mma_AtBt,
+        false,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileN, TileK],
+        load_st_transpose
+    );
+    define_plane_test_kernel!(
+        test_kernel_AtBt_t,
+        mma_AtBt_t,
+        true,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileN, TileK],
+        load_st_transpose
+    );
 
     // a_trans=true, b_trans=true: A=[M,K] transpose to [K,M], B=[K,N] direct
-    define_plane_test_kernel!(test_kernel_AtB, mma_AtB, false,
-        [TileK, TileM], load_st_transpose, [TileK, TileN], load_st_direct);
-    define_plane_test_kernel!(test_kernel_AtB_t, mma_AtB_t, true,
-        [TileK, TileM], load_st_transpose, [TileK, TileN], load_st_direct);
+    define_plane_test_kernel!(
+        test_kernel_AtB,
+        mma_AtB,
+        false,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileK, TileN],
+        load_st_direct
+    );
+    define_plane_test_kernel!(
+        test_kernel_AtB_t,
+        mma_AtB_t,
+        true,
+        [TileK, TileM],
+        load_st_transpose,
+        [TileK, TileN],
+        load_st_direct
+    );
 
     macro_rules! define_plane_test {
         ($test_name:ident, $kernel:ident) => {

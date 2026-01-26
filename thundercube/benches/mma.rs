@@ -5,12 +5,12 @@ use cubecl::prelude::*;
 use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
-    plane::{load_st_direct, load_st_transpose, mma_AB, mma_AtB, store_rt_direct},
+    cube::{load_st_direct, load_st_transpose, mma_AB, mma_AtB, store_rt_direct},
     test_utils::{client, get_strides, upload},
-    tiles::{D16, D32, D4, D8, Dim, DimOrOne, Rt, St},
+    tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, St},
 };
 
-type TestRuntime = cubecl::TestRuntime;
+type TestRuntime = thundercube::test_utils::TestRuntime;
 
 /// Benchmark kernel for mma_AtB with configurable tile sizes.
 /// C = A^T * B where A is loaded transposed.
@@ -43,7 +43,14 @@ fn bench_mma_AtB<
 /// Benchmark kernel for mma_AB with configurable tile sizes.
 /// C = A * B where A is loaded directly (not transposed).
 #[cube(launch)]
-fn bench_mma_AB<F: Float, TileM: Dim, TileK: Dim, TileN: Dim, ThreadTileM: Dim, ThreadTileN: Dim>(
+fn bench_mma_AB<
+    F: Float,
+    TileM: Dim,
+    TileK: Dim,
+    TileN: Dim,
+    ThreadTileM: Dim,
+    ThreadTileN: Dim,
+>(
     in_a: &Tensor<Line<F>>,
     in_b: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
@@ -97,16 +104,30 @@ macro_rules! bench_mma_AtB_impl {
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let in_a = unsafe {
-                    TensorArg::from_raw_parts::<Line<f32>>(&handle_a, &strides_a, &shape_a, LINE_SIZE)
+                    TensorArg::from_raw_parts::<Line<f32>>(
+                        &handle_a, &strides_a, &shape_a, LINE_SIZE,
+                    )
                 };
                 let in_b = unsafe {
-                    TensorArg::from_raw_parts::<Line<f32>>(&handle_b, &strides_b, &shape_b, LINE_SIZE)
+                    TensorArg::from_raw_parts::<Line<f32>>(
+                        &handle_b, &strides_b, &shape_b, LINE_SIZE,
+                    )
                 };
                 let output = unsafe {
-                    TensorArg::from_raw_parts::<Line<f32>>(&handle_c, &strides_c, &shape_c, LINE_SIZE)
+                    TensorArg::from_raw_parts::<Line<f32>>(
+                        &handle_c, &strides_c, &shape_c, LINE_SIZE,
+                    )
                 };
 
-                bench_mma_AtB::launch::<f32, $tile_k, $tile_m, $tile_n, $thread_tile, $thread_tile, TestRuntime>(
+                bench_mma_AtB::launch::<
+                    f32,
+                    $tile_k,
+                    $tile_m,
+                    $tile_n,
+                    $thread_tile,
+                    $thread_tile,
+                    TestRuntime,
+                >(
                     &client,
                     CubeCount::Static(1, 1, 1),
                     CubeDim::new_1d(num_threads as u32),
@@ -157,16 +178,30 @@ macro_rules! bench_mma_AB_impl {
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let in_a = unsafe {
-                    TensorArg::from_raw_parts::<Line<f32>>(&handle_a, &strides_a, &shape_a, LINE_SIZE)
+                    TensorArg::from_raw_parts::<Line<f32>>(
+                        &handle_a, &strides_a, &shape_a, LINE_SIZE,
+                    )
                 };
                 let in_b = unsafe {
-                    TensorArg::from_raw_parts::<Line<f32>>(&handle_b, &strides_b, &shape_b, LINE_SIZE)
+                    TensorArg::from_raw_parts::<Line<f32>>(
+                        &handle_b, &strides_b, &shape_b, LINE_SIZE,
+                    )
                 };
                 let output = unsafe {
-                    TensorArg::from_raw_parts::<Line<f32>>(&handle_c, &strides_c, &shape_c, LINE_SIZE)
+                    TensorArg::from_raw_parts::<Line<f32>>(
+                        &handle_c, &strides_c, &shape_c, LINE_SIZE,
+                    )
                 };
 
-                bench_mma_AB::launch::<f32, $tile_m, $tile_k, $tile_n, $thread_tile, $thread_tile, TestRuntime>(
+                bench_mma_AB::launch::<
+                    f32,
+                    $tile_m,
+                    $tile_k,
+                    $tile_n,
+                    $thread_tile,
+                    $thread_tile,
+                    TestRuntime,
+                >(
                     &client,
                     CubeCount::Static(1, 1, 1),
                     CubeDim::new_1d(num_threads as u32),

@@ -6,10 +6,10 @@ use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
     test_utils::{client, upload},
-    tiles::{D16, D32, D4, D8, Dim, DimOrOne, Rt},
+    tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt},
 };
 
-type TestRuntime = cubecl::TestRuntime;
+type TestRuntime = thundercube::test_utils::TestRuntime;
 
 // ==================== UNARY OPERATION KERNELS ====================
 
@@ -115,7 +115,8 @@ macro_rules! bench_unary_impl {
         $c.throughput(Throughput::Elements(size as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
-                let input = unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_in, size, LINE_SIZE) };
+                let input =
+                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_in, size, LINE_SIZE) };
                 let output =
                     unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_out, size, LINE_SIZE) };
 
@@ -153,8 +154,10 @@ macro_rules! bench_binary_impl {
         $c.throughput(Throughput::Elements(size as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
-                let a = unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_a, size, LINE_SIZE) };
-                let b = unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_b, size, LINE_SIZE) };
+                let a =
+                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_a, size, LINE_SIZE) };
+                let b =
+                    unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_b, size, LINE_SIZE) };
                 let output =
                     unsafe { ArrayArg::from_raw_parts::<Line<f32>>(&handle_out, size, LINE_SIZE) };
 
@@ -251,5 +254,10 @@ fn bench_tile_size_scaling_unary(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_unary_ops, bench_binary_ops, bench_tile_size_scaling_unary);
+criterion_group!(
+    benches,
+    bench_unary_ops,
+    bench_binary_ops,
+    bench_tile_size_scaling_unary
+);
 criterion_main!(benches);

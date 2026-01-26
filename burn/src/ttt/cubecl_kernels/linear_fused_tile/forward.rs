@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
 use cubecl::prelude::*;
-use thundercube::{plane::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
+use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
 use super::layer_norm::{
     layer_norm_forward_save_intermediates, layer_norm_l2_grad_save_intermediates,
@@ -98,17 +98,17 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut std_ln_rv = Rv::<P::E, P::CS>::new();
 
     // Load QKV for this stage
-    plane::load_st_transpose(&inputs.xq, &mut q_smem, stage_offset, 0, 0);
-    plane::load_st_transpose(&inputs.xk, &mut k_smem, stage_offset, 0, 0);
-    plane::load_st_direct(&inputs.xk, &mut k_direct_smem, stage_offset, 0, 0);
-    plane::load_st_direct(&inputs.xv, &mut v_direct_smem, stage_offset, 0, 0);
+    cube::load_st_transpose(&inputs.xq, &mut q_smem, stage_offset, 0, 0);
+    cube::load_st_transpose(&inputs.xk, &mut k_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&inputs.xk, &mut k_direct_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&inputs.xv, &mut v_direct_smem, stage_offset, 0, 0);
 
     sync_cube();
 
     // Step 1: z1 = xk @ W + b
     let mut z1_reg = P::cs_f_reg();
     z1_reg.zero();
-    plane::mma_AtB(&mut z1_reg, &k_smem, weight_smem);
+    cube::mma_AtB(&mut z1_reg, &k_smem, weight_smem);
 
     sync_cube();
 
@@ -123,7 +123,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     }
     z1_reg.add_row(&bias_reg);
 
-    plane::store_rt_to_st(&z1_reg, &mut z1_smem);
+    cube::store_rt_to_st(&z1_reg, &mut z1_smem);
 
     sync_cube();
 
@@ -152,34 +152,34 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Store fused layer norm intermediates
-    plane::store_st_direct(
+    cube::store_st_direct(
         &x_hat_fused_smem,
         &mut fwd_intermediates.x_hat_fused,
         stage_offset,
         0,
         0,
     );
-    plane::store_st_direct(
+    cube::store_st_direct(
         &grad_output_fused_smem,
         &mut fwd_intermediates.grad_output_fused,
         stage_offset,
         0,
         0,
     );
-    plane::store_st_direct(
+    cube::store_st_direct(
         &grad_x_hat_fused_smem,
         &mut fwd_intermediates.grad_x_hat_fused,
         stage_offset,
         0,
         0,
     );
-    plane::broadcast::store_rv_direct(
+    cube::broadcast::store_rv_direct(
         &std_fused_rv,
         &mut fwd_intermediates.std_fused,
         ttt_lr_eta_idx,
     );
     // z1_smem now contains grad_l_wrt_Z1
-    plane::store_st_direct(
+    cube::store_st_direct(
         &z1_smem,
         &mut fwd_intermediates.grad_l_wrt_Z1,
         stage_offset,
@@ -203,13 +203,13 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut ttt_lr_eta_reg = P::cs_reg();
     let token_eta_offset = tile_row_eta * P::CS_Reg::VALUE;
     let ttt_lr_eta_offset = ttt_lr_eta_idx + tile_col_eta * P::CS_Reg::VALUE;
-    plane::broadcast::load_rv_direct(&inputs.token_eta, &mut token_eta_reg, token_eta_offset);
-    plane::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut ttt_lr_eta_reg, ttt_lr_eta_offset);
+    cube::broadcast::load_rv_direct(&inputs.token_eta, &mut token_eta_reg, token_eta_offset);
+    cube::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut ttt_lr_eta_reg, ttt_lr_eta_offset);
 
     eta_reg.add_col(&token_eta_reg);
     eta_reg.mul_row(&ttt_lr_eta_reg);
 
-    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+    cube::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
 
     sync_cube();
 
@@ -220,11 +220,11 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     // Step 5: attn_scores = xq @ xk^T, tril
     let mut attn_reg = P::cs_cs_reg();
     attn_reg.zero();
-    plane::mma_AtB(&mut attn_reg, &q_smem, &k_smem);
+    cube::mma_AtB(&mut attn_reg, &q_smem, &k_smem);
 
     sync_cube();
 
-    plane::store_rt_to_st(&attn_reg, &mut attn_smem);
+    cube::store_rt_to_st(&attn_reg, &mut attn_smem);
 
     sync_cube();
 
@@ -237,7 +237,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     eta_reg.zero();
     eta_reg.add_col(&token_eta_reg);
     eta_reg.mul_row(&ttt_lr_eta_reg);
-    plane::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
+    cube::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
 
     sync_cube();
 
@@ -248,7 +248,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     // eta @ grad
     let mut eta_grad_reg = P::cs_f_reg();
     eta_grad_reg.zero();
-    plane::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
+    cube::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
 
     sync_cube();
 
@@ -260,14 +260,14 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     // (eta * attn) @ grad
     let mut eta_attn_grad_reg = P::cs_f_reg();
     eta_attn_grad_reg.zero();
-    plane::mma_AB(&mut eta_attn_grad_reg, &eta_matrix_smem, &z1_smem);
+    cube::mma_AB(&mut eta_attn_grad_reg, &eta_matrix_smem, &z1_smem);
 
     sync_cube();
 
     // z1_bar = xq @ W
     let mut z1_bar_reg = P::cs_f_reg();
     z1_bar_reg.zero();
-    plane::mma_AtB(&mut z1_bar_reg, &q_smem, weight_smem);
+    cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_smem);
 
     sync_cube();
 
@@ -281,7 +281,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     z1_bar_reg.sub(&eta_grad_reg);
 
     // Store z1_bar to shared memory for layer norm
-    plane::store_rt_to_st(&z1_bar_reg, &mut temp_cs_f_smem);
+    cube::store_rt_to_st(&z1_bar_reg, &mut temp_cs_f_smem);
 
     sync_cube();
 
@@ -300,19 +300,19 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Store output layer norm intermediates
-    plane::store_st_direct(
+    cube::store_st_direct(
         &x_hat_ln_smem,
         &mut fwd_intermediates.x_hat_ln,
         stage_offset,
         0,
         0,
     );
-    plane::broadcast::store_rv_direct(&std_ln_rv, &mut fwd_intermediates.std_ln, ttt_lr_eta_idx);
+    cube::broadcast::store_rv_direct(&std_ln_rv, &mut fwd_intermediates.std_ln, ttt_lr_eta_idx);
 
     sync_cube();
 
     // Load xq into k_direct_smem
-    plane::load_st_direct(&inputs.xq, &mut k_direct_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&inputs.xq, &mut k_direct_smem, stage_offset, 0, 0);
 
     sync_cube();
 
@@ -322,7 +322,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Store output for this stage
-    plane::store_st_direct(&temp_cs_f_smem, &mut outputs.output, stage_offset, 0, 0);
+    cube::store_st_direct(&temp_cs_f_smem, &mut outputs.output, stage_offset, 0, 0);
 
     sync_cube();
 
@@ -335,11 +335,11 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     // Load ttt_lr_eta and scale by token_eta[last]
     let mut last_eta_rv = Rv::<P::E, P::CS>::new();
-    plane::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
+    cube::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta_scalar);
 
     // Reload k transposed for weight update
-    plane::load_st_transpose(&inputs.xk, &mut q_smem, stage_offset, 0, 0);
+    cube::load_st_transpose(&inputs.xk, &mut q_smem, stage_offset, 0, 0);
 
     sync_cube();
 
@@ -351,15 +351,15 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     // Compute weight_update = scaled_xk^T @ grad = q_smem @ z1_smem = [F, CS] @ [CS, F] = [F, F]
     let mut weight_update_reg = P::f_f_reg();
     weight_update_reg.zero();
-    plane::mma_AB(&mut weight_update_reg, &q_smem, &z1_smem);
+    cube::mma_AB(&mut weight_update_reg, &q_smem, &z1_smem);
 
     sync_cube();
 
     // Update weight in place: weight -= weight_update
     let mut weight_reg = P::f_f_reg();
-    plane::load_rt_from_st(weight_smem, &mut weight_reg);
+    cube::load_rt_from_st(weight_smem, &mut weight_reg);
     weight_reg.sub(&weight_update_reg);
-    plane::store_rt_to_st(&weight_reg, weight_smem);
+    cube::store_rt_to_st(&weight_reg, weight_smem);
 
     sync_cube();
 
@@ -373,7 +373,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     let mut bias_update_rv = Rv::<P::E, P::F>::new();
-    plane::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
+    cube::reduce_st_cols::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
 
     // Update bias in place
     bias_rv.sub(&bias_update_rv);
@@ -414,20 +414,20 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 
     // Initialize weight in shared memory
     let mut weight_smem = P::f_f_tile();
-    plane::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
+    cube::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
 
     sync_cube();
 
     // Initialize bias in register vector
     let mut bias_rv = Rv::<P::E, P::F>::new();
-    plane::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
+    cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
     // Load layer norm params
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
     let mut ln_weight_rv = Rv::<P::E, P::F>::new();
     let mut ln_bias_rv = Rv::<P::E, P::F>::new();
-    plane::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
-    plane::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
+    cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
+    cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
     // Process single stage
     fused_ttt_forward_stage::<P>(
@@ -449,8 +449,8 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
     let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
 
-    plane::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
-    plane::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
+    cube::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
+    cube::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
 }
 
 /// Fused TTT-Linear forward pass kernel with multiple mini-batch stages.
@@ -486,20 +486,20 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
 
     // Initialize weight in shared memory
     let mut weight_smem = P::f_f_tile();
-    plane::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
+    cube::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
 
     sync_cube();
 
     // Initialize bias in register vector
     let mut bias_rv = Rv::<P::E, P::F>::new();
-    plane::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
+    cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
     // Load layer norm params (shared across all stages)
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
     let mut ln_weight_rv = Rv::<P::E, P::F>::new();
     let mut ln_bias_rv = Rv::<P::E, P::F>::new();
-    plane::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
-    plane::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
+    cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
+    cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
     // Process all stages
     for stage in 0..num_stages {
@@ -526,6 +526,6 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
     let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
 
-    plane::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
-    plane::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
+    cube::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
+    cube::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
 }

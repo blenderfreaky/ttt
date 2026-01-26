@@ -5,16 +5,19 @@ use cubecl::prelude::*;
 use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
-    plane::{load_st_direct, load_st_transpose, store_st_direct, store_st_transpose},
+    cube::{load_st_direct, load_st_transpose, store_st_direct, store_st_transpose},
     test_utils::{client, get_strides, upload},
-    tiles::{D16, D32, D4, D64, D8, Dim, DimOrOne, St},
+    tiles::{D4, D8, D16, D32, D64, Dim, DimOrOne, St},
 };
 
-type TestRuntime = cubecl::TestRuntime;
+type TestRuntime = thundercube::test_utils::TestRuntime;
 
 /// Benchmark kernel for direct load (global -> shared -> global)
 #[cube(launch)]
-fn bench_load_direct<F: Float, R: Dim, C: Dim>(input: &Tensor<Line<F>>, output: &mut Tensor<Line<F>>) {
+fn bench_load_direct<F: Float, R: Dim, C: Dim>(
+    input: &Tensor<Line<F>>,
+    output: &mut Tensor<Line<F>>,
+) {
     let mut st = St::<F, R, C>::new();
     load_st_direct(input, &mut st, 0, 0, 0);
     store_st_direct(&st, output, 0, 0, 0);
@@ -143,9 +146,30 @@ fn bench_store_transpose_tile_sizes(c: &mut Criterion) {
 
     bench_load_store_impl!(group, "store_transpose", bench_store_transpose, D4, D4, 1);
     bench_load_store_impl!(group, "store_transpose", bench_store_transpose, D8, D8, 4);
-    bench_load_store_impl!(group, "store_transpose", bench_store_transpose, D16, D16, 16);
-    bench_load_store_impl!(group, "store_transpose", bench_store_transpose, D32, D32, 64);
-    bench_load_store_impl!(group, "store_transpose", bench_store_transpose, D64, D64, 64);
+    bench_load_store_impl!(
+        group,
+        "store_transpose",
+        bench_store_transpose,
+        D16,
+        D16,
+        16
+    );
+    bench_load_store_impl!(
+        group,
+        "store_transpose",
+        bench_store_transpose,
+        D32,
+        D32,
+        64
+    );
+    bench_load_store_impl!(
+        group,
+        "store_transpose",
+        bench_store_transpose,
+        D64,
+        D64,
+        64
+    );
 
     group.finish();
 }
@@ -155,9 +179,30 @@ fn bench_round_trip_transpose_tile_sizes(c: &mut Criterion) {
 
     bench_load_store_impl!(group, "round_trip", bench_round_trip_transpose, D4, D4, 1);
     bench_load_store_impl!(group, "round_trip", bench_round_trip_transpose, D8, D8, 4);
-    bench_load_store_impl!(group, "round_trip", bench_round_trip_transpose, D16, D16, 16);
-    bench_load_store_impl!(group, "round_trip", bench_round_trip_transpose, D32, D32, 64);
-    bench_load_store_impl!(group, "round_trip", bench_round_trip_transpose, D64, D64, 64);
+    bench_load_store_impl!(
+        group,
+        "round_trip",
+        bench_round_trip_transpose,
+        D16,
+        D16,
+        16
+    );
+    bench_load_store_impl!(
+        group,
+        "round_trip",
+        bench_round_trip_transpose,
+        D32,
+        D32,
+        64
+    );
+    bench_load_store_impl!(
+        group,
+        "round_trip",
+        bench_round_trip_transpose,
+        D64,
+        D64,
+        64
+    );
 
     group.finish();
 }

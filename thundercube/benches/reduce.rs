@@ -5,13 +5,12 @@ use cubecl::prelude::*;
 use pollster::block_on;
 use thundercube::{
     LINE_SIZE,
-    plane::{load_st_direct, sum_st_cols, sum_st_rows},
+    cube::{load_st_direct, sum_st_cols, sum_st_rows},
     test_utils::{client, get_strides, upload},
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
-    util::sync_cube,
 };
 
-type TestRuntime = cubecl::TestRuntime;
+type TestRuntime = thundercube::test_utils::TestRuntime;
 
 // ==================== RT REDUCTION KERNELS ====================
 

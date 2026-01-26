@@ -398,11 +398,11 @@ mod tests {
                 let mut rv_row = Rv::<F, D8>::new();
 
                 rv_row.copy_from_array(row);
-                crate::plane::load_st_direct(a, &mut st, 0, 0, 0);
+                crate::cube::load_st_direct(a, &mut st, 0, 0, 0);
 
                 st.$method(&rv_row);
 
-                crate::plane::store_st_direct(&st, output, 0, 0, 0);
+                crate::cube::store_st_direct(&st, output, 0, 0, 0);
             }
         };
     }
@@ -419,11 +419,11 @@ mod tests {
                 let mut rv_col = Rv::<F, D8>::new();
 
                 rv_col.copy_from_array(col);
-                crate::plane::load_st_direct(a, &mut st, 0, 0, 0);
+                crate::cube::load_st_direct(a, &mut st, 0, 0, 0);
 
                 st.$method(&rv_col);
 
-                crate::plane::store_st_direct(&st, output, 0, 0, 0);
+                crate::cube::store_st_direct(&st, output, 0, 0, 0);
             }
         };
     }

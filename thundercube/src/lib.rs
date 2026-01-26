@@ -10,7 +10,7 @@
 #![allow(clippy::needless_range_loop)]
 
 pub mod binary_ops;
-pub mod plane;
+pub mod cube;
 pub mod reduction_ops;
 #[cfg(feature = "hip")]
 pub mod streaming;
@@ -35,7 +35,7 @@ pub mod prelude {
     pub use crate::LINE_SIZE;
     pub use crate::UNROLL_LIMIT;
     pub use crate::UNROLL_LIMIT_HOT;
-    pub use crate::plane;
+    pub use crate::cube;
     #[cfg(test)]
     pub use crate::test_kernel;
     pub use crate::tiles::*;
