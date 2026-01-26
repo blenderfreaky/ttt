@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-burn = { version = "0.20.0", features = [
+burn = { version = "0.20", features = [
     "ndarray",
     "train",
     "tui",
@@ -13,11 +13,11 @@ burn = { version = "0.20.0", features = [
     "cubecl",
     "fusion",
 ] }
-burn-fusion = "0.20.0"
-burn-cubecl = "0.20.0"
-burn-backend = { version = "0.20.0", features = ["cubecl"] }
-cubecl = "0.9.0"
-cubek = { version = "0.1.0", features = ["reduce", "matmul"] }
+burn-fusion = "0.20"
+burn-cubecl = "0.20"
+burn-backend = { version = "0.20", features = ["cubecl"] }
+cubecl = "0.9"
+cubek = { version = "0.1", features = ["reduce", "matmul"] }
 half = "2.7"
 
 tokenizers = { version = "0.22", features = ["http"] }
@@ -36,12 +36,12 @@ env_logger = "0.11"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 
-thundercube = { version = "0.1.0", path = "../thundercube" }
+thundercube = { version = "0.1", path = "../thundercube" }
 paste = "1"
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports", "csv_output"] }
-burn-import = "0.20.0"
+burn-import = "0.20"
 safetensors = "0.7"
 thundercube = { path = "../thundercube", features = ["test-utils"] }
 rand = "0.9"

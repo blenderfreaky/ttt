@@ -87,7 +87,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install useful cargo tools
-RUN cargo install cargo-nextest cargo-watch
+RUN cargo install --locked cargo-nextest cargo-watch
 
 # Set up CUDA environment
 ENV CUDA_PATH=/usr/local/cuda

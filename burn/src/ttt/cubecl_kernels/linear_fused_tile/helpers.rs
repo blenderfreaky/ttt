@@ -28,6 +28,13 @@ pub trait ParamsTrait: Send + Sync + 'static {
     fn f_reg_big() -> Rv<Self::E, Self::F>;
 }
 
+// pub type CS_F_Tile<P: ParamsTrait> = St<P::E, P::CS, P::F>;
+// pub type F_CS_Tile<P: ParamsTrait> = St<P::E, P::F, P::CS>;
+// pub type CS_CS_Tile<P: ParamsTrait> = St<P::E, P::CS, P::CS>;
+// pub type CS_F_Reg<P: ParamsTrait> = Rt<P::E, P::CS_Reg, P::F_Reg>;
+// pub type F_CS_Reg<P: ParamsTrait> = Rt<P::E, P::F_Reg, P::CS_Reg>;
+// pub type CS_CS_Reg<P: ParamsTrait> = CS_CS_Tile<P>;
+
 pub struct Params<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> {
     _phantom: std::marker::PhantomData<(E, CS, F, CS_Reg, F_Reg)>,
 }
