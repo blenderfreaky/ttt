@@ -12,15 +12,16 @@ where
     I: IntElement,
     BT: BoolElement,
 {
-    fn forward(inputs: K::Inputs<FloatTensor<Self>>) -> K::Outputs<FloatTensor<Self>> {
-        K::forward_launch::<R, F>(inputs)
+    fn forward(inputs: K::Inputs<FloatTensor<Self>>, config: K::Config) -> K::Outputs<FloatTensor<Self>> {
+        K::forward_launch::<R, F>(inputs, config)
     }
 
     fn backward(
         inputs: K::Inputs<FloatTensor<Self>>,
         outputs: Option<K::Outputs<FloatTensor<Self>>>,
         grad_outputs: K::Outputs<FloatTensor<Self>>,
+        config: K::Config,
     ) -> K::Inputs<FloatTensor<Self>> {
-        K::Backward::call::<R, F>(inputs, outputs, grad_outputs)
+        K::Backward::call::<R, F>(inputs, outputs, grad_outputs, config)
     }
 }

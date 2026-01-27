@@ -36,6 +36,7 @@ where
         Option<K::Outputs<B::FloatTensorPrimitive>>, // Saved outputs (if needed)
         [(Vec<usize>, FloatDType); M],               // Output shapes for creating zeros
         [Option<NodeId>; N],                         // Input node IDs for gradient registration
+        K::Config,                                   // Saved config
     );
 
     fn backward(
@@ -45,7 +46,7 @@ where
         _checkpointer: &mut Checkpointer,
     ) {
         let grad_output = grads.consume::<B>(&ops.node);
-        let (saved_inputs, saved_outputs, output_shapes, input_node_ids) = ops.state;
+        let (saved_inputs, saved_outputs, output_shapes, input_node_ids, config) = ops.state;
 
         // Get device from one of the saved inputs
         let inputs_arr = saved_inputs.into_array();
@@ -68,7 +69,7 @@ where
         // Reconstruct saved_inputs from the array
         let saved_inputs = K::Inputs::from_array(inputs_arr);
 
-        let grad_inputs = B::backward(saved_inputs, saved_outputs, grad_outputs);
+        let grad_inputs = B::backward(saved_inputs, saved_outputs, grad_outputs, config);
 
         // Register gradients for all tracked parents (accumulates if called multiple times)
         for (grad, node_id) in grad_inputs
@@ -90,14 +91,14 @@ where
     C: CheckpointStrategy,
     B::FloatTensorPrimitive: Clone,
 {
-    fn forward(inputs: K::Inputs<FloatTensor<Self>>) -> K::Outputs<FloatTensor<Self>> {
+    fn forward(inputs: K::Inputs<FloatTensor<Self>>, config: K::Config) -> K::Outputs<FloatTensor<Self>> {
         let input_arr = inputs.into_array();
         let nodes_array: [_; N] = input_arr.each_ref().map(|t| t.node.clone());
         let input_node_ids: [Option<NodeId>; N] = nodes_array.each_ref().map(|n| Some(n.id));
         let primitives: [_; N] = input_arr.map(|t| t.primitive.clone());
 
         let inner_inputs = K::Inputs::from_array(primitives.clone());
-        let outputs = B::forward(inner_inputs);
+        let outputs = B::forward(inner_inputs, config.clone());
         let output_primitives: [_; M] = outputs.into_array();
 
         // Save output shapes for creating zeros in backward
@@ -136,6 +137,7 @@ where
                         saved_outputs.clone(),
                         output_shapes.clone(),
                         input_node_ids,
+                        config.clone(),
                     ),
                     output_primitives[idx].clone(),
                 ),
@@ -150,6 +152,7 @@ where
         _inputs: K::Inputs<FloatTensor<Self>>,
         _outputs: Option<K::Outputs<FloatTensor<Self>>>,
         _grad_outputs: K::Outputs<FloatTensor<Self>>,
+        _config: K::Config,
     ) -> K::Inputs<FloatTensor<Self>> {
         panic!("Second-order gradients not supported")
     }

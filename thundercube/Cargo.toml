@@ -43,11 +43,11 @@ required-features = ["test-utils"]
 
 [[example]]
 name = "persistent_stream"
-required-features = ["test-utils", "hip"]
+required-features = ["test-utils", "rocm"]
 
 [features]
 default = ["test-utils"]
-hip = ["cubecl/hip", "dep:cubecl-hip-sys"]
+rocm = ["cubecl/hip", "dep:cubecl-hip-sys"]
 cuda = ["cubecl/cuda"]
 wgpu = ["cubecl/wgpu"]
 cpu = ["cubecl/cpu"]

@@ -9,10 +9,18 @@
 )]
 #![allow(clippy::needless_range_loop)]
 
+#[cfg(all(
+    test,
+    not(any(feature = "cuda", feature = "rocm", feature = "wgpu", feature = "cpu"))
+))]
+compile_error!(
+    "At least one backend must be enabled to run tests, please run with `--features cuda/rocm/wgpu/cpu`"
+);
+
 pub mod binary_ops;
 pub mod cube;
 pub mod reduction_ops;
-#[cfg(feature = "hip")]
+#[cfg(feature = "rocm")]
 pub mod streaming;
 pub mod tiles;
 pub mod unary_ops;
@@ -34,7 +42,7 @@ pub const UNROLL_LIMIT_HOT: usize = 8;
 pub mod prelude {
     #[cfg(test)]
     pub use crate::test_kernel;
-    #[cfg(feature = "hip")]
+    #[cfg(feature = "rocm")]
     pub use crate::util::gpu_sleep;
     pub use crate::{LINE_SIZE, UNROLL_LIMIT, UNROLL_LIMIT_HOT, cube, tiles::*, util::sync_planes};
 }

@@ -73,6 +73,7 @@ fn reduce_sum_batch<R: CubeRuntime>(
 
 pub fn forward<R: CubeRuntime, F: FloatElement>(
     inputs: TttInputs<CubeTensor<R>>,
+    epsilon: f32,
 ) -> TttOutputs<CubeTensor<R>> {
     let inputs = inputs.map(into_contiguous);
 
@@ -80,7 +81,8 @@ pub fn forward<R: CubeRuntime, F: FloatElement>(
     let [_batch_size, _num_heads, seq_len, head_dim] = shape.dims();
 
     let output = empty_like::<R, F>(&inputs.xq, shape);
-    let config = FusedTttConfig::new(seq_len, head_dim, inputs.epsilon);
+
+    let config = FusedTttConfig::new(seq_len, head_dim, epsilon, 0); // threads unused for non-tile kernel
 
     launch_fused_ttt_forward::<R, F>(
         &inputs.xq.client,
@@ -107,6 +109,7 @@ pub fn forward<R: CubeRuntime, F: FloatElement>(
 pub fn backward<R: CubeRuntime, F: FloatElement>(
     inputs: TttInputs<CubeTensor<R>>,
     grad_outputs: TttOutputs<CubeTensor<R>>,
+    epsilon: f32,
 ) -> TttInputs<CubeTensor<R>> {
     let inputs = inputs.map(into_contiguous);
     let grad_output = into_contiguous(grad_outputs.output);
@@ -125,7 +128,7 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
     let grad_ln_weight_per_batch = empty_like::<R, F>(t, [batch_size, num_heads, head_dim]);
     let grad_ln_bias_per_batch = empty_like::<R, F>(t, [batch_size, num_heads, head_dim]);
 
-    let config = FusedTttConfig::new(seq_len, head_dim, inputs.epsilon);
+    let config = FusedTttConfig::new(seq_len, head_dim, epsilon, 0); // threads unused for non-tile kernel
 
     launch_fused_ttt_backward::<R, F>(
         &inputs.xq.client,
@@ -163,8 +166,6 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         ttt_lr_eta: grad_ttt_lr_eta,
         ln_weight: grad_ln_weight,
         ln_bias: grad_ln_bias,
-        epsilon: 0.0,
-        mini_batch_len: 0,
     }
 }
 
@@ -172,11 +173,13 @@ impl FusedKernel<9, 3> for TttKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
     type Backward = UseNoOut;
+    type Config = f32;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
+        epsilon: f32,
     ) -> TttOutputs<CubeTensor<R>> {
-        forward::<R, F>(inputs)
+        forward::<R, F>(inputs, epsilon)
     }
 }
 
@@ -184,7 +187,8 @@ impl CanBackwardNoOut<9, 3> for TttKernel {
     fn backward_no_out<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         grad_outputs: TttOutputs<CubeTensor<R>>,
+        epsilon: f32,
     ) -> TttInputs<CubeTensor<R>> {
-        backward::<R, F>(inputs, grad_outputs)
+        backward::<R, F>(inputs, grad_outputs, epsilon)
     }
 }

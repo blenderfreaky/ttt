@@ -15,6 +15,7 @@ pub trait CanBackwardNoOut<const N: usize, const M: usize>: FusedKernel<N, M> {
     fn backward_no_out<R: CubeRuntime, F: FloatElement>(
         inputs: Self::Inputs<CubeTensor<R>>,
         grad_outputs: Self::Outputs<CubeTensor<R>>,
+        config: Self::Config,
     ) -> Self::Inputs<CubeTensor<R>>;
 }
 
@@ -25,6 +26,7 @@ pub trait CanBackwardWithOut<const N: usize, const M: usize>: FusedKernel<N, M> 
         inputs: Self::Inputs<CubeTensor<R>>,
         outputs: Self::Outputs<CubeTensor<R>>,
         grad_outputs: Self::Outputs<CubeTensor<R>>,
+        config: Self::Config,
     ) -> Self::Inputs<CubeTensor<R>>;
 }
 
@@ -44,6 +46,7 @@ pub trait BackwardImpl<K: FusedKernel<N, M>, const N: usize, const M: usize> {
         inputs: K::Inputs<CubeTensor<R>>,
         outputs: Option<K::Outputs<CubeTensor<R>>>,
         grad_outputs: K::Outputs<CubeTensor<R>>,
+        config: K::Config,
     ) -> K::Inputs<CubeTensor<R>>;
 }
 
@@ -63,8 +66,9 @@ where
         inputs: K::Inputs<CubeTensor<R>>,
         _outputs: Option<K::Outputs<CubeTensor<R>>>,
         grad_outputs: K::Outputs<CubeTensor<R>>,
+        config: K::Config,
     ) -> K::Inputs<CubeTensor<R>> {
-        K::backward_no_out::<R, F>(inputs, grad_outputs)
+        K::backward_no_out::<R, F>(inputs, grad_outputs, config)
     }
 }
 
@@ -84,12 +88,13 @@ where
         inputs: K::Inputs<CubeTensor<R>>,
         outputs: Option<K::Outputs<CubeTensor<R>>>,
         grad_outputs: K::Outputs<CubeTensor<R>>,
+        config: K::Config,
     ) -> K::Inputs<CubeTensor<R>> {
         let outputs = outputs.expect(
             "UseWithOut requires saved outputs, but none were provided. \
              This indicates a bug in the autodiff implementation.",
         );
-        K::backward_with_out::<R, F>(inputs, outputs, grad_outputs)
+        K::backward_with_out::<R, F>(inputs, outputs, grad_outputs, config)
     }
 }
 
@@ -108,9 +113,11 @@ pub trait FusedKernel<const N: usize, const M: usize>: 'static + Send + Debug + 
     type Inputs<T: Debug + Clone + Send>: TensorBundle<T, N>;
     type Outputs<T: Debug + Clone + Send>: TensorBundle<T, M>;
     type Backward: BackwardImpl<Self, N, M>;
+    type Config: Debug + Clone + Send;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: Self::Inputs<CubeTensor<R>>,
+        config: Self::Config,
     ) -> Self::Outputs<CubeTensor<R>>;
 }
 
@@ -124,10 +131,11 @@ pub trait FusedKernelBackend<K, const N: usize, const M: usize>: Backend
 where
     K: FusedKernel<N, M>,
 {
-    fn forward(inputs: K::Inputs<FloatTensor<Self>>) -> K::Outputs<FloatTensor<Self>>;
+    fn forward(inputs: K::Inputs<FloatTensor<Self>>, config: K::Config) -> K::Outputs<FloatTensor<Self>>;
     fn backward(
         inputs: K::Inputs<FloatTensor<Self>>,
         outputs: Option<K::Outputs<FloatTensor<Self>>>,
         grad_outputs: K::Outputs<FloatTensor<Self>>,
+        config: K::Config,
     ) -> K::Inputs<FloatTensor<Self>>;
 }

@@ -3,7 +3,25 @@
 use burn::tensor::{Tensor, TensorPrimitive};
 
 use super::launch::{TttTileKernel, TttTileMultiKernel};
-use crate::ttt::cubecl_kernels::{FusedTttBackend, kernel::FusedKernelBackend, ttt::TttInputs};
+use crate::ttt::cubecl_kernels::{
+    FusedTttBackend, FusedTttConfig, kernel::FusedKernelBackend, ttt::TttInputs,
+};
+
+/// Get the default thread count for a given (mini_batch_len, head_dim) configuration.
+/// Returns the number of subtiles for the matching tile config.
+pub fn default_threads(mini_batch_len: usize, head_dim: usize) -> usize {
+    match (mini_batch_len, head_dim) {
+        (8, 32) => 8,
+        (8, 64) => 8,
+        (16, 32) => 16,
+        (16, 128) => 16,
+        (64, 64) => 64,
+        _ => panic!(
+            "No default thread count for tile config: mini_batch_len={}, head_dim={}",
+            mini_batch_len, head_dim
+        ),
+    }
+}
 
 /// Perform fused TTT-Linear forward pass using the tiled kernel.
 ///
@@ -19,7 +37,7 @@ pub fn fused_ttt_tile_forward<B: FusedTttBackend>(
     ttt_lr_eta: Tensor<B, 3>,
     ln_weight: Tensor<B, 2>,
     ln_bias: Tensor<B, 2>,
-    epsilon: f32,
+    config: FusedTttConfig,
 ) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 3>) {
     let inputs = TttInputs {
         xq: xq.into_primitive().tensor(),
@@ -31,11 +49,9 @@ pub fn fused_ttt_tile_forward<B: FusedTttBackend>(
         ttt_lr_eta: ttt_lr_eta.into_primitive().tensor(),
         ln_weight: ln_weight.into_primitive().tensor(),
         ln_bias: ln_bias.into_primitive().tensor(),
-        epsilon,
-        mini_batch_len: 0,
     };
 
-    let outputs = <B as FusedKernelBackend<TttTileKernel, 9, 10>>::forward(inputs);
+    let outputs = <B as FusedKernelBackend<TttTileKernel, 9, 10>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),
@@ -62,8 +78,7 @@ pub fn fused_ttt_tile_forward_multi<B: FusedTttBackend>(
     ttt_lr_eta: Tensor<B, 3>,
     ln_weight: Tensor<B, 2>,
     ln_bias: Tensor<B, 2>,
-    epsilon: f32,
-    mini_batch_len: usize,
+    config: FusedTttConfig,
 ) -> (Tensor<B, 4>, Tensor<B, 4>, Tensor<B, 3>) {
     let inputs = TttInputs {
         xq: xq.into_primitive().tensor(),
@@ -75,11 +90,9 @@ pub fn fused_ttt_tile_forward_multi<B: FusedTttBackend>(
         ttt_lr_eta: ttt_lr_eta.into_primitive().tensor(),
         ln_weight: ln_weight.into_primitive().tensor(),
         ln_bias: ln_bias.into_primitive().tensor(),
-        epsilon,
-        mini_batch_len,
     };
 
-    let outputs = <B as FusedKernelBackend<TttTileMultiKernel, 9, 10>>::forward(inputs);
+    let outputs = <B as FusedKernelBackend<TttTileMultiKernel, 9, 10>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),

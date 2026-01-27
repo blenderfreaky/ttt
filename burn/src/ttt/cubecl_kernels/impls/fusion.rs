@@ -57,10 +57,13 @@ where
     <K::Inputs<FloatTensor<B>> as TensorBundle<FloatTensor<B>, N>>::Mapped<FloatTensor<Self>>:
         Into<K::Inputs<FloatTensor<Self>>>,
 {
-    fn forward(inputs: K::Inputs<FloatTensor<Self>>) -> K::Outputs<FloatTensor<Self>> {
+    fn forward(
+        inputs: K::Inputs<FloatTensor<Self>>,
+        config: K::Config,
+    ) -> K::Outputs<FloatTensor<Self>> {
         let client = inputs.client().clone();
         let inner_inputs = inputs.map(|t| fusion_in::<B>(t)).into();
-        let outputs = B::forward(inner_inputs);
+        let outputs = B::forward(inner_inputs, config);
         outputs.map(|t| fusion_out::<B>(t, &client)).into()
     }
 
@@ -68,12 +71,13 @@ where
         inputs: K::Inputs<FloatTensor<Self>>,
         outputs: Option<K::Outputs<FloatTensor<Self>>>,
         grad_outputs: K::Outputs<FloatTensor<Self>>,
+        config: K::Config,
     ) -> K::Inputs<FloatTensor<Self>> {
         let client = inputs.client().clone();
         let inner_inputs = inputs.map(|t| fusion_in::<B>(t)).into();
         let inner_outputs = outputs.map(|o| o.map(|t| fusion_in::<B>(t)).into());
         let inner_grad_outputs = grad_outputs.map(|t| fusion_in::<B>(t)).into();
-        let grads = B::backward(inner_inputs, inner_outputs, inner_grad_outputs);
+        let grads = B::backward(inner_inputs, inner_outputs, inner_grad_outputs, config);
         grads.map(|t| fusion_out::<B>(t, &client)).into()
     }
 }

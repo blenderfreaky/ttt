@@ -79,15 +79,18 @@ pub struct FusedTttConfig {
     pub head_dim: usize,
     /// Layer norm epsilon, stored as scaled integer (see EPSILON_SCALE_INV)
     pub epsilon_scaled: u32,
+    /// Number of threads (subtiles) per cube
+    pub threads: usize,
 }
 
 impl FusedTttConfig {
     #[must_use]
-    pub fn new(mini_batch_len: usize, head_dim: usize, epsilon: f32) -> Self {
+    pub fn new(mini_batch_len: usize, head_dim: usize, epsilon: f32, threads: usize) -> Self {
         Self {
             mini_batch_len,
             head_dim,
             epsilon_scaled: (epsilon / EPSILON_SCALE_INV) as u32,
+            threads,
         }
     }
 

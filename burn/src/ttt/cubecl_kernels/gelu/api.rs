@@ -10,7 +10,7 @@ pub fn gelu_tanh<B: FusedKernelBackend<GeluTanhKernel, 1, 1>, const D: usize>(
     let inputs = GeluInput {
         input: input.into_primitive().tensor(),
     };
-    let outputs = B::forward(inputs);
+    let outputs = B::forward(inputs, ());
     Tensor::from_primitive(TensorPrimitive::Float(outputs.output))
 }
 
@@ -22,6 +22,6 @@ pub fn gelu_bwd<B: FusedKernelBackend<GeluBwdKernel, 1, 1>, const D: usize>(
     let inputs = GeluInput {
         input: input.into_primitive().tensor(),
     };
-    let outputs = B::forward(inputs);
+    let outputs = B::forward(inputs, ());
     Tensor::from_primitive(TensorPrimitive::Float(outputs.output))
 }

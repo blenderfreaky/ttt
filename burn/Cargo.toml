@@ -51,10 +51,14 @@ test-case = "3.3"
 name = "ttt_benchmark"
 harness = false
 
+[[bench]]
+name = "tile_configs"
+harness = false
+
 [features]
 default = []
 bf16 = []
-rocm = ["burn/rocm", "cubecl/hip", "thundercube/hip"]
+rocm = ["burn/rocm", "cubecl/hip", "thundercube/rocm"]
 cuda = ["burn/cuda", "cubecl/cuda", "thundercube/cuda"]
 wgpu = ["burn/wgpu", "cubecl/wgpu", "thundercube/wgpu"]
 cpu = ["burn/cpu", "cubecl/cpu", "thundercube/cpu"]

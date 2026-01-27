@@ -186,7 +186,7 @@ pub fn slice_3d<T: CubePrimitive>(t: &Tensor<T>, x: usize, y: usize, z: usize) -
 /// # Arguments
 ///
 /// * `n` - Sleep duration multiplier (comptime). Actual sleep is ~n*63 clock cycles.
-#[cfg(feature = "hip")]
+#[cfg(feature = "rocm")]
 #[cube]
 #[allow(unused_variables, reason = "False positive from the cube macro")]
 pub fn gpu_sleep(#[comptime] n: u32) {

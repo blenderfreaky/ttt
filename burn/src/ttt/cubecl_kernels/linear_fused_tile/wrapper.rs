@@ -4,10 +4,10 @@ use std::{marker::PhantomData, ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
 
-use super::api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
+use super::api::{default_threads, fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 use crate::ttt::{
     TTTConfig,
-    cubecl_kernels::{Fused, FusedTttBackend},
+    cubecl_kernels::{Fused, FusedTttBackend, FusedTttConfig},
     layer::{TTTInnerModel, TTTInputsInner},
     linear::TTTLinear,
 };
@@ -55,10 +55,18 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
         let inner = &self.inner.inner;
 
         let qkv = inputs.qkv;
+        let [_batch_size, _num_heads, seq_len, head_dim] = qkv.xq.shape().dims();
 
         let ln_weight = inner.layer_norm.weight.val();
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
+
+        let config = FusedTttConfig::new(
+            self.inner.inner.config.mini_batch_size,
+            head_dim,
+            epsilon,
+            128,
+        );
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,
@@ -70,7 +78,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
             inputs.ttt_lr_eta,
             ln_weight,
             ln_bias,
-            epsilon,
+            config,
         );
 
         state.weight = weight_updated;
@@ -124,13 +132,15 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
         let config = inner.get_config();
         let mini_batch_size = config.mini_batch_size;
 
-        let [_batch_size, _num_heads, seq_len, _head_dim] = inputs.qkv.xv.shape().dims();
+        let [_batch_size, _num_heads, seq_len, head_dim] = inputs.qkv.xv.shape().dims();
         let num_full_batches = seq_len / mini_batch_size;
         let remainder = seq_len % mini_batch_size;
 
         let ln_weight = inner.layer_norm.weight.val();
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
+
+        let config = FusedTttConfig::new(mini_batch_size, head_dim, epsilon, config.threads);
 
         if num_full_batches > 0 {
             // Process full mini-batches with multi-stage kernel
@@ -154,8 +164,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
                 full_ttt_lr_eta,
                 ln_weight.clone(),
                 ln_bias.clone(),
-                epsilon,
-                mini_batch_size,
+                config,
             );
 
             state.weight = weight_updated;
@@ -186,10 +195,18 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
         let inner = &self.inner.inner.inner;
 
         let qkv = inputs.qkv;
+        let [_batch_size, _num_heads, seq_len, head_dim] = qkv.xq.shape().dims();
 
         let ln_weight = inner.layer_norm.weight.val();
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
+
+        let config = FusedTttConfig::new(
+            inner.config.mini_batch_size,
+            head_dim,
+            epsilon,
+            inner.config.threads,
+        );
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,
@@ -201,7 +218,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
             inputs.ttt_lr_eta,
             ln_weight,
             ln_bias,
-            epsilon,
+            config,
         );
 
         state.weight = weight_updated;

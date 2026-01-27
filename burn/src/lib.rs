@@ -25,5 +25,10 @@ pub mod text_generation;
 pub mod training;
 pub mod ttt;
 
+#[cfg(not(any(feature = "cuda", feature = "rocm", feature = "wgpu", feature = "cpu")))]
+compile_error!(
+    "At least one backend must be enabled, please run with `--features cuda/rocm/wgpu/cpu`"
+);
+
 // Re-export central backend types from ttt module
 pub use ttt::{CpuBackend, GpuAutodiffBackend, GpuBackend, TrainingBackend};

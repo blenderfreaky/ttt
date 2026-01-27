@@ -7,7 +7,7 @@ use std::{
 
 use cubecl::{prelude::*, server::Handle};
 
-#[cfg(feature = "hip")]
+#[cfg(feature = "rocm")]
 pub type TestRuntime = cubecl::hip::HipRuntime;
 
 #[cfg(feature = "cuda")]
