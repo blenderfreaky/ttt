@@ -6,3 +6,5 @@ result-*
 
 sycl-test
 .worktree
+
+burn/profile_*/

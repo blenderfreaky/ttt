@@ -7,8 +7,6 @@ use crate::ttt::cubecl_kernels::{
     FusedTttBackend, FusedTttConfig, kernel::FusedKernelBackend, ttt::TttInputs,
 };
 
-/// Get the default thread count for a given (mini_batch_len, head_dim) configuration.
-/// Returns the number of subtiles for the matching tile config.
 pub fn default_threads(mini_batch_len: usize, head_dim: usize) -> usize {
     match (mini_batch_len, head_dim) {
         (8, 32) => 8,
@@ -23,10 +21,6 @@ pub fn default_threads(mini_batch_len: usize, head_dim: usize) -> usize {
     }
 }
 
-/// Perform fused TTT-Linear forward pass using the tiled kernel.
-///
-/// This kernel uses shared memory tiles for optimized memory access patterns.
-/// Currently only supports seq_len=8 and head_dim=8.
 pub fn fused_ttt_tile_forward<B: FusedTttBackend>(
     xq: Tensor<B, 4>,
     xk: Tensor<B, 4>,
@@ -60,13 +54,6 @@ pub fn fused_ttt_tile_forward<B: FusedTttBackend>(
     )
 }
 
-/// Perform fused TTT-Linear forward pass using the multi-stage tiled kernel.
-///
-/// Processes the full sequence in a single kernel launch by iterating over
-/// mini-batches internally, keeping weight/bias in shared memory between stages.
-///
-/// # Arguments
-/// * `mini_batch_len` - Size of each mini-batch (must be a supported tile size: 8, 16, 32)
 #[allow(clippy::too_many_arguments)]
 pub fn fused_ttt_tile_forward_multi<B: FusedTttBackend>(
     xq: Tensor<B, 4>,

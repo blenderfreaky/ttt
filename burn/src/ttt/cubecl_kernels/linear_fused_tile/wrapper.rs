@@ -4,7 +4,7 @@ use std::{marker::PhantomData, ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
 
-use super::api::{default_threads, fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
+use super::api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{Fused, FusedTttBackend, FusedTttConfig},
@@ -61,11 +61,12 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
+        let inner_config = self.inner.inner.get_config();
         let config = FusedTttConfig::new(
-            self.inner.inner.config.mini_batch_size,
+            inner_config.mini_batch_size,
             head_dim,
             epsilon,
-            128,
+            inner_config.threads,
         );
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
@@ -190,6 +191,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
         inputs: &TTTInputsInner<B>,
         range: Range<usize>,
     ) -> Tensor<B, 4> {
+        if range.len() != self.inner.inner.inner.config.mini_batch_size {
+            panic!("Sequence length must be equal to mini_batch_size");
+        }
+
         let inputs = inputs.slice_seq(range);
 
         let inner = &self.inner.inner.inner;
@@ -272,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_fused_tile_vs_ttt_linear() {
-        // Use 8x64 tiles (CS=8, F=32)
+        // Use 8x32 tiles
         let batch_size = 2usize;
         let num_heads = 2usize;
         let head_dim = 32usize;
@@ -287,6 +292,7 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
+            threads: 8, // 8×32 tile config requires 8 threads
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
@@ -482,6 +488,7 @@ mod tests {
             mini_batch_size,
             base_lr: 1.0,
             epsilon,
+            threads: 8, // 8×32 tile config requires 8 threads
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
@@ -674,7 +681,7 @@ mod tests {
     #[test]
     fn test_fused_tile_backward_gradients_vs_reference() {
         // Test backward gradients of tiled kernel against CPU autodiff reference
-        // Use 8x32 tiles (CS=8, F=32) - smaller tiles to fit in shared memory
+        // Use 8x32 tiles
         let batch_size = 2usize;
         let num_heads = 2usize;
         let head_dim = 32usize;
@@ -693,6 +700,7 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
+            threads: 8,
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());

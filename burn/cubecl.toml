@@ -3,7 +3,7 @@
 
 [profiling]
 # logger = { level = "basic", stdout = true }
-# logger = { level = "basic", file = "cubecl.log", append = true }
+# logger = { level = "medium", file = "cubecl.log", append = true }
 #
 # disabled: No profiling logs.
 # minimal: Only logs which kernels run.

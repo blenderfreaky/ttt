@@ -95,6 +95,17 @@ impl BenchConfig {
     }
 
     pub fn to_ttt_config(&self, vocab_size: usize) -> TTTConfig {
+        // Set threads based on (mini_batch_size, head_dim) tile config
+        let head_dim = self.head_dim();
+        let threads = match (self.mini_batch_size, head_dim) {
+            (8, 32) => 8,
+            (8, 64) => 8,
+            (16, 32) => 16,
+            (16, 128) => 16,
+            (64, 64) => 64,
+            _ => 64, // fallback for non-tiled configs
+        };
+
         TTTConfig::new(vocab_size)
             .with_token_size(self.hidden_size)
             .with_hidden_size(self.hidden_size)
@@ -103,6 +114,7 @@ impl BenchConfig {
             .with_swi_glu_mlp_intermediate_size(self.mlp_intermediate)
             .with_mini_batch_size(self.mini_batch_size)
             .with_conv_before_ttt(false)
+            .with_threads(threads)
     }
 
     pub fn head_dim(&self) -> usize {
