@@ -118,7 +118,7 @@
         #   };
       in {
         # legacyPackages for nested structure: .#rocm6.f32.ttt, .#cuda.bf16.ttt-bench, etc.
-        legacyPackages = own-pkgs // [pkgs.rocmPackages.rocprofiler];
+        legacyPackages = own-pkgs // {inherit (pkgs.rocmPackages) rocprofiler;};
 
         devShells.default = pkgs.mkShell {
           shellHook = ''
