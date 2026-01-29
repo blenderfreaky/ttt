@@ -110,14 +110,7 @@ fn bench_tile_configs(c: &mut Criterion) {
 
     // Supported configurations from launch.rs:
     // (mini_batch_len, head_dim, threads)
-    // Working configurations (shared memory fits in 64KB LDS)
-    let configs = [
-        (8, 32, 8),
-        (8, 64, 8),
-        (16, 32, 16),
-        // (16, 128, 16), // Needs investigation: CubeDim::new interaction
-        // (64, 64, 64),  // Too much shared memory (~200KB, limit 64KB)
-    ];
+    let configs = [(8, 32, 8), (8, 64, 8), (16, 32, 16)];
 
     for (mini_batch_len, head_dim, threads) in configs {
         test_tile_config::<GpuBackend>(c, mini_batch_len, head_dim, threads, &device);

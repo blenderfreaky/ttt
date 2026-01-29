@@ -68,7 +68,7 @@ impl BenchConfig {
             num_heads: 2,
             num_layers: 1,
             mlp_intermediate: 128,
-            mini_batch_size: 16,
+            mini_batch_size: 8,
         }
     }
 
@@ -386,7 +386,7 @@ fn bench_full_backward<
 const BENCH_PARAMS: &[RuntimeParams] = &[
     RuntimeParams {
         batch_size: 4,
-        seq_length: 128,
+        seq_length: 8, // Match mini_batch_size for direct comparison
         vocab_size: 1000,
     },
     // RuntimeParams {
