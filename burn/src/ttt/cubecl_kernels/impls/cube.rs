@@ -12,7 +12,10 @@ where
     I: IntElement,
     BT: BoolElement,
 {
-    fn forward(inputs: K::Inputs<FloatTensor<Self>>, config: K::Config) -> K::Outputs<FloatTensor<Self>> {
+    fn forward(
+        inputs: K::Inputs<FloatTensor<Self>>,
+        config: K::Config,
+    ) -> K::Outputs<FloatTensor<Self>> {
         K::forward_launch::<R, F>(inputs, config)
     }
 

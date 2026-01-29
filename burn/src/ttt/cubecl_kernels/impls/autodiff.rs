@@ -91,7 +91,10 @@ where
     C: CheckpointStrategy,
     B::FloatTensorPrimitive: Clone,
 {
-    fn forward(inputs: K::Inputs<FloatTensor<Self>>, config: K::Config) -> K::Outputs<FloatTensor<Self>> {
+    fn forward(
+        inputs: K::Inputs<FloatTensor<Self>>,
+        config: K::Config,
+    ) -> K::Outputs<FloatTensor<Self>> {
         let input_arr = inputs.into_array();
         let nodes_array: [_; N] = input_arr.each_ref().map(|t| t.node.clone());
         let input_node_ids: [Option<NodeId>; N] = nodes_array.each_ref().map(|n| Some(n.id));

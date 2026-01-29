@@ -131,7 +131,10 @@ pub trait FusedKernelBackend<K, const N: usize, const M: usize>: Backend
 where
     K: FusedKernel<N, M>,
 {
-    fn forward(inputs: K::Inputs<FloatTensor<Self>>, config: K::Config) -> K::Outputs<FloatTensor<Self>>;
+    fn forward(
+        inputs: K::Inputs<FloatTensor<Self>>,
+        config: K::Config,
+    ) -> K::Outputs<FloatTensor<Self>>;
     fn backward(
         inputs: K::Inputs<FloatTensor<Self>>,
         outputs: Option<K::Outputs<FloatTensor<Self>>>,

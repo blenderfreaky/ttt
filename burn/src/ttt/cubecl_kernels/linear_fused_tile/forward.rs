@@ -3,10 +3,11 @@
 use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
-use super::layer_norm::{
-    layer_norm_forward_save_intermediates, layer_norm_l2_grad_save_intermediates,
+use super::{
+    helpers::{ParamsTrait, build_attn_matrix, build_eta_matrix},
+    layer_norm::{layer_norm_forward_save_intermediates, layer_norm_l2_grad_save_intermediates},
 };
-use crate::ttt::cubecl_kernels::{FusedTttConfig, linear_fused_tile::helpers::ParamsTrait};
+use crate::ttt::cubecl_kernels::FusedTttConfig;
 
 #[derive(CubeType, CubeLaunch)]
 pub struct Inputs<F: Float> {
@@ -189,59 +190,25 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 4: eta_matrix = outer(token_eta, ttt_lr_eta).tril()
-    let mut eta_reg = P::cs_cs_reg();
-    eta_reg.zero();
-
-    let tiles_per_row_eta = P::CS::VALUE / P::CS_Reg::VALUE;
-
-    let tile_row_eta = (UNIT_POS as usize) / tiles_per_row_eta;
-    let tile_col_eta = (UNIT_POS as usize) % tiles_per_row_eta;
-
-    let mut token_eta_reg = P::cs_reg();
-    let mut ttt_lr_eta_reg = P::cs_reg();
-    let token_eta_offset = tile_row_eta * P::CS_Reg::VALUE;
-    let ttt_lr_eta_offset = ttt_lr_eta_idx + tile_col_eta * P::CS_Reg::VALUE;
-    cube::broadcast::load_rv_direct(&inputs.token_eta, &mut token_eta_reg, token_eta_offset);
-    cube::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut ttt_lr_eta_reg, ttt_lr_eta_offset);
-
-    eta_reg.add_col(&token_eta_reg);
-    eta_reg.mul_row(&ttt_lr_eta_reg);
-
-    cube::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
-
-    sync_cube();
-
-    eta_matrix_smem.tril();
-
-    sync_cube();
+    build_eta_matrix::<P>(
+        &inputs.token_eta,
+        &inputs.ttt_lr_eta,
+        &mut eta_matrix_smem,
+        ttt_lr_eta_idx,
+        false,
+    );
 
     // Step 5: attn_scores = xq @ xk^T, tril
-    let mut attn_reg = P::cs_cs_reg();
-    attn_reg.zero();
-    cube::mma_AtB(&mut attn_reg, &q_smem, &k_smem);
+    build_attn_matrix::<P>(&q_smem, &k_smem, &mut attn_smem, false);
 
-    sync_cube();
-
-    cube::store_rt_to_st(&attn_reg, &mut attn_smem);
-
-    sync_cube();
-
-    attn_smem.tril();
-
-    sync_cube();
-
-    // Steps 6-7: z1_bar computation
-    // Recompute eta (was overwritten by tril)
-    eta_reg.zero();
-    eta_reg.add_col(&token_eta_reg);
-    eta_reg.mul_row(&ttt_lr_eta_reg);
-    cube::store_rt_to_st(&eta_reg, &mut eta_matrix_smem);
-
-    sync_cube();
-
-    eta_matrix_smem.tril();
-
-    sync_cube();
+    // Step 6: Rebuild eta for z1_bar computation (consumed by tril)
+    build_eta_matrix::<P>(
+        &inputs.token_eta,
+        &inputs.ttt_lr_eta,
+        &mut eta_matrix_smem,
+        ttt_lr_eta_idx,
+        false,
+    );
 
     // eta @ grad
     let mut eta_grad_reg = P::cs_f_reg();

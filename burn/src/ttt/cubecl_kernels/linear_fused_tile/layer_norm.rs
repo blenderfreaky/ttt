@@ -28,18 +28,109 @@ impl_reduction_ops! {
     }
 }
 
+// =============================================================================
+// Helper functions
+// =============================================================================
+
+/// Normalize x in place to x_hat = (x - mean) / std.
+/// Returns std (standard deviation per row).
+///
+/// After this function:
+/// - `x` contains x_hat (normalized, zero mean, unit variance)
+/// - returned `std` contains the standard deviation per row
+#[cube]
+fn normalize_to_x_hat<F: Float, R: Dim, C: Dim>(
+    x: &mut St<F, R, C>,
+    buf: &mut ReduceBuf<F>,
+    #[comptime] epsilon: f32,
+) -> Rv<F, R> {
+    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+
+    // mean = sum_rows(x) / C
+    let mut mean = Rv::<F, R>::new();
+    cube::sum_rows(x, &mut mean, buf);
+    mean.mul_scalar(c_inv);
+
+    // x -= mean
+    x.sub_col(&mean);
+    sync_cube();
+
+    // var = sum_rows(x^2) / C
+    let mut std = Rv::<F, R>::new();
+    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
+    std.mul_scalar(c_inv);
+
+    // std = sqrt(var + epsilon)
+    std.add_scalar(F::cast_from(epsilon));
+    std.sqrt();
+
+    // x /= std -> x_hat
+    x.div_col(&std);
+    sync_cube();
+
+    std
+}
+
+/// Compute grad_x from grad_x_hat using the layer norm backward formula:
+/// grad_x = (grad_x_hat * C - sum(grad_x_hat) - x_hat * sum(grad_x_hat * x_hat)) / (std * C)
+///
+/// # Arguments
+/// * `grad_x_hat` - Gradient w.r.t. normalized input [R, C]
+/// * `x_hat` - Normalized input [R, C]
+/// * `std` - Standard deviation per row [R]
+/// * `temp` - Scratch tile [R, C]
+/// * `grad_x` - Output: gradient w.r.t. input [R, C]
+#[cube]
+fn compute_grad_x_from_grad_x_hat<F: Float, R: Dim, C: Dim>(
+    grad_x_hat: &St<F, R, C>,
+    x_hat: &St<F, R, C>,
+    std: &Rv<F, R>,
+    temp: &mut St<F, R, C>,
+    grad_x: &mut St<F, R, C>,
+    buf: &mut ReduceBuf<F>,
+) {
+    let c_f = F::cast_from(C::VALUE as f32);
+    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+
+    // sum_grad_x_hat = sum(grad_x_hat) per row
+    let mut sum_grad_x_hat = Rv::<F, R>::new();
+    cube::sum_rows(grad_x_hat, &mut sum_grad_x_hat, buf);
+
+    // sum_grad_x_hat_x_hat = sum(grad_x_hat * x_hat) per row
+    temp.copy_from(grad_x_hat);
+    temp.mul(x_hat);
+    sync_cube();
+
+    let mut sum_grad_x_hat_x_hat = Rv::<F, R>::new();
+    cube::sum_rows(temp, &mut sum_grad_x_hat_x_hat, buf);
+
+    // grad_x = grad_x_hat * C
+    grad_x.copy_from(grad_x_hat);
+    grad_x.mul_scalar(c_f);
+
+    // grad_x -= sum_grad_x_hat
+    grad_x.sub_col(&sum_grad_x_hat);
+    sync_cube();
+
+    // grad_x -= x_hat * sum_grad_x_hat_x_hat
+    temp.copy_from(x_hat);
+    temp.mul_col(&sum_grad_x_hat_x_hat);
+    sync_cube();
+
+    grad_x.sub(temp);
+
+    // grad_x /= (std * C)
+    grad_x.div_col(std);
+    grad_x.mul_scalar(c_inv);
+}
+
+// =============================================================================
+// Public layer norm functions
+// =============================================================================
+
 /// Computes layer norm forward pass only.
-/// Uses shared memory tiles with plane-level cooperative operations.
 ///
-/// Given input `x` of shape [R, C] (R rows, C columns),
-/// and layer norm parameters weight/bias of shape [C]:
-///
-/// Forward:
-///   mean[r] = sum(x[r, :]) / C
-///   var[r] = sum((x[r, :] - mean[r])^2) / C
-///   std[r] = sqrt(var[r] + epsilon)
-///   norm[r, c] = (x[r, c] - mean[r]) / std[r]
-///   out[r, c] = weight[c] * norm[r, c] + bias[c]
+/// out = weight * ((x - mean) / std) + bias
 ///
 /// # Arguments
 /// * `x` - Input tile [R, C], will be modified to contain the normalized output
@@ -54,42 +145,15 @@ pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
     buf: &mut ReduceBuf<F>,
     #[comptime] epsilon: f32,
 ) {
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+    // Normalize: x -> x_hat = (x - mean) / std
+    let _std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
 
-    // Step 1: mean = sum_rows(x) / C
-    let mut mean = Rv::<F, R>::new();
-    cube::sum_rows(x, &mut mean, buf);
-    mean.mul_scalar(c_inv);
-
-    // Step 2: x -= mean (col broadcast)
-    x.sub_col(&mean);
-
-    // Sync after modifying shared memory before reading again
-    sync_cube();
-
-    // Step 3: var = sum_rows(x^2) / C using SumSqOp
-    let mut std = Rv::<F, R>::new();
-    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
-    std.mul_scalar(c_inv);
-
-    // Step 4: std = sqrt(var + epsilon)
-    std.add_scalar(F::cast_from(epsilon));
-    std.sqrt();
-
-    // Step 5: x /= std -> x now contains norm
-    x.div_col(&std);
-
-    // Sync after modifying shared memory before reading again
-    sync_cube();
-
-    // Step 6: x = weight * x + bias
+    // Apply affine: x = weight * x_hat + bias
     x.mul_row(ln_weight);
     x.add_row(ln_bias);
 }
 
 /// Computes layer norm forward pass and returns intermediate values needed for backward.
-///
-/// Returns: (x_hat, std) where x_hat = normalized input (before affine), std = standard deviation
 ///
 /// # Arguments
 /// * `x` - Input tile [R, C], will be modified to contain x_hat (normalized, pre-affine)
@@ -108,54 +172,20 @@ pub fn layer_norm_forward_with_intermediates<F: Float, R: Dim, C: Dim>(
     buf: &mut ReduceBuf<F>,
     #[comptime] epsilon: f32,
 ) {
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+    // Normalize: x -> x_hat, save std
+    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
+    std_out.set(&std);
 
-    // Step 1: mean = sum_rows(x) / C
-    let mut mean = Rv::<F, R>::new();
-    cube::sum_rows(x, &mut mean, buf);
-    mean.mul_scalar(c_inv);
-
-    // Step 2: x -= mean (col broadcast)
-    x.sub_col(&mean);
-
-    sync_cube();
-
-    // Step 3: var = sum_rows(x^2) / C
-    cube::reduce_rows::<F, R, C, SumSqOp>(x, std_out, buf);
-    std_out.mul_scalar(c_inv);
-
-    // Step 4: std = sqrt(var + epsilon)
-    std_out.add_scalar(F::cast_from(epsilon));
-    std_out.sqrt();
-
-    // Step 5: x /= std -> x now contains x_hat (normalized)
-    x.div_col(std_out);
-
-    sync_cube();
-
-    // Step 6: output = weight * x_hat + bias
+    // output = weight * x_hat + bias
     output.copy_from(x);
     output.mul_row(ln_weight);
     output.add_row(ln_bias);
 }
 
 /// Computes layer norm forward and L2 loss gradient backpropagated through layer norm.
-/// Uses shared memory tiles with plane-level cooperative operations.
 ///
-/// Given input `x` of shape [R, C] (R rows, C columns), target of same shape,
-/// and layer norm parameters weight/bias of shape [C]:
-///
-/// Forward:
-///   mean[r] = sum(x[r, :]) / C
-///   var[r] = sum((x[r, :] - mean[r])^2) / C
-///   std[r] = sqrt(var[r] + epsilon)
-///   norm[r, c] = (x[r, c] - mean[r]) / std[r]
-///   out[r, c] = weight[c] * norm[r, c] + bias[c]
-///
-/// L2 gradient backprop:
-///   dl_dout = out - target
-///   dl_dnorm = dl_dout * weight
-///   dl_dx = (dl_dnorm * C - sum(dl_dnorm) - norm * sum(dl_dnorm * norm)) / (std * C)
+/// Forward: y = weight * ((x - mean) / std) + bias
+/// L2 gradient: dl_dx = backward through y w.r.t. L2 loss (y - target)^2
 ///
 /// # Arguments
 /// * `x` - Input tile [R, C], will be modified to contain dl_dx (the gradient)
@@ -174,98 +204,28 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     buf: &mut ReduceBuf<F>,
     #[comptime] epsilon: f32,
 ) {
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
-    let c_f = F::cast_from(C::VALUE as f32);
+    // Normalize: x -> x_hat
+    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
 
-    // Step 1: mean = sum_rows(x) / C
-    let mut mean = Rv::<F, R>::new();
-    cube::sum_rows(x, &mut mean, buf);
-    mean.mul_scalar(c_inv);
-
-    // Step 2: x -= mean (col broadcast)
-    x.sub_col(&mean);
-
-    // Sync after modifying x before reading for variance
-    sync_cube();
-
-    // Step 3: var = sum_rows(x^2) / C using SumSqOp
-    let mut std = Rv::<F, R>::new();
-    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
-    std.mul_scalar(c_inv);
-
-    // Step 4: std = sqrt(var + epsilon)
-    std.add_scalar(F::cast_from(epsilon));
-    std.sqrt();
-
-    // Step 5: x /= std -> x now contains norm
-    x.div_col(&std);
-
-    // Sync after modifying x before copying to temp
-    sync_cube();
-
-    // Step 6: temp = x (copy norm), then temp = weight * temp + bias
-    temp.copy_from(x);
-    temp.mul_row(ln_weight);
-    temp.add_row(ln_bias);
-
-    // Step 7: temp -= target -> temp = dl_dout
-    temp.sub(target);
-
-    // Step 8: temp *= weight -> temp = dl_dnorm
-    temp.mul_row(ln_weight);
-
-    // Sync after modifying temp before reading for reduction
-    sync_cube();
-
-    // Step 9: Compute reduction terms
-    let mut sum_dl_dnorm = Rv::<F, R>::new();
-    cube::sum_rows(temp, &mut sum_dl_dnorm, buf);
-
-    // temp = dl_dnorm currently, we need sum(dl_dnorm * norm)
-    // Multiply temp by x (norm), sum, then rebuild dl_dnorm
-    temp.mul(x);
-
-    // Sync after modifying temp before reading for reduction
-    sync_cube();
-
-    let mut sum_dl_dnorm_norm = Rv::<F, R>::new();
-    cube::sum_rows(temp, &mut sum_dl_dnorm_norm, buf);
-
-    // Recompute dl_dnorm in temp (x still has norm)
+    // Compute y = weight * x_hat + bias, then dl_dout = y - target
     temp.copy_from(x);
     temp.mul_row(ln_weight);
     temp.add_row(ln_bias);
     temp.sub(target);
+
+    // dl_dnorm = dl_dout * weight (grad_x_hat)
     temp.mul_row(ln_weight);
-
-    // Sync after modifying temp before continuing
     sync_cube();
 
-    // Step 10: dl_dx = (dl_dnorm * C - sum_dl_dnorm - norm * sum_dl_dnorm_norm) / (std * C)
+    // Compute grad_x from grad_x_hat
+    let mut scratch = St::<F, R, C>::new();
+    let mut grad_x = St::<F, R, C>::new();
+    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x, &std, &mut scratch, &mut grad_x, buf);
 
-    // temp = dl_dnorm * C
-    temp.mul_scalar(c_f);
-
-    // temp -= sum_dl_dnorm
-    temp.sub_col(&sum_dl_dnorm);
-
-    // x = norm * sum_dl_dnorm_norm (col broadcast), then temp -= x
-    x.mul_col(&sum_dl_dnorm_norm);
-
-    // Sync after modifying x before reading
-    sync_cube();
-
-    temp.sub(x);
-
-    // temp /= (std * C)
-    std.mul_scalar(c_f);
-    temp.div_col(&std);
-
-    // Sync after modifying temp before final copy
     sync_cube();
 
     // Copy result to x
-    x.copy_from(temp);
+    x.copy_from(&grad_x);
 }
 
 /// Fused layer norm + L2 gradient computation that saves intermediates for backward.
@@ -289,107 +249,48 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
     ln_bias: &Rv<F, C>,
     temp: &mut St<F, R, C>,
     buf: &mut ReduceBuf<F>,
-    // Output intermediates
     x_hat_out: &mut St<F, R, C>,
     std_out: &mut Rv<F, R>,
     grad_output_out: &mut St<F, R, C>,
     grad_x_hat_out: &mut St<F, R, C>,
     #[comptime] epsilon: f32,
 ) {
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
-    let c_f = F::cast_from(C::VALUE as f32);
-
-    // Step 1: mean = sum_rows(x) / C
-    let mut mean = Rv::<F, R>::new();
-    cube::sum_rows(x, &mut mean, buf);
-    mean.mul_scalar(c_inv);
-
-    // Step 2: x -= mean (col broadcast)
-    x.sub_col(&mean);
-
-    sync_cube();
-
-    // Step 3: var = sum_rows(x^2) / C using SumSqOp
-    let mut std = Rv::<F, R>::new();
-    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
-    std.mul_scalar(c_inv);
-
-    // Step 4: std = sqrt(var + epsilon)
-    std.add_scalar(F::cast_from(epsilon));
-    std.sqrt();
-
-    // Save std for backward
+    // Normalize: x -> x_hat, save std
+    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
     std_out.set(&std);
-
-    // Step 5: x /= std -> x now contains x_hat (normalized)
-    x.div_col(&std);
-
-    sync_cube();
 
     // Save x_hat for backward
     x_hat_out.copy_from(x);
 
-    // Step 6: temp = x (copy norm), then temp = weight * temp + bias = y
+    // Compute y = weight * x_hat + bias
     temp.copy_from(x);
     temp.mul_row(ln_weight);
     temp.add_row(ln_bias);
 
-    // Step 7: temp -= target -> temp = grad_output = y - target
+    // grad_output = y - target
     temp.sub(target);
-
     sync_cube();
 
     // Save grad_output for backward
     grad_output_out.copy_from(temp);
 
-    // Step 8: temp *= weight -> temp = grad_x_hat = grad_output * ln_weight
+    // grad_x_hat = grad_output * ln_weight
     temp.mul_row(ln_weight);
-
     sync_cube();
 
     // Save grad_x_hat for backward
     grad_x_hat_out.copy_from(temp);
 
-    // Step 9: Compute reduction terms for grad_l
-    let mut sum_dl_dnorm = Rv::<F, R>::new();
-    cube::sum_rows(temp, &mut sum_dl_dnorm, buf);
-
-    // temp = dl_dnorm currently, we need sum(dl_dnorm * norm)
-    temp.mul(x);
-
-    sync_cube();
-
-    let mut sum_dl_dnorm_norm = Rv::<F, R>::new();
-    cube::sum_rows(temp, &mut sum_dl_dnorm_norm, buf);
-
-    // Recompute dl_dnorm in temp (x still has x_hat)
-    temp.copy_from(x);
-    temp.mul_row(ln_weight);
-    temp.add_row(ln_bias);
-    temp.sub(target);
-    temp.mul_row(ln_weight);
-
-    sync_cube();
-
-    // Step 10: dl_dx = (dl_dnorm * C - sum_dl_dnorm - norm * sum_dl_dnorm_norm) / (std * C)
-    temp.mul_scalar(c_f);
-    temp.sub_col(&sum_dl_dnorm);
-
-    // x = norm * sum_dl_dnorm_norm (col broadcast), then temp -= x
-    x.mul_col(&sum_dl_dnorm_norm);
-
-    sync_cube();
-
-    temp.sub(x);
-
-    // temp /= (std * C)
-    std.mul_scalar(c_f);
-    temp.div_col(&std);
+    // Compute grad_x from grad_x_hat
+    // Note: We need to preserve x_hat (in x) for the helper, so allocate scratch
+    let mut scratch = St::<F, R, C>::new();
+    let mut grad_x = St::<F, R, C>::new();
+    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x, &std, &mut scratch, &mut grad_x, buf);
 
     sync_cube();
 
     // Copy result to x (grad_l_wrt_Z1)
-    x.copy_from(temp);
+    x.copy_from(&grad_x);
 }
 
 /// Computes layer norm forward and saves x_hat and std for backward.
@@ -404,44 +305,18 @@ pub fn layer_norm_forward_save_intermediates<F: Float, R: Dim, C: Dim>(
     ln_weight: &Rv<F, C>,
     ln_bias: &Rv<F, C>,
     buf: &mut ReduceBuf<F>,
-    // Output intermediates
     x_hat_out: &mut St<F, R, C>,
     std_out: &mut Rv<F, R>,
     #[comptime] epsilon: f32,
 ) {
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
-
-    // Step 1: mean = sum_rows(x) / C
-    let mut mean = Rv::<F, R>::new();
-    cube::sum_rows(x, &mut mean, buf);
-    mean.mul_scalar(c_inv);
-
-    // Step 2: x -= mean
-    x.sub_col(&mean);
-
-    sync_cube();
-
-    // Step 3: var = sum_rows(x^2) / C
-    let mut std = Rv::<F, R>::new();
-    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
-    std.mul_scalar(c_inv);
-
-    // Step 4: std = sqrt(var + epsilon)
-    std.add_scalar(F::cast_from(epsilon));
-    std.sqrt();
-
-    // Save std for backward
+    // Normalize: x -> x_hat, save std
+    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
     std_out.set(&std);
-
-    // Step 5: x /= std -> x_hat
-    x.div_col(&std);
-
-    sync_cube();
 
     // Save x_hat for backward
     x_hat_out.copy_from(x);
 
-    // Step 6: x = weight * x + bias
+    // Apply affine: x = weight * x_hat + bias
     x.mul_row(ln_weight);
     x.add_row(ln_bias);
 }
@@ -472,63 +347,25 @@ pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
     grad_ln_bias: &mut Rv<F, C>,
     buf: &mut ReduceBuf<F>,
 ) {
-    let c_f = F::cast_from(C::VALUE as f32);
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
-
-    // grad_ln_bias = sum_rows(grad_output)
+    // grad_ln_bias = sum(grad_output)
     cube::reduce_cols::<F, R, C, SumOp>(grad_output, grad_ln_bias, buf);
 
-    // grad_ln_weight = sum_rows(grad_output * x_hat)
+    // grad_ln_weight = sum(grad_output * x_hat)
     temp.copy_from(grad_output);
     temp.mul(x_hat);
-
     sync_cube();
-
     cube::reduce_cols::<F, R, C, SumOp>(temp, grad_ln_weight, buf);
 
     // grad_x_hat = grad_output * weight
     temp.copy_from(grad_output);
     temp.mul_row(ln_weight);
-
     sync_cube();
 
-    // sum_grad_x_hat = sum_cols(grad_x_hat) per row
-    let mut sum_grad_x_hat = Rv::<F, R>::new();
-    cube::sum_rows(temp, &mut sum_grad_x_hat, buf);
-
-    // Compute sum(grad_x_hat * x_hat) per row
-    grad_x.copy_from(temp);
-    grad_x.mul(x_hat);
-
-    sync_cube();
-
-    let mut sum_grad_x_hat_x_hat = Rv::<F, R>::new();
-    cube::sum_rows(grad_x, &mut sum_grad_x_hat_x_hat, buf);
-
-    // Now compute the final gradient:
-    // grad_x = (grad_x_hat * C - sum_grad_x_hat - x_hat * sum_grad_x_hat_x_hat) / (std * C)
-
-    // Start with grad_x_hat * C (temp still has grad_x_hat)
-    grad_x.copy_from(temp);
-    grad_x.mul_scalar(c_f);
-
-    // Subtract sum_grad_x_hat (broadcast across columns)
-    grad_x.sub_col(&sum_grad_x_hat);
-
-    sync_cube();
-
-    // Subtract x_hat * sum_grad_x_hat_x_hat
-    // temp = x_hat * sum_grad_x_hat_x_hat
-    temp.copy_from(x_hat);
-    temp.mul_col(&sum_grad_x_hat_x_hat);
-
-    sync_cube();
-
-    grad_x.sub(temp);
-
-    // Divide by (std * C) = divide by std, then divide by C
-    grad_x.div_col(std);
-    grad_x.mul_scalar(c_inv);
+    // grad_x from grad_x_hat using the backward formula
+    // Note: temp contains grad_x_hat, we need a second scratch for the helper
+    // Reuse grad_x as scratch since it will be overwritten anyway
+    let mut scratch = St::<F, R, C>::new();
+    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x_hat, std, &mut scratch, grad_x, buf);
 }
 
 /// Backward through the fused layer norm + L2 gradient computation.
