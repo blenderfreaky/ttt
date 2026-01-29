@@ -226,8 +226,7 @@ fn collect_split_metrics(dir: &Path, split: &str, config: &ExportConfig) -> Vec<
             .collect();
 
         // Get all unique steps across all metrics, sorted
-        let mut all_steps: Vec<usize> =
-            index_maps.iter().flat_map(|m| m.keys().cloned()).collect();
+        let mut all_steps: Vec<usize> = index_maps.iter().flat_map(|m| m.keys().cloned()).collect();
         all_steps.sort();
         all_steps.dedup();
 
@@ -290,7 +289,11 @@ fn write_csv(
         writeln!(
             file,
             "{},{},{},{},{}",
-            row.experiment, row.epoch, row.step, row.global_step, values_str.join(",")
+            row.experiment,
+            row.epoch,
+            row.step,
+            row.global_step,
+            values_str.join(",")
         )?;
     }
 
@@ -301,7 +304,10 @@ fn write_csv(
 fn output_path_for_split(base: &str, split: &str) -> PathBuf {
     let path = Path::new(base);
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let ext = path.extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy())
+        .unwrap_or_default();
 
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         if ext.is_empty() {
@@ -361,13 +367,21 @@ pub fn export_metrics(
     if !train_rows.is_empty() {
         let train_path = output_path_for_split(output, "train");
         write_csv(&train_rows, &train_path, &config)?;
-        println!("Wrote {} rows to {}", train_rows.len(), train_path.display());
+        println!(
+            "Wrote {} rows to {}",
+            train_rows.len(),
+            train_path.display()
+        );
     }
 
     if !valid_rows.is_empty() {
         let valid_path = output_path_for_split(output, "valid");
         write_csv(&valid_rows, &valid_path, &config)?;
-        println!("Wrote {} rows to {}", valid_rows.len(), valid_path.display());
+        println!(
+            "Wrote {} rows to {}",
+            valid_rows.len(),
+            valid_path.display()
+        );
     }
 
     Ok(())
