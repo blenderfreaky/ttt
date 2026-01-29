@@ -6416,6 +6416,8 @@ dependencies = [
  "test-case",
  "thundercube",
  "tokenizers",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

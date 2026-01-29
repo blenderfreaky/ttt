@@ -35,9 +35,9 @@ use std::marker::PhantomData;
 use bytemuck::Pod;
 use cubecl::prelude::*;
 use cubecl_hip_sys::{
-    HIP_SUCCESS, hipDeviceptr_t, hipMemcpyAsync, hipMemcpyKind_hipMemcpyDeviceToHost,
-    hipMemcpyKind_hipMemcpyHostToDevice, hipStream_t, hipStreamCreate, hipStreamDestroy,
-    hipStreamSynchronize,
+    HIP_SUCCESS, hipDeviceptr_t, hipMemcpyAsync, hipMemcpyDtoDAsync,
+    hipMemcpyKind_hipMemcpyDeviceToHost, hipMemcpyKind_hipMemcpyHostToDevice,
+    hipStream_t, hipStreamCreate, hipStreamDestroy, hipStreamSynchronize,
 };
 
 /// Raw GPU pointer for direct memory access.
@@ -65,6 +65,26 @@ impl<T> GpuPtr<'_, T> {
 
     pub fn size_bytes(&self) -> usize {
         self.len * std::mem::size_of::<T>()
+    }
+
+    /// Get the raw device address as u64.
+    ///
+    /// This can be stored in GPU memory and used for pointer indirection
+    /// in persistent kernels.
+    pub fn address(&self) -> u64 {
+        self.ptr as u64
+    }
+
+    /// Get the raw device address with an element offset as u64.
+    pub fn address_at(&self, offset: usize) -> u64 {
+        assert!(
+            offset <= self.len,
+            "offset {} exceeds buffer length {}",
+            offset,
+            self.len
+        );
+        let offset_bytes = offset * std::mem::size_of::<T>();
+        (self.ptr as usize + offset_bytes) as u64
     }
 }
 
@@ -128,6 +148,7 @@ impl AsyncStream {
         }
     }
 
+    /// Host-to-device async write.
     pub fn write<T: Pod>(&self, dst: GpuPtr<T>, offset: usize, data: &[T]) {
         assert!(
             offset + data.len() <= dst.len,
@@ -156,6 +177,7 @@ impl AsyncStream {
         }
     }
 
+    /// Device-to-host async read.
     pub fn read<T: Pod + Clone>(&self, src: GpuPtr<T>, offset: usize, len: usize) -> Vec<T> {
         assert!(
             offset + len <= src.len,
@@ -185,6 +207,74 @@ impl AsyncStream {
         }
         data
     }
+
+    /// Device-to-device async copy.
+    ///
+    /// Copies `count` elements from `src` (at `src_offset`) to `dst` (at `dst_offset`).
+    /// This is a fast GPU-to-GPU copy that doesn't involve the CPU.
+    pub fn copy_d2d<T: Pod>(
+        &self,
+        dst: GpuPtr<T>,
+        dst_offset: usize,
+        src: GpuPtr<T>,
+        src_offset: usize,
+        count: usize,
+    ) {
+        assert!(
+            src_offset + count <= src.len,
+            "copy source at offset {} of {} elements exceeds buffer capacity of {}",
+            src_offset,
+            count,
+            src.len
+        );
+        assert!(
+            dst_offset + count <= dst.len,
+            "copy dest at offset {} of {} elements exceeds buffer capacity of {}",
+            dst_offset,
+            count,
+            dst.len
+        );
+        let size_bytes = std::mem::size_of::<T>() * count;
+        let src_offset_bytes = src_offset * std::mem::size_of::<T>();
+        let dst_offset_bytes = dst_offset * std::mem::size_of::<T>();
+        unsafe {
+            let status = hipMemcpyDtoDAsync(
+                dst.ptr.byte_add(dst_offset_bytes),
+                src.ptr.byte_add(src_offset_bytes),
+                size_bytes,
+                self.stream,
+            );
+            if status != HIP_SUCCESS {
+                panic!("hipMemcpyDtoDAsync failed with status: {}", status);
+            }
+        }
+    }
+
+    /// Synchronize the async stream.
+    ///
+    /// Waits for all pending operations on this stream to complete.
+    pub fn sync(&self) {
+        unsafe {
+            let status = hipStreamSynchronize(self.stream);
+            if status != HIP_SUCCESS {
+                panic!("hipStreamSynchronize failed with status: {}", status);
+            }
+        }
+    }
+
+    /// Write device addresses to a pointer table in GPU memory.
+    ///
+    /// This is used for pointer indirection: the kernel reads these addresses
+    /// and uses them to access the actual tensor data.
+    pub fn write_pointer_table<T: Pod>(
+        &self,
+        table: GpuPtr<u64>,
+        slot: usize,
+        ptr: GpuPtr<T>,
+    ) {
+        let addr = ptr.address();
+        self.write(table, slot, &[addr]);
+    }
 }
 
 impl Default for AsyncStream {
@@ -198,5 +288,90 @@ impl Drop for AsyncStream {
         unsafe {
             hipStreamDestroy(self.stream);
         }
+    }
+}
+
+/// Raw HIP code injection for CubeCL kernels.
+///
+/// CubeCL generates predictable variable names based on declaration order:
+/// - **Kernel params (Tensor/Array)**: `buffer_0`, `buffer_1`, ... (parameter order)
+/// - **Local arrays**: `l_arr_0`, `l_arr_1`, ... (declaration order)
+/// - **Shared memory**: `s_0`, `s_1`, ... (declaration order)
+/// - **Mutable vars**: `l_mut_N`
+/// - **Temporaries**: `l_N`
+/// - **Scalars**: `scalars_float[N]`, `scalars_uint[N]`, ...
+///
+/// Use `CUBECL_DEBUG_LOG=stdout` to verify names for your kernel.
+pub mod ptr_inject {
+    /// Generates HIP code to load from a pointer stored in a u64 buffer.
+    ///
+    /// # Arguments
+    /// * `ptr_buffer` - Buffer index containing u64 addresses (e.g., 0 for buffer_0)
+    /// * `slot` - Index within the pointer buffer
+    /// * `dest_arr` - Local array index to load into (e.g., 0 for l_arr_0)
+    /// * `count` - Number of float_4 elements to load
+    /// * `offset` - Element offset from the pointer address
+    pub fn load_from_ptr(ptr_buffer: usize, slot: usize, dest_arr: usize, count: usize, offset: usize) -> String {
+        format!(
+            r#"*/
+const uint64 _ptr_addr_{dest_arr} = ((const uint64*)buffer_{ptr_buffer})[{slot}];
+const float_4* _ptr_src_{dest_arr} = (const float_4*)(_ptr_addr_{dest_arr} + {offset} * sizeof(float_4));
+for (int _i = 0; _i < {count}; _i++) {{ l_arr_{dest_arr}[_i] = _ptr_src_{dest_arr}[_i]; }}
+/*"#
+        )
+    }
+
+    /// Generates HIP code to store to a pointer stored in a u64 buffer.
+    ///
+    /// # Arguments
+    /// * `ptr_buffer` - Buffer index containing u64 addresses
+    /// * `slot` - Index within the pointer buffer
+    /// * `src_arr` - Local array index to store from (e.g., 0 for l_arr_0)
+    /// * `count` - Number of float_4 elements to store
+    /// * `offset` - Element offset from the pointer address
+    pub fn store_to_ptr(ptr_buffer: usize, slot: usize, src_arr: usize, count: usize, offset: usize) -> String {
+        format!(
+            r#"*/
+const uint64 _ptr_addr_st_{src_arr} = ((const uint64*)buffer_{ptr_buffer})[{slot}];
+float_4* _ptr_dst_{src_arr} = (float_4*)(_ptr_addr_st_{src_arr} + {offset} * sizeof(float_4));
+for (int _i = 0; _i < {count}; _i++) {{ _ptr_dst_{src_arr}[_i] = l_arr_{src_arr}[_i]; }}
+/*"#
+        )
+    }
+
+    /// Generates HIP code to read a single u64 from a buffer into a local variable.
+    pub fn read_u64(buffer: usize, index: usize, var_name: &str) -> String {
+        format!(
+            r#"*/
+const uint64 {var_name} = ((const uint64*)buffer_{buffer})[{index}];
+/*"#
+        )
+    }
+
+    /// Generates HIP code to write a single u32 to a buffer.
+    pub fn write_u32(buffer: usize, index: usize, value: &str) -> String {
+        format!(
+            r#"*/
+((uint32*)buffer_{buffer})[{index}] = {value};
+/*"#
+        )
+    }
+
+    /// Generates HIP code for an atomic load of u32.
+    pub fn atomic_load_u32(buffer: usize, index: usize, var_name: &str) -> String {
+        format!(
+            r#"*/
+const uint32 {var_name} = atomicAdd((uint32*)&buffer_{buffer}[{index}], 0u);
+/*"#
+        )
+    }
+
+    /// Generates HIP code for an atomic store of u32.
+    pub fn atomic_store_u32(buffer: usize, index: usize, value: &str) -> String {
+        format!(
+            r#"*/
+atomicExch((uint32*)&buffer_{buffer}[{index}], {value});
+/*"#
+        )
     }
 }

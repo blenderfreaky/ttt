@@ -45,6 +45,12 @@ pub type FusedTile<B> = Fused<B, Fused<B, TTTLinear<B>>>;
 /// launch, keeping weight/bias in shared memory between stages.
 pub type FusedTileMulti<B> = Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>;
 
+/// Type alias for the streaming tiled fused TTT-Linear kernel.
+/// Uses quadruple Fused wrapper. Runs a persistent kernel on the GPU and
+/// feeds mini-batches incrementally via async memory transfers.
+#[cfg(feature = "rocm")]
+pub type FusedTileStreaming<B> = Fused<B, Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>>;
+
 /// Marker type for fused TTT layers.
 /// TTTInnerModel is implemented using a fused kernel,
 /// but uses the same underlying types as the regular version.

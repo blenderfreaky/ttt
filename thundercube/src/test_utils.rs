@@ -117,7 +117,7 @@ macro_rules! test_kernel {
     )*
     } => {
     $(
-        test_kernel! {
+        $crate::test_kernel! {
             generics: [
                 $float_name in $float_ty;
                 $($gen_name in [$($gen_opts)+] ;)*

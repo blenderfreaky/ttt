@@ -45,6 +45,10 @@ required-features = ["test-utils"]
 name = "persistent_stream"
 required-features = ["test-utils", "rocm"]
 
+[[example]]
+name = "hello_world"
+required-features = ["test-utils"]
+
 [features]
 default = ["test-utils"]
 rocm = ["cubecl/hip", "dep:cubecl-hip-sys"]
