@@ -1,9 +1,10 @@
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use clap_complete::{Shell, generate};
+use clap_complete::{generate, Shell};
 
 pub mod artifact_info;
 pub mod data;
 pub mod inference;
+pub mod metrics_export;
 pub mod text_generation;
 pub mod training;
 pub mod ttt;
@@ -62,6 +63,36 @@ enum Commands {
         /// Show detailed metrics for each epoch
         #[arg(long, short)]
         verbose: bool,
+    },
+    /// Export training metrics to CSV for plotting
+    ExportMetrics {
+        /// Artifact directories (supports glob patterns like "./runs/*")
+        #[arg(required = true)]
+        dirs: Vec<String>,
+
+        /// Output CSV base path (creates {name}_train.csv and {name}_valid.csv)
+        #[arg(short, long, default_value = "metrics.csv")]
+        output: String,
+
+        /// Metrics to export (comma-separated)
+        #[arg(short, long, value_delimiter = ',', default_value = "loss,perplexity")]
+        metrics: Vec<metrics_export::MetricType>,
+
+        /// Include training metrics
+        #[arg(long, default_value = "true", action = clap::ArgAction::Set)]
+        train: bool,
+
+        /// Include validation metrics
+        #[arg(long, default_value = "true", action = clap::ArgAction::Set)]
+        valid: bool,
+
+        /// Downsample to N points per epoch (bucket averaging)
+        #[arg(long)]
+        target_points: Option<usize>,
+
+        /// Rolling average window size for smoothing
+        #[arg(long)]
+        window: Option<usize>,
     },
 }
 
@@ -427,5 +458,26 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        Commands::ExportMetrics {
+            dirs,
+            output,
+            metrics,
+            train,
+            valid,
+            target_points,
+            window,
+        } => {
+            let config = metrics_export::ExportConfig {
+                metrics,
+                include_train: train,
+                include_valid: valid,
+                target_points,
+                window,
+            };
+            if let Err(e) = metrics_export::export_metrics(dirs, &output, config) {
+                eprintln!("Error exporting metrics: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 }
