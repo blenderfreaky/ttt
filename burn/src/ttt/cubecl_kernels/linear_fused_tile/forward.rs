@@ -4,8 +4,8 @@ use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
 use super::{
-    helpers::{ParamsTrait, build_attn_matrix, build_eta_matrix},
-    layer_norm::{layer_norm_forward_save_intermediates, layer_norm_l2_grad_stream_intermediates},
+    helpers::{ParamsTrait, build_eta_attn_fused, build_eta_matrix},
+    layer_norm::{layer_norm_forward_stream_intermediates, layer_norm_l2_grad_stream_intermediates},
 };
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
@@ -86,14 +86,9 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut z1_smem = P::cs_f_tile();
     let mut temp_cs_f_smem = P::cs_f_tile();
     let mut eta_matrix_smem = P::cs_cs_tile();
-    let mut attn_smem = P::cs_cs_tile();
+    // Note: attn_smem removed - eta*attn is computed fused in build_eta_attn_fused
+    // Note: x_hat_ln_smem removed - all LN intermediates streamed directly to global
     let mut reduce_buf = ReduceBuf::<P::E>::new();
-
-    // Intermediate tiles for output layer norm - to be saved for backward pass
-    // Note: fused LN intermediates (x_hat_fused, grad_output_fused, grad_x_hat_fused) are
-    // streamed directly to global memory, not buffered in smem
-    let mut x_hat_ln_smem = P::cs_f_tile();
-    let mut std_ln_rv = P::cs_reg_big();
 
     // Load QKV for this stage
     cube::load_st_transpose(&inputs.xq, &mut q_smem, stage_offset, 0, 0);
@@ -132,7 +127,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     // Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
     // Streams intermediates (x_hat_fused, grad_output_fused, grad_x_hat_fused) directly to global
-    // Use k_direct_smem and x_hat_ln_smem as scratch (both dead/unused at this point)
+    // Use k_direct_smem as scratch (dead after line 131)
     let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::E, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
@@ -140,7 +135,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
         ln_bias_rv,
         &mut temp_cs_f_smem,
         &mut k_direct_smem,  // scratch (dead after line 131)
-        &mut x_hat_ln_smem,  // grad_x_temp (not needed until later)
         &mut reduce_buf,
         // Global tensor outputs (stored directly, no smem intermediates)
         &mut fwd_intermediates.x_hat_fused,
@@ -177,29 +171,24 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
         false,
     );
 
-    // Step 5: attn_scores = xq @ xk^T, tril
-    build_attn_matrix::<P>(&q_smem, &k_smem, &mut attn_smem, false);
-
-    // Step 6: Rebuild eta for z1_bar computation (consumed by tril)
-    build_eta_matrix::<P>(
-        &inputs.token_eta,
-        &inputs.ttt_lr_eta,
-        &mut eta_matrix_smem,
-        ttt_lr_eta_idx,
-        false,
-    );
-
-    // eta @ grad
+    // Step 5: eta @ grad (compute before eta_matrix is overwritten)
     let mut eta_grad_reg = P::cs_f_reg();
     eta_grad_reg.zero();
     cube::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
 
     sync_cube();
 
-    // eta * attn
-    eta_matrix_smem.mul(&attn_smem);
-
-    sync_cube();
+    // Step 6: Build (eta * attn) fused directly into eta_matrix
+    // This computes: eta_matrix[i,j] = token_eta[i] * ttt_lr_eta[j] * (q[i] · k[j])
+    // Eliminates need for separate attn_smem tile
+    build_eta_attn_fused::<P>(
+        &q_smem,
+        &k_smem,
+        &inputs.token_eta,
+        &inputs.ttt_lr_eta,
+        &mut eta_matrix_smem,
+        ttt_lr_eta_idx,
+    );
 
     // (eta * attn) @ grad
     let mut eta_attn_grad_reg = P::cs_f_reg();
@@ -230,27 +219,20 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 8: layer_norm + add xq
-    // This also saves intermediates (x_hat_ln, std_ln)
-    layer_norm_forward_save_intermediates::<P::E, P::CS, P::F>(
+    // Streams x_hat_ln directly to global memory
+    let std_ln_rv = layer_norm_forward_stream_intermediates::<P::E, P::CS, P::F>(
         &mut temp_cs_f_smem,
         ln_weight_rv,
         ln_bias_rv,
         &mut reduce_buf,
-        &mut x_hat_ln_smem,
-        &mut std_ln_rv,
+        &mut fwd_intermediates.x_hat_ln,
+        stage_offset,
         epsilon,
     );
 
     sync_cube();
 
-    // Store output layer norm intermediates
-    cube::store_st_direct(
-        &x_hat_ln_smem,
-        &mut fwd_intermediates.x_hat_ln,
-        stage_offset,
-        0,
-        0,
-    );
+    // Store std_ln
     cube::broadcast::store_rv_direct(&std_ln_rv, &mut fwd_intermediates.std_ln, ttt_lr_eta_idx);
 
     sync_cube();

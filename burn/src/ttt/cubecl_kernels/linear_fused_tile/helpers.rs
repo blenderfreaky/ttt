@@ -185,6 +185,63 @@ pub fn build_attn_matrix<P: ParamsTrait>(
     sync_cube();
 }
 
+/// Compute fused (eta * attn) matrix directly in registers, avoiding separate attn tile.
+///
+/// Computes: output[i,j] = token_eta[i] * ttt_lr_eta[j] * (q[i] · k[j])
+///
+/// This fuses build_eta_matrix and build_attn_matrix, computing the element-wise
+/// product in registers before storing to shared memory. Saves one CS×CS tile.
+#[cube]
+pub fn build_eta_attn_fused<P: ParamsTrait>(
+    q_smem: &St<P::E, P::F, P::CS>,
+    k_smem: &St<P::E, P::F, P::CS>,
+    token_eta: &Tensor<Line<P::E>>,
+    ttt_lr_eta: &Tensor<Line<P::E>>,
+    output: &mut St<P::E, P::CS, P::CS>,
+    ttt_lr_eta_idx: usize,
+) {
+    // Compute attn = q^T @ k in registers
+    let mut attn_reg = P::cs_cs_reg();
+    attn_reg.zero();
+    cube::mma_AtB(&mut attn_reg, q_smem, k_smem);
+
+    sync_cube();
+
+    // Compute eta values and multiply with attn in registers
+    let tiles_per_row = P::CS::VALUE / P::CS_Reg::VALUE;
+    let tile_row = (UNIT_POS as usize) / tiles_per_row;
+    let tile_col = (UNIT_POS as usize) % tiles_per_row;
+
+    // Load eta components: η[i,j] = token_eta[i] * ttt_lr_eta[j]
+    let mut row_vec = P::cs_reg();
+    let mut col_vec = P::cs_reg();
+    cube::broadcast::load_rv_direct(token_eta, &mut row_vec, tile_row * P::CS_Reg::VALUE);
+    cube::broadcast::load_rv_direct(
+        ttt_lr_eta,
+        &mut col_vec,
+        ttt_lr_eta_idx + tile_col * P::CS_Reg::VALUE,
+    );
+
+    // Build eta in registers and multiply with attn
+    let mut eta_reg = P::cs_cs_reg();
+    eta_reg.zero();
+    eta_reg.add_col(&row_vec);
+    eta_reg.mul_row(&col_vec);
+
+    // Element-wise multiply: result = eta * attn
+    attn_reg.mul(&eta_reg);
+
+    // Store to shared memory
+    cube::store_rt_to_st(&attn_reg, output);
+
+    sync_cube();
+
+    // Apply tril mask
+    output.tril();
+
+    sync_cube();
+}
+
 // TODO: Move to thundercube and abstract?
 /// Extract the last row of a shared memory tile into a register vector.
 /// Result is broadcast to all.
