@@ -6,7 +6,6 @@
 //! - `StreamingConfig` - configuration including stream key
 
 use std::{
-    any::TypeId,
     collections::HashMap,
     sync::{LazyLock, Mutex},
     sync::atomic::{AtomicU64, Ordering},
@@ -35,21 +34,14 @@ use super::{
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
 /// Key for the streaming state registry.
-/// Combines runtime type with a user-provided stream ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StreamKey {
-    /// TypeId of the CubeRuntime
-    pub runtime_type: TypeId,
-    /// User-provided stream identifier
     pub stream_id: u64,
 }
 
 impl StreamKey {
-    pub fn new<R: CubeRuntime>(stream_id: u64) -> Self {
-        Self {
-            runtime_type: TypeId::of::<R>(),
-            stream_id,
-        }
+    pub fn new(stream_id: u64) -> Self {
+        Self { stream_id }
     }
 }
 
@@ -118,8 +110,8 @@ impl StreamingConfig {
         )
     }
 
-    pub fn key<R: CubeRuntime>(&self) -> StreamKey {
-        StreamKey::new::<R>(self.stream_id)
+    pub fn key(&self) -> StreamKey {
+        StreamKey::new(self.stream_id)
     }
 
     /// Total number of cubes (batch * heads)
@@ -270,7 +262,7 @@ pub fn get_or_create_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
     ln_weight: CubeTensor<R>,
     ln_bias: CubeTensor<R>,
 ) -> &'static mut TttStreamingState<R> {
-    let key = config.key::<R>();
+    let key = config.key();
 
     let mut registry = STREAMING_REGISTRY.lock().unwrap();
 
@@ -299,7 +291,7 @@ pub fn get_or_create_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
 
 /// Remove a streaming state from the registry.
 pub fn remove_streaming_state<R: CubeRuntime + 'static>(stream_id: u64) -> Option<TttStreamingState<R>> {
-    let key = StreamKey::new::<R>(stream_id);
+    let key = StreamKey::new(stream_id);
     let mut registry = STREAMING_REGISTRY.lock().unwrap();
     registry.remove(&key).and_then(|any| {
         // Try to downcast and extract
@@ -308,6 +300,15 @@ pub fn remove_streaming_state<R: CubeRuntime + 'static>(stream_id: u64) -> Optio
             Err(_) => None,
         }
     })
+}
+
+/// Remove a streaming state by ID, triggering its Drop impl for cleanup.
+/// Use this when you don't need the state back - just need to clean up.
+pub fn remove_streaming_state_by_id(stream_id: u64) {
+    let key = StreamKey::new(stream_id);
+    let mut registry = STREAMING_REGISTRY.lock().unwrap();
+    // Remove triggers AnyStreamingState drop -> TttStreamingState::drop() -> signal_shutdown()
+    registry.remove(&key);
 }
 
 /// Shutdown and remove a streaming state, returning final weight/bias.
@@ -826,4 +827,35 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
         (weight, bias)
     }
+
+    /// Signal shutdown to the kernel without waiting for final state.
+    /// Called by Drop to ensure the kernel is stopped.
+    fn signal_shutdown(&self) {
+        if !self.is_initialized {
+            return;
+        }
+
+        trace!("[HOST] signal_shutdown: signaling SHUTDOWN to {} cubes", self.config.num_cubes());
+        let ctrl_ptr: GpuPtr<u32> = self.stream.ptr(&self.client, &self.tensors.control.handle);
+
+        // Signal shutdown to all cubes
+        for cube in 0..self.config.num_cubes() {
+            let base = cube * CTRL_ARRAY_SIZE;
+            self.stream.write(ctrl_ptr, base, &[0u32, 0, 1]);
+        }
+
+        // Wait for kernel to finish
+        trace!("[HOST] signal_shutdown: waiting for kernel to finish");
+        if let Err(e) = wait_for_sync(&self.kernel_client) {
+            trace!("[HOST] signal_shutdown: sync error (may be expected): {:?}", e);
+        }
+        trace!("[HOST] signal_shutdown: done");
+    }
 }
+
+// TODO: re-enable after debugging
+// impl<R: CubeRuntime> Drop for TttStreamingState<R> {
+//     fn drop(&mut self) {
+//         self.signal_shutdown();
+//     }
+// }

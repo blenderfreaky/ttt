@@ -3,6 +3,8 @@
 //! This provides true zero-copy input by writing tensor addresses to a pointer table
 //! that the kernel reads directly.
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use burn::tensor::Shape;
@@ -67,7 +69,28 @@ impl PtrStreamingConfig {
     pub fn num_cubes(&self) -> usize {
         self.batch_size * self.num_heads
     }
+
+    pub fn key(&self, stream_id: u64) -> u64 {
+        stream_id
+    }
 }
+
+/// Type-erased wrapper for storing in the global registry.
+struct AnyPtrStreamingState(Box<dyn std::any::Any + Send>);
+
+impl AnyPtrStreamingState {
+    fn new<R: CubeRuntime + 'static>(state: TttPtrStreamingState<R>) -> Self {
+        Self(Box::new(state))
+    }
+
+    fn downcast_mut<R: CubeRuntime + 'static>(&mut self) -> Option<&mut TttPtrStreamingState<R>> {
+        self.0.downcast_mut()
+    }
+}
+
+/// Global registry of pointer-based streaming states.
+static PTR_STREAMING_REGISTRY: LazyLock<Mutex<HashMap<u64, AnyPtrStreamingState>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// All tensor handles for the streaming kernel.
 /// Most are only accessed at launch; kept alive for kernel duration.
@@ -112,6 +135,67 @@ fn next_ptr_kernel_stream_id() -> StreamId {
     StreamId {
         value: PTR_KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),
     }
+}
+
+/// Get or create a pointer-based streaming state from the global registry.
+#[allow(clippy::too_many_arguments)]
+pub fn get_or_create_ptr_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
+    stream_id: u64,
+    config: PtrStreamingConfig,
+    client: ComputeClient<R>,
+    device: R::Device,
+    initial_weight: CubeTensor<R>,
+    initial_bias: CubeTensor<R>,
+    token_eta: CubeTensor<R>,
+    ln_weight: CubeTensor<R>,
+    ln_bias: CubeTensor<R>,
+) -> &'static mut TttPtrStreamingState<R> {
+    let mut registry = PTR_STREAMING_REGISTRY.lock().unwrap();
+
+    if !registry.contains_key(&stream_id) {
+        let state = TttPtrStreamingState::new::<F>(
+            config,
+            client,
+            device,
+            initial_weight,
+            initial_bias,
+            token_eta,
+            ln_weight,
+            ln_bias,
+        );
+        registry.insert(stream_id, AnyPtrStreamingState::new(state));
+    }
+
+    let state = registry.get_mut(&stream_id).unwrap();
+    let state_ptr = state.downcast_mut::<R>().unwrap() as *mut TttPtrStreamingState<R>;
+
+    // SAFETY: The registry is static and we're returning a reference that
+    // will be used within the same forward_launch call
+    unsafe { &mut *state_ptr }
+}
+
+/// Remove a pointer-based streaming state from the registry.
+pub fn remove_ptr_streaming_state<R: CubeRuntime + 'static>(stream_id: u64) -> Option<TttPtrStreamingState<R>> {
+    let mut registry = PTR_STREAMING_REGISTRY.lock().unwrap();
+    registry.remove(&stream_id).and_then(|any| {
+        match any.0.downcast::<TttPtrStreamingState<R>>() {
+            Ok(boxed) => Some(*boxed),
+            Err(_) => None,
+        }
+    })
+}
+
+/// Remove a pointer-based streaming state by ID, triggering its Drop impl for cleanup.
+pub fn remove_ptr_streaming_state_by_id(stream_id: u64) {
+    let mut registry = PTR_STREAMING_REGISTRY.lock().unwrap();
+    registry.remove(&stream_id);
+}
+
+/// Shutdown and remove a pointer-based streaming state, returning final weight/bias.
+pub fn shutdown_ptr_streaming_state<R: CubeRuntime + 'static>(
+    stream_id: u64,
+) -> Option<(Vec<f32>, Vec<f32>)> {
+    remove_ptr_streaming_state::<R>(stream_id).map(|state| state.shutdown())
 }
 
 /// State for pointer-based streaming execution.
@@ -473,6 +557,32 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         self.wait_for_done()
     }
 
+    /// Feed inputs and wait, returning the output tensor directly.
+    pub fn forward_tensor(
+        &mut self,
+        xq: &CubeTensor<R>,
+        xk: &CubeTensor<R>,
+        xv: &CubeTensor<R>,
+        ttt_lr_eta: &CubeTensor<R>,
+    ) -> &CubeTensor<R> {
+        self.feed_mini_batch(xq, xk, xv, ttt_lr_eta);
+        // Wait for done but don't read to CPU
+        let num_cubes = self.config.num_cubes();
+        for cube in 0..num_cubes {
+            loop {
+                let status = self.stream.read(self.control_ptr, cube, 1);
+                if status[0] == STATUS_DONE {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+        }
+        // Reset to IDLE
+        let idle_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_IDLE).collect();
+        self.stream.write(self.control_ptr, 0, &idle_signals);
+        &self.tensors.output
+    }
+
     /// Signal shutdown and retrieve final weight/bias.
     pub fn shutdown(self) -> (Vec<f32>, Vec<f32>) {
         trace!("ptr_stream: shutdown start");
@@ -507,6 +617,30 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
 
         trace!("ptr_stream: shutdown complete");
         (weight, bias)
+    }
+
+    /// Signal shutdown to the kernel without waiting for final state.
+    /// Called by Drop to ensure the kernel is stopped.
+    fn signal_shutdown(&self) {
+        trace!("ptr_stream: signal_shutdown start");
+        let num_cubes = self.config.num_cubes();
+
+        // Signal SHUTDOWN to all cubes
+        let shutdown_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_SHUTDOWN).collect();
+        self.stream.write(self.control_ptr, 0, &shutdown_signals);
+        self.stream.sync();
+
+        // Wait for kernel to finish
+        if let Err(e) = wait_for_sync(&self.kernel_client) {
+            trace!("ptr_stream: signal_shutdown sync error (may be expected): {:?}", e);
+        }
+        trace!("ptr_stream: signal_shutdown done");
+    }
+}
+
+impl<R: CubeRuntime + 'static> Drop for TttPtrStreamingState<R> {
+    fn drop(&mut self) {
+        self.signal_shutdown();
     }
 }
 

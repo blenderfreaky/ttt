@@ -18,7 +18,7 @@ use crate::ttt::cubecl_kernels::{
 };
 
 #[cfg(feature = "rocm")]
-use crate::ttt::cubecl_kernels::linear_fused_tile::TttStreamingKernel;
+use crate::ttt::cubecl_kernels::linear_fused_tile::{TttStreamingKernel, TttPtrStreamingKernel};
 
 /// Unified backend trait for fused TTT kernels.
 ///
@@ -36,6 +36,7 @@ pub trait FusedTttBackend:
     + FusedKernelBackend<TttTileKernel, 9, 10>
     + FusedKernelBackend<TttTileMultiKernel, 9, 10>
     + FusedKernelBackend<TttStreamingKernel, 9, 10>
+    + FusedKernelBackend<TttPtrStreamingKernel, 9, 10>
     + FusedKernelBackend<GeluTanhKernel, 1, 1>
     + FusedKernelBackend<GeluBwdKernel, 1, 1>
 {
@@ -71,6 +72,7 @@ where
         + FusedKernelBackend<TttTileKernel, 9, 10>
         + FusedKernelBackend<TttTileMultiKernel, 9, 10>
         + FusedKernelBackend<TttStreamingKernel, 9, 10>
+        + FusedKernelBackend<TttPtrStreamingKernel, 9, 10>
         + FusedKernelBackend<GeluTanhKernel, 1, 1>
         + FusedKernelBackend<GeluBwdKernel, 1, 1>,
 {
@@ -99,6 +101,7 @@ where
         + FusedKernelBackend<TttTileKernel, 9, 10>
         + FusedKernelBackend<TttTileMultiKernel, 9, 10>
         + FusedKernelBackend<TttStreamingKernel, 9, 10>
+        + FusedKernelBackend<TttPtrStreamingKernel, 9, 10>
         + FusedKernelBackend<GeluTanhKernel, 1, 1>
         + FusedKernelBackend<GeluBwdKernel, 1, 1>,
 {

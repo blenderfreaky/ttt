@@ -6,16 +6,16 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
+use burn::module::Ignored;
 use burn::tensor::{Tensor, TensorPrimitive};
 use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
 use tracing::trace;
 
 use super::{
     launch::TttTileOutputs,
-    streaming_host::{StreamingConfig, get_or_create_streaming_state},
+    streaming_host::{StreamingConfig, get_or_create_streaming_state, remove_streaming_state_by_id},
 };
 use crate::ttt::{
     TTTConfig,
@@ -28,14 +28,43 @@ use crate::ttt::{
     linear::{TTTLinear, TTTLinearState},
 };
 
+/// Inner handle that cleans up the streaming state on drop.
+#[derive(Debug)]
+struct StreamHandleInner(u64);
+
+impl Drop for StreamHandleInner {
+    fn drop(&mut self) {
+        remove_streaming_state_by_id(self.0);
+    }
+}
+
+/// Handle that cleans up the streaming state when the last clone is dropped.
+#[derive(Debug, Clone)]
+pub struct StreamHandle(Arc<StreamHandleInner>);
+
+impl StreamHandle {
+    pub fn new(stream_id: u64) -> Self {
+        Self(Arc::new(StreamHandleInner(stream_id)))
+    }
+
+    pub fn id(&self) -> u64 {
+        self.0.0
+    }
+}
+
 /// State for FusedTileStreaming that wraps TTTLinearState and adds stream_id.
 #[derive(burn::module::Module, Debug)]
 pub struct FusedTileStreamingState<B: FusedTttBackend> {
     /// The underlying linear state (weight and bias)
     pub inner: TTTLinearState<B>,
-    /// Unique stream identifier for registry lookup (not a module parameter)
-    #[module(skip)]
-    pub stream_id: u64,
+    /// Handle that cleans up on drop (not a module parameter)
+    pub stream_handle: Ignored<StreamHandle>,
+}
+
+impl<B: FusedTttBackend> FusedTileStreamingState<B> {
+    pub fn stream_id(&self) -> u64 {
+        self.stream_handle.0.id()
+    }
 }
 
 /// Configuration for the streaming kernel.
@@ -287,7 +316,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B>
     fn init_state(&self, batch_size: usize) -> Self::State {
         FusedTileStreamingState {
             inner: self.inner.inner.inner.inner.init_state(batch_size),
-            stream_id: next_stream_id(),
+            stream_handle: Ignored(StreamHandle::new(next_stream_id())),
         }
     }
 
@@ -320,7 +349,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B>
             inputs.ttt_lr_eta,
             ln_weight,
             ln_bias,
-            state.stream_id,
+            state.stream_id(),
             inner_config.mini_batch_size,
             head_dim,
             epsilon,
@@ -390,7 +419,7 @@ mod tests {
         let batch_size = 2usize;
         let num_heads = 2usize;
         let head_dim = 32usize;
-        let seq_len = 8usize; // mini_batch_size
+        let seq_len = 8usize; // single mini-batch
         let hidden_size = num_heads * head_dim;
         let epsilon = 1e-6f64;
 
@@ -477,7 +506,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
+        let output_ref = ttt_linear_cpu.forward(&mut state_cpu, inputs_cpu);
         let output_ref_data: Vec<f32> = output_ref.to_data().to_vec().unwrap();
         let weight_ref_data: Vec<f32> = state_cpu.weight.to_data().to_vec().unwrap();
         let bias_ref_data: Vec<f32> = state_cpu.bias.to_data().to_vec().unwrap();
@@ -555,16 +584,15 @@ mod tests {
             start_idx: 0,
         };
 
-        // Run streaming kernel via TTTInnerModel interface
-        let output_streaming =
-            fused_streaming.forward_mini_batch(&mut streaming_state, &inputs_gpu, 0..seq_len);
+        // Run streaming kernel via TTTInnerModel interface (uses forward which calls forward_mini_batch)
+        let output_streaming = fused_streaming.forward(&mut streaming_state, inputs_gpu);
 
         // Shutdown the persistent kernel before reading results
-        // (to_data() would otherwise block waiting for the kernel to complete)
+        // (to_data() blocks even with separate kernel stream due to Burn's sync behavior)
         use crate::ttt::cubecl_kernels::linear_fused_tile::streaming_host::shutdown_streaming_state;
         use cubecl::hip::HipRuntime;
-        trace!("[TEST] shutting down stream_id={}", streaming_state.stream_id);
-        let shutdown_result = shutdown_streaming_state::<HipRuntime>(streaming_state.stream_id);
+        trace!("[TEST] shutting down stream_id={}", streaming_state.stream_id());
+        let shutdown_result = shutdown_streaming_state::<HipRuntime>(streaming_state.stream_id());
         trace!("[TEST] shutdown returned: {:?}", shutdown_result.is_some());
 
         trace!("[TEST] reading output_streaming...");

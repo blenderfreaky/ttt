@@ -19,6 +19,8 @@ pub mod streaming_ptr;
 pub mod streaming_ptr_host;
 #[cfg(feature = "rocm")]
 pub mod streaming_wrapper;
+#[cfg(feature = "rocm")]
+pub mod streaming_ptr_wrapper;
 mod wrapper;
 
 pub use api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
@@ -51,3 +53,5 @@ pub use streaming_ptr::{
 };
 #[cfg(feature = "rocm")]
 pub use streaming_ptr_host::{PtrStreamingConfig, PtrStreamingTensors, TttPtrStreamingState};
+#[cfg(feature = "rocm")]
+pub use streaming_ptr_wrapper::{PtrStreamingKernelConfig, TttPtrStreamingKernel};
