@@ -22,6 +22,7 @@ use super::{
     },
 };
 use crate::ttt::cubecl_kernels::FusedTttConfig;
+use tracing::trace;
 
 /// Configuration for pointer-based streaming.
 #[derive(Debug, Clone, Copy)]
@@ -229,7 +230,9 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         };
 
         // Launch the persistent kernel
+        trace!("ptr_stream: launching persistent kernel");
         state.launch_kernel::<F>();
+        trace!("ptr_stream: kernel launched");
 
         state
     }
@@ -374,6 +377,8 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         xv: &CubeTensor<R>,
         ttt_lr_eta: &CubeTensor<R>,
     ) {
+        trace!("ptr_stream: feed_mini_batch start");
+
         // Get addresses of input tensors
         let xq_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &xq.handle);
         let xk_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &xk.handle);
@@ -390,6 +395,8 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         ];
         self.stream.write(self.ptr_table_ptr, 0, &addrs);
 
+        trace!("ptr_stream: writing READY to {} cubes", self.config.num_cubes());
+
         // Signal READY to all cubes
         let num_cubes = self.config.num_cubes();
         let ready_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_READY).collect();
@@ -398,6 +405,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
 
     /// Wait for processing to complete and return output data.
     pub fn wait_for_done(&self) -> Vec<f32> {
+        trace!("ptr_stream: wait_for_done start");
         let num_cubes = self.config.num_cubes();
 
         // Poll until all cubes report DONE
@@ -409,6 +417,8 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             std::thread::sleep(std::time::Duration::from_micros(10));
         }
 
+        trace!("ptr_stream: all cubes DONE, resetting to IDLE");
+
         // Reset control to IDLE
         let idle_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_IDLE).collect();
         self.stream.write(self.control_ptr, 0, &idle_signals);
@@ -418,6 +428,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             * self.config.num_heads
             * self.config.mini_batch_len
             * self.config.head_dim;
+        trace!("ptr_stream: reading output ({} elements)", output_len);
         self.stream.read(self.output_ptr, 0, output_len)
     }
 
@@ -435,9 +446,11 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
 
     /// Signal shutdown and retrieve final weight/bias.
     pub fn shutdown(self) -> (Vec<f32>, Vec<f32>) {
+        trace!("ptr_stream: shutdown start");
         let num_cubes = self.config.num_cubes();
 
         // Signal SHUTDOWN to all cubes
+        trace!("ptr_stream: writing SHUTDOWN to {} cubes", num_cubes);
         let shutdown_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_SHUTDOWN).collect();
         self.stream.write(self.control_ptr, 0, &shutdown_signals);
 
@@ -445,6 +458,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         self.stream.sync();
 
         // Wait for kernel to exit and write final state
+        trace!("ptr_stream: waiting for kernel exit");
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         // Sync GPU to ensure all kernel operations complete
@@ -455,12 +469,14 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             self.config.batch_size * self.config.num_heads * self.config.head_dim * self.config.head_dim;
         let bias_len = self.config.batch_size * self.config.num_heads * self.config.head_dim;
 
+        trace!("ptr_stream: reading final weight ({}) and bias ({})", weight_len, bias_len);
         let weight_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.weight_out.handle);
         let bias_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.bias_out.handle);
 
         let weight = self.stream.read(weight_ptr, 0, weight_len);
         let bias = self.stream.read(bias_ptr, 0, bias_len);
 
+        trace!("ptr_stream: shutdown complete");
         (weight, bias)
     }
 }
