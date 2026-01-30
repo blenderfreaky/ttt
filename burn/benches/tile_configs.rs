@@ -110,7 +110,7 @@ fn bench_tile_configs(c: &mut Criterion) {
 
     // Supported configurations from launch.rs:
     // (mini_batch_len, head_dim, threads)
-    let configs = [(8, 32, 8), (8, 64, 8), (16, 32, 16)];
+    let configs = [(8, 32, 8), (8, 64, 8), (16, 32, 16), (32, 32, 32), (32, 64, 32)];
 
     for (mini_batch_len, head_dim, threads) in configs {
         test_tile_config::<GpuBackend>(c, mini_batch_len, head_dim, threads, &device);

@@ -68,7 +68,7 @@ impl BenchConfig {
             num_heads: 2,
             num_layers: 1,
             mlp_intermediate: 128,
-            mini_batch_size: 8,
+            mini_batch_size: 32, // 32×32@32 tile config
         }
     }
 
@@ -101,7 +101,10 @@ impl BenchConfig {
             (8, 32) => 8,
             (8, 64) => 8,
             (16, 32) => 16,
+            (16, 64) => 64,
             (16, 128) => 16,
+            (32, 32) => 32,
+            (32, 64) => 32,
             (64, 64) => 64,
             _ => 64, // fallback for non-tiled configs
         };
@@ -384,11 +387,13 @@ fn bench_full_backward<
 
 /// Runtime parameters used across all benchmarks
 const BENCH_PARAMS: &[RuntimeParams] = &[
-    RuntimeParams {
-        batch_size: 4,
-        seq_length: 8, // Match mini_batch_size for direct comparison
-        vocab_size: 1000,
-    },
+    // Sweep batch sizes to find GPU saturation point
+    RuntimeParams { batch_size: 1, seq_length: 32, vocab_size: 1000 },
+    RuntimeParams { batch_size: 4, seq_length: 32, vocab_size: 1000 },
+    RuntimeParams { batch_size: 16, seq_length: 32, vocab_size: 1000 },
+    RuntimeParams { batch_size: 64, seq_length: 32, vocab_size: 1000 },
+    RuntimeParams { batch_size: 256, seq_length: 32, vocab_size: 1000 },
+    RuntimeParams { batch_size: 1024, seq_length: 32, vocab_size: 1000 },
     // RuntimeParams {
     //     batch_size: 16,
     //     seq_length: 8192,
