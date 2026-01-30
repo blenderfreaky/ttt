@@ -853,9 +853,8 @@ impl<R: CubeRuntime> TttStreamingState<R> {
     }
 }
 
-// TODO: re-enable after debugging
-// impl<R: CubeRuntime> Drop for TttStreamingState<R> {
-//     fn drop(&mut self) {
-//         self.signal_shutdown();
-//     }
-// }
+impl<R: CubeRuntime> Drop for TttStreamingState<R> {
+    fn drop(&mut self) {
+        self.signal_shutdown();
+    }
+}
