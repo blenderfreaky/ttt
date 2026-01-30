@@ -228,23 +228,23 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     x.copy_from(&grad_x);
 }
 
-/// Fused layer norm + L2 gradient computation that saves intermediates for backward.
+/// Fused layer norm + L2 gradient computation that streams intermediates directly to global memory.
 ///
 /// Same as `layer_norm_l2_grad` but saves the intermediate values needed for
-/// the backward pass (second derivative computation).
+/// the backward pass by storing directly to global tensors (no intermediate smem tiles).
 ///
-/// Saves:
+/// Saves (directly to global):
 /// - x_hat: normalized input (x - mean) / std [R, C]
-/// - std: standard deviation per row [R]
 /// - grad_output: y - target [R, C]
 /// - grad_x_hat: grad_output * ln_weight [R, C]
 ///
+/// Returns std (caller should store to global separately).
 /// The grad_l result is written to `x` as usual.
 ///
 /// `scratch` and `grad_x_temp` are external scratch tiles (caller can pass dead tiles).
 #[cube]
 #[allow(clippy::too_many_arguments)]
-pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
+pub fn layer_norm_l2_grad_stream_intermediates<F: Float, R: Dim, C: Dim>(
     x: &mut St<F, R, C>,
     target: &St<F, R, C>,
     ln_weight: &Rv<F, C>,
@@ -253,18 +253,18 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
     scratch: &mut St<F, R, C>,
     grad_x_temp: &mut St<F, R, C>,
     buf: &mut ReduceBuf<F>,
-    x_hat_out: &mut St<F, R, C>,
-    std_out: &mut Rv<F, R>,
-    grad_output_out: &mut St<F, R, C>,
-    grad_x_hat_out: &mut St<F, R, C>,
+    // Global tensor outputs (stored directly, no smem intermediates)
+    x_hat_global: &mut Tensor<Line<F>>,
+    grad_output_global: &mut Tensor<Line<F>>,
+    grad_x_hat_global: &mut Tensor<Line<F>>,
+    store_offset: usize,
     #[comptime] epsilon: f32,
-) {
-    // Normalize: x -> x_hat, save std
+) -> Rv<F, R> {
+    // Normalize: x -> x_hat
     let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
-    std_out.set(&std);
 
-    // Save x_hat for backward
-    x_hat_out.copy_from(x);
+    // Store x_hat directly to global (x still contains x_hat for subsequent use)
+    cube::store_st_direct(x, x_hat_global, store_offset, 0, 0);
 
     // Compute y = weight * x_hat + bias
     temp.copy_from(x);
@@ -275,15 +275,15 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
     temp.sub(target);
     sync_cube();
 
-    // Save grad_output for backward
-    grad_output_out.copy_from(temp);
+    // Store grad_output directly to global
+    cube::store_st_direct(temp, grad_output_global, store_offset, 0, 0);
 
     // grad_x_hat = grad_output * ln_weight
     temp.mul_row(ln_weight);
     sync_cube();
 
-    // Save grad_x_hat for backward
-    grad_x_hat_out.copy_from(temp);
+    // Store grad_x_hat directly to global
+    cube::store_st_direct(temp, grad_x_hat_global, store_offset, 0, 0);
 
     // Compute grad_x from grad_x_hat using external scratch tiles
     compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x, &std, scratch, grad_x_temp, buf);
@@ -292,6 +292,8 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
 
     // Copy result to x (grad_l_wrt_Z1)
     x.copy_from(grad_x_temp);
+
+    std
 }
 
 /// Computes layer norm forward and saves x_hat and std for backward.

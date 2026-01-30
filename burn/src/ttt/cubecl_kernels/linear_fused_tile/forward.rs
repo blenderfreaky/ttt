@@ -5,7 +5,7 @@ use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index
 
 use super::{
     helpers::{ParamsTrait, build_attn_matrix, build_eta_matrix},
-    layer_norm::{layer_norm_forward_save_intermediates, layer_norm_l2_grad_save_intermediates},
+    layer_norm::{layer_norm_forward_save_intermediates, layer_norm_l2_grad_stream_intermediates},
 };
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
@@ -89,11 +89,9 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut attn_smem = P::cs_cs_tile();
     let mut reduce_buf = ReduceBuf::<P::E>::new();
 
-    // Intermediate tiles for layer norm - to be saved for backward pass
-    let mut x_hat_fused_smem = P::cs_f_tile();
-    let mut std_fused_rv = P::cs_reg_big();
-    let mut grad_output_fused_smem = P::cs_f_tile();
-    let mut grad_x_hat_fused_smem = P::cs_f_tile();
+    // Intermediate tiles for output layer norm - to be saved for backward pass
+    // Note: fused LN intermediates (x_hat_fused, grad_output_fused, grad_x_hat_fused) are
+    // streamed directly to global memory, not buffered in smem
     let mut x_hat_ln_smem = P::cs_f_tile();
     let mut std_ln_rv = P::cs_reg_big();
 
@@ -133,55 +131,33 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
-    // This also saves intermediates (x_hat_fused, std_fused, grad_output_fused, grad_x_hat_fused)
+    // Streams intermediates (x_hat_fused, grad_output_fused, grad_x_hat_fused) directly to global
     // Use k_direct_smem and x_hat_ln_smem as scratch (both dead/unused at this point)
-    layer_norm_l2_grad_save_intermediates::<P::E, P::CS, P::F>(
+    let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::E, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
         ln_weight_rv,
         ln_bias_rv,
         &mut temp_cs_f_smem,
         &mut k_direct_smem,  // scratch (dead after line 131)
-        &mut x_hat_ln_smem,  // grad_x_temp (not needed until line 260)
+        &mut x_hat_ln_smem,  // grad_x_temp (not needed until later)
         &mut reduce_buf,
-        // Output intermediates
-        &mut x_hat_fused_smem,
-        &mut std_fused_rv,
-        &mut grad_output_fused_smem,
-        &mut grad_x_hat_fused_smem,
+        // Global tensor outputs (stored directly, no smem intermediates)
+        &mut fwd_intermediates.x_hat_fused,
+        &mut fwd_intermediates.grad_output_fused,
+        &mut fwd_intermediates.grad_x_hat_fused,
+        stage_offset,
         epsilon,
     );
 
     sync_cube();
 
-    // Store fused layer norm intermediates
-    cube::store_st_direct(
-        &x_hat_fused_smem,
-        &mut fwd_intermediates.x_hat_fused,
-        stage_offset,
-        0,
-        0,
-    );
-    cube::store_st_direct(
-        &grad_output_fused_smem,
-        &mut fwd_intermediates.grad_output_fused,
-        stage_offset,
-        0,
-        0,
-    );
-    cube::store_st_direct(
-        &grad_x_hat_fused_smem,
-        &mut fwd_intermediates.grad_x_hat_fused,
-        stage_offset,
-        0,
-        0,
-    );
+    // Store std_fused and grad_l_wrt_Z1 (z1_smem now contains grad_l)
     cube::broadcast::store_rv_direct(
         &std_fused_rv,
         &mut fwd_intermediates.std_fused,
         ttt_lr_eta_idx,
     );
-    // z1_smem now contains grad_l_wrt_Z1
     cube::store_st_direct(
         &z1_smem,
         &mut fwd_intermediates.grad_l_wrt_Z1,

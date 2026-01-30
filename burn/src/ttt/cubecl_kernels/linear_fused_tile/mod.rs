@@ -35,7 +35,7 @@ pub use launch::{
 pub use layer_norm::{
     SumSqOp, layer_norm_backward, layer_norm_forward, layer_norm_forward_save_intermediates,
     layer_norm_forward_with_intermediates, layer_norm_l2_grad, layer_norm_l2_grad_backward,
-    layer_norm_l2_grad_save_intermediates,
+    layer_norm_l2_grad_stream_intermediates,
 };
 #[cfg(feature = "rocm")]
 pub use streaming::{
