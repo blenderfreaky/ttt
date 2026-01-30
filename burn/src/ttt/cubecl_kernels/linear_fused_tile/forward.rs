@@ -134,12 +134,15 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     // Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
     // This also saves intermediates (x_hat_fused, std_fused, grad_output_fused, grad_x_hat_fused)
+    // Use k_direct_smem and x_hat_ln_smem as scratch (both dead/unused at this point)
     layer_norm_l2_grad_save_intermediates::<P::E, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
         ln_weight_rv,
         ln_bias_rv,
         &mut temp_cs_f_smem,
+        &mut k_direct_smem,  // scratch (dead after line 131)
+        &mut x_hat_ln_smem,  // grad_x_temp (not needed until line 260)
         &mut reduce_buf,
         // Output intermediates
         &mut x_hat_fused_smem,

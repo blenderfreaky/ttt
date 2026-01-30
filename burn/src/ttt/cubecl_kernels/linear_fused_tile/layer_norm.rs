@@ -240,6 +240,8 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
 /// - grad_x_hat: grad_output * ln_weight [R, C]
 ///
 /// The grad_l result is written to `x` as usual.
+///
+/// `scratch` and `grad_x_temp` are external scratch tiles (caller can pass dead tiles).
 #[cube]
 #[allow(clippy::too_many_arguments)]
 pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
@@ -248,6 +250,8 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
     ln_weight: &Rv<F, C>,
     ln_bias: &Rv<F, C>,
     temp: &mut St<F, R, C>,
+    scratch: &mut St<F, R, C>,
+    grad_x_temp: &mut St<F, R, C>,
     buf: &mut ReduceBuf<F>,
     x_hat_out: &mut St<F, R, C>,
     std_out: &mut Rv<F, R>,
@@ -281,16 +285,13 @@ pub fn layer_norm_l2_grad_save_intermediates<F: Float, R: Dim, C: Dim>(
     // Save grad_x_hat for backward
     grad_x_hat_out.copy_from(temp);
 
-    // Compute grad_x from grad_x_hat
-    // Note: We need to preserve x_hat (in x) for the helper, so allocate scratch
-    let mut scratch = St::<F, R, C>::new();
-    let mut grad_x = St::<F, R, C>::new();
-    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x, &std, &mut scratch, &mut grad_x, buf);
+    // Compute grad_x from grad_x_hat using external scratch tiles
+    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x, &std, scratch, grad_x_temp, buf);
 
     sync_cube();
 
     // Copy result to x (grad_l_wrt_Z1)
-    x.copy_from(&grad_x);
+    x.copy_from(grad_x_temp);
 }
 
 /// Computes layer norm forward and saves x_hat and std for backward.
