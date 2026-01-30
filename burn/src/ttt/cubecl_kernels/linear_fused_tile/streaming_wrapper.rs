@@ -563,23 +563,23 @@ mod tests {
         // (to_data() would otherwise block waiting for the kernel to complete)
         use crate::ttt::cubecl_kernels::linear_fused_tile::streaming_host::shutdown_streaming_state;
         use cubecl::hip::HipRuntime;
-        eprintln!("[TEST] shutting down stream_id={}", streaming_state.stream_id);
+        trace!("[TEST] shutting down stream_id={}", streaming_state.stream_id);
         let shutdown_result = shutdown_streaming_state::<HipRuntime>(streaming_state.stream_id);
-        eprintln!("[TEST] shutdown returned: {:?}", shutdown_result.is_some());
+        trace!("[TEST] shutdown returned: {:?}", shutdown_result.is_some());
 
-        eprintln!("[TEST] reading output_streaming...");
+        trace!("[TEST] reading output_streaming...");
         let output_streaming_data: Vec<f32> = output_streaming.to_data().to_vec().unwrap();
-        eprintln!("[TEST] reading weight...");
+        trace!("[TEST] reading weight...");
         let weight_streaming_data: Vec<f32> = streaming_state.inner.weight.to_data().to_vec().unwrap();
-        eprintln!("[TEST] reading bias...");
+        trace!("[TEST] reading bias...");
         let bias_streaming_data: Vec<f32> = streaming_state.inner.bias.to_data().to_vec().unwrap();
-        eprintln!("[TEST] data read complete");
+        trace!("[TEST] data read complete");
 
         // Debug: print first few elements
-        eprintln!("Output streaming (first 10): {:?}", &output_streaming_data[..10.min(output_streaming_data.len())]);
-        eprintln!("Output ref (first 10):       {:?}", &output_ref_data[..10.min(output_ref_data.len())]);
-        eprintln!("Weight streaming (first 10): {:?}", &weight_streaming_data[..10.min(weight_streaming_data.len())]);
-        eprintln!("Weight ref (first 10):       {:?}", &weight_ref_data[..10.min(weight_ref_data.len())]);
+        trace!("Output streaming (first 10): {:?}", &output_streaming_data[..10.min(output_streaming_data.len())]);
+        trace!("Output ref (first 10):       {:?}", &output_ref_data[..10.min(output_ref_data.len())]);
+        trace!("Weight streaming (first 10): {:?}", &weight_streaming_data[..10.min(weight_streaming_data.len())]);
+        trace!("Weight ref (first 10):       {:?}", &weight_ref_data[..10.min(weight_ref_data.len())]);
 
         // Compute max diff and correlation
         let mut max_diff = 0.0f32;
@@ -593,7 +593,7 @@ mod tests {
             sum_sq_b += b * b;
         }
         let correlation = sum_product / (sum_sq_a.sqrt() * sum_sq_b.sqrt());
-        eprintln!("Output max diff: {}, correlation: {}", max_diff, correlation);
+        trace!("Output max diff: {}, correlation: {}", max_diff, correlation);
 
         // Compare outputs (temporarily relaxed tolerance)
         assert_data_close(

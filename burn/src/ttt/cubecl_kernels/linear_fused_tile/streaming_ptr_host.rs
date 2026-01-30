@@ -527,9 +527,14 @@ mod tests {
         );
     }
 
-    /// Test ptr streaming kernel against CPU reference implementation.
+    /// Test ptr streaming kernel against GPU reference implementation.
     #[test]
     fn test_ptr_streaming_vs_cpu() {
+        // Initialize tracing for tests (ignore if already initialized)
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
+
         let batch_size = 1usize;
         let num_heads = 1usize;
         let head_dim = 32usize;
@@ -686,14 +691,14 @@ mod tests {
         let (weight_streaming, bias_streaming) = state.shutdown();
 
         // Debug output
-        eprintln!("Output streaming (first 8): {:?}", &output_streaming[..8.min(output_streaming.len())]);
-        eprintln!("Output ref (first 8):       {:?}", &output_ref_data[..8.min(output_ref_data.len())]);
+        trace!("Output streaming (first 8): {:?}", &output_streaming[..8.min(output_streaming.len())]);
+        trace!("Output ref (first 8):       {:?}", &output_ref_data[..8.min(output_ref_data.len())]);
 
         // Compare results
         assert_data_close(&output_streaming, &output_ref_data, 1e-3, 1e-4, "output");
         assert_data_close(&weight_streaming, &weight_ref_data, 1e-3, 1e-4, "weight");
         assert_data_close(&bias_streaming, &bias_ref_data, 1e-3, 1e-4, "bias");
 
-        eprintln!("Ptr streaming vs CPU test passed!");
+        trace!("Ptr streaming vs GPU ref test passed!");
     }
 }
