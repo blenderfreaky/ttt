@@ -3,7 +3,10 @@
 //! This provides true zero-copy input by writing tensor addresses to a pointer table
 //! that the kernel reads directly.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use burn::tensor::Shape;
+use burn_backend::StreamId;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
 use cubecl::prelude::*;
 use cubecl::frontend::ArrayArg;
@@ -100,6 +103,17 @@ pub struct PtrStreamingTensors<R: CubeRuntime> {
     pub std_ln: CubeTensor<R>,
 }
 
+/// Counter for generating unique kernel stream IDs.
+/// Uses high values (starting at 2_000_000) to avoid collisions with normal CubeCL stream IDs.
+static PTR_KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(2_000_000);
+
+/// Get a unique stream ID for a persistent kernel.
+fn next_ptr_kernel_stream_id() -> StreamId {
+    StreamId {
+        value: PTR_KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),
+    }
+}
+
 /// State for pointer-based streaming execution.
 pub struct TttPtrStreamingState<R: CubeRuntime> {
     pub config: PtrStreamingConfig,
@@ -109,8 +123,11 @@ pub struct TttPtrStreamingState<R: CubeRuntime> {
     pub ptr_table_ptr: GpuPtr<'static, u64>,
     pub control_ptr: GpuPtr<'static, u32>,
     pub output_ptr: GpuPtr<'static, f32>,
-    /// Client for GPU operations
+    /// Client for normal GPU operations
     client: ComputeClient<R>,
+    /// Client with a separate stream for the persistent kernel.
+    /// This prevents the persistent kernel from blocking normal operations.
+    kernel_client: ComputeClient<R>,
 }
 
 impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
@@ -219,6 +236,16 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             std_ln,
         };
 
+        // Create a separate client for the persistent kernel with its own stream ID.
+        // This prevents the persistent kernel from blocking normal operations on the main client.
+        let mut kernel_client = client.clone();
+        let kernel_stream_id = next_ptr_kernel_stream_id();
+        trace!("ptr_stream: using kernel stream ID: {}", kernel_stream_id);
+        // SAFETY: We're setting a unique stream ID that won't conflict with normal operations.
+        unsafe {
+            kernel_client.set_stream(kernel_stream_id);
+        }
+
         let mut state = Self {
             config,
             stream,
@@ -227,6 +254,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             control_ptr,
             output_ptr,
             client,
+            kernel_client,
         };
 
         // Launch the persistent kernel
@@ -320,12 +348,13 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         );
 
         // Dispatch based on tile configuration
+        // Use kernel_client which has a separate stream for the persistent kernel
         match (mini_batch_len, head_dim, threads) {
             (8, 32, 8) => {
                 type P<E> = Params<E, D8, D32, D4, D8>;
-                let cube_dim = CubeDim::new(&self.client, threads);
+                let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
-                    &self.client, cube_count, cube_dim,
+                    &self.kernel_client, cube_count, cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
                     xq_arg, xk_arg, xv_arg, eta_arg,
@@ -336,9 +365,9 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             }
             (16, 64, 64) => {
                 type P<E> = Params<E, D16, D64, D4, D4>;
-                let cube_dim = CubeDim::new(&self.client, threads);
+                let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
-                    &self.client, cube_count, cube_dim,
+                    &self.kernel_client, cube_count, cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
                     xq_arg, xk_arg, xv_arg, eta_arg,
@@ -349,9 +378,9 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             }
             (64, 64, 64) => {
                 type P<E> = Params<E, D64, D64, D8, D8>;
-                let cube_dim = CubeDim::new(&self.client, threads);
+                let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
-                    &self.client, cube_count, cube_dim,
+                    &self.kernel_client, cube_count, cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
                     xq_arg, xk_arg, xv_arg, eta_arg,
@@ -461,8 +490,8 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         trace!("ptr_stream: waiting for kernel exit");
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        // Sync GPU to ensure all kernel operations complete
-        wait_for_sync(&self.client).expect("GPU sync failed");
+        // Sync GPU to ensure the persistent kernel has finished (on kernel_client's stream)
+        wait_for_sync(&self.kernel_client).expect("GPU sync failed");
 
         // Read final weight and bias
         let weight_len =

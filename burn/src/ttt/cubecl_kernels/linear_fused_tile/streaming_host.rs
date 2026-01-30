@@ -9,7 +9,10 @@ use std::{
     any::TypeId,
     collections::HashMap,
     sync::{LazyLock, Mutex},
+    sync::atomic::{AtomicU64, Ordering},
 };
+
+use burn_backend::StreamId;
 
 use burn_backend::Shape;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
@@ -202,6 +205,17 @@ pub struct StreamingBufferTensors<R: CubeRuntime> {
     pub std_ln: CubeTensor<R>,
 }
 
+/// Counter for generating unique kernel stream IDs.
+/// Uses high values (starting at 1_000_000) to avoid collisions with normal CubeCL stream IDs.
+static KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(1_000_000);
+
+/// Get a unique stream ID for a persistent kernel.
+fn next_kernel_stream_id() -> StreamId {
+    StreamId {
+        value: KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),
+    }
+}
+
 /// State for a running streaming TTT kernel.
 ///
 /// Note: This struct is not Send because AsyncStream contains a raw HIP stream pointer.
@@ -210,7 +224,11 @@ pub struct TttStreamingState<R: CubeRuntime> {
     pub config: StreamingConfig,
     pub stream: AsyncStream,
     pub tensors: StreamingBufferTensors<R>,
+    /// Client for normal operations (D2D copies, reading results, etc.)
     pub client: ComputeClient<R>,
+    /// Client with a separate stream for the persistent kernel.
+    /// This prevents the persistent kernel from blocking normal operations.
+    pub kernel_client: ComputeClient<R>,
     pub is_initialized: bool,
 }
 
@@ -423,11 +441,23 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         // Create async stream for memory transfers
         let stream = AsyncStream::new();
 
+        // Create a separate client for the persistent kernel with its own stream ID.
+        // This prevents the persistent kernel from blocking normal operations on the main client.
+        let mut kernel_client = client.clone();
+        let kernel_stream_id = next_kernel_stream_id();
+        trace!("[HOST] using kernel stream ID: {}", kernel_stream_id);
+        // SAFETY: We're setting a unique stream ID that won't conflict with normal operations.
+        // The kernel will run on this separate stream.
+        unsafe {
+            kernel_client.set_stream(kernel_stream_id);
+        }
+
         let mut state = Self {
             config,
             stream,
             tensors,
             client: client.clone(),
+            kernel_client,
             is_initialized: false,
         };
 
@@ -549,36 +579,37 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         );
 
         // Dispatch based on tile configuration
+        // Use kernel_client which has a separate stream for the persistent kernel
         match (mini_batch_len, head_dim, threads) {
             (8, 32, 8) => {
                 type P<E> = Params<E, D8, D32, D4, D8>;
-                let cube_dim = CubeDim::new(&self.client, threads);
+                let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.client, cube_count, cube_dim,
+                    &self.kernel_client, cube_count, cube_dim,
                     inputs, outputs, control_arg, fwd_intermediates, kernel_config,
                 ).unwrap();
             }
             (16, 32, 16) => {
                 type P<E> = Params<E, D16, D32, D4, D8>;
-                let cube_dim = CubeDim::new(&self.client, threads);
+                let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.client, cube_count, cube_dim,
+                    &self.kernel_client, cube_count, cube_dim,
                     inputs, outputs, control_arg, fwd_intermediates, kernel_config,
                 ).unwrap();
             }
             (16, 64, 64) => {
                 type P<E> = Params<E, D16, D64, D4, D4>;
-                let cube_dim = CubeDim::new(&self.client, threads);
+                let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.client, cube_count, cube_dim,
+                    &self.kernel_client, cube_count, cube_dim,
                     inputs, outputs, control_arg, fwd_intermediates, kernel_config,
                 ).unwrap();
             }
             (64, 64, 64) => {
                 type P<E> = Params<E, D64, D64, D8, D8>;
-                let cube_dim = CubeDim::new(&self.client, threads);
+                let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.client, cube_count, cube_dim,
+                    &self.kernel_client, cube_count, cube_dim,
                     inputs, outputs, control_arg, fwd_intermediates, kernel_config,
                 ).unwrap();
             }
@@ -778,9 +809,9 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             }
         }
 
-        // Wait for kernel to finish
+        // Wait for kernel to finish on the kernel_client's stream
         trace!("[HOST] shutdown: waiting for kernel to finish via wait_for_sync");
-        wait_for_sync(&self.client).expect("sync failed");
+        wait_for_sync(&self.kernel_client).expect("sync failed");
         trace!("[HOST] shutdown: kernel finished");
 
         // Read final weight and bias
