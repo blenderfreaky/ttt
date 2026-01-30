@@ -10,9 +10,11 @@ use cubecl::frontend::ArrayArg;
 use thundercube::{
     prelude::{D4, D8, D16, D32, D64, LINE_SIZE},
     streaming::{AsyncStream, GpuPtr},
+    util::wait_for_sync,
 };
 use super::{
     helpers::Params,
+    forward::{InputsLaunch, OutputsLaunch, ForwardIntermediatesLaunch},
     streaming_ptr::{
         CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE,
         STATUS_DONE, STATUS_IDLE, STATUS_READY, STATUS_SHUTDOWN,
@@ -30,6 +32,7 @@ pub struct PtrStreamingConfig {
     pub head_dim: usize,
     pub epsilon: f32,
     pub threads: usize,
+    pub debug: bool,
 }
 
 impl PtrStreamingConfig {
@@ -48,7 +51,13 @@ impl PtrStreamingConfig {
             head_dim,
             epsilon,
             threads,
+            debug: false,
         }
+    }
+
+    pub fn with_debug(mut self, debug: bool) -> Self {
+        self.debug = debug;
+        self
     }
 
     pub fn num_cubes(&self) -> usize {
@@ -56,36 +65,38 @@ impl PtrStreamingConfig {
     }
 }
 
-/// Buffer handles for the pointer-based streaming kernel.
+/// All tensor handles for the streaming kernel.
+/// Most are only accessed at launch; kept alive for kernel duration.
 pub struct PtrStreamingTensors<R: CubeRuntime> {
-    /// Pointer table [PTR_TABLE_SIZE] - holds u64 addresses
+    // --- Host-accessed tensors ---
     pub ptr_table: CubeTensor<R>,
-    /// Control array [batch * heads] - atomic u32 status flags
     pub control: CubeTensor<R>,
-    /// Output weight [batch, heads, head_dim, head_dim]
-    pub weight_out: CubeTensor<R>,
-    /// Output bias [batch, heads, head_dim]
-    pub bias_out: CubeTensor<R>,
-    /// Output tensor [batch, heads, mini_batch_len, head_dim]
     pub output: CubeTensor<R>,
-    /// Weight tensor (kernel state)
-    pub weight: CubeTensor<R>,
-    /// Bias tensor (kernel state)
-    pub bias: CubeTensor<R>,
-    /// Token eta tensor
-    pub token_eta: CubeTensor<R>,
-    /// Layer norm weight
-    pub ln_weight: CubeTensor<R>,
-    /// Layer norm bias
-    pub ln_bias: CubeTensor<R>,
-    /// Dummy buffer for xq Array parameter [batch * heads * mini_batch_len * head_dim / 4]
+    pub weight_out: CubeTensor<R>,
+    pub bias_out: CubeTensor<R>,
+    // --- Array buffers (for HIP pointer loads) ---
     pub xq_buf: CubeTensor<R>,
-    /// Dummy buffer for xk Array parameter
     pub xk_buf: CubeTensor<R>,
-    /// Dummy buffer for xv Array parameter
     pub xv_buf: CubeTensor<R>,
-    /// Dummy buffer for eta Array parameter [batch * heads * mini_batch_len / 4]
     pub eta_buf: CubeTensor<R>,
+    // --- Inputs struct tensors ---
+    pub xq_scratch: CubeTensor<R>,
+    pub xk_scratch: CubeTensor<R>,
+    pub xv_scratch: CubeTensor<R>,
+    pub weight: CubeTensor<R>,
+    pub bias: CubeTensor<R>,
+    pub token_eta: CubeTensor<R>,
+    pub ttt_lr_eta_scratch: CubeTensor<R>,
+    pub ln_weight: CubeTensor<R>,
+    pub ln_bias: CubeTensor<R>,
+    // --- ForwardIntermediates tensors ---
+    pub x_hat_fused: CubeTensor<R>,
+    pub std_fused: CubeTensor<R>,
+    pub grad_output_fused: CubeTensor<R>,
+    pub grad_x_hat_fused: CubeTensor<R>,
+    pub grad_l_wrt_Z1: CubeTensor<R>,
+    pub x_hat_ln: CubeTensor<R>,
+    pub std_ln: CubeTensor<R>,
 }
 
 /// State for pointer-based streaming execution.
@@ -108,86 +119,62 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         config: PtrStreamingConfig,
         client: ComputeClient<R>,
         device: R::Device,
-        // Initial state tensors (passed to kernel)
+        // Initial state tensors
         initial_weight: CubeTensor<R>,
         initial_bias: CubeTensor<R>,
         token_eta: CubeTensor<R>,
         ln_weight: CubeTensor<R>,
         ln_bias: CubeTensor<R>,
     ) -> Self {
-
         let stream = AsyncStream::new();
         let num_cubes = config.num_cubes();
+        let mini_batch_len = config.mini_batch_len;
+        let head_dim = config.head_dim;
 
-        // Allocate pointer table as CubeTensor
-        let ptr_table = empty_device::<R, u64>(
-            client.clone(),
-            device.clone(),
-            Shape::from([PTR_TABLE_SIZE]),
-        );
+        // Helper to allocate a tensor
+        let alloc = |shape: Vec<usize>| {
+            empty_device::<R, F>(client.clone(), device.clone(), Shape::from(shape))
+        };
+        let alloc_u64 = |shape: Vec<usize>| {
+            empty_device::<R, u64>(client.clone(), device.clone(), Shape::from(shape))
+        };
+        let alloc_u32 = |shape: Vec<usize>| {
+            empty_device::<R, u32>(client.clone(), device.clone(), Shape::from(shape))
+        };
 
-        // Allocate control array
-        let control = empty_device::<R, u32>(
-            client.clone(),
-            device.clone(),
-            Shape::from([num_cubes * CTRL_ARRAY_SIZE]),
-        );
+        // --- Allocate all tensors ---
+        let ptr_table = alloc_u64(vec![PTR_TABLE_SIZE]);
+        let control = alloc_u32(vec![num_cubes * CTRL_ARRAY_SIZE]);
 
-        // Allocate output tensors
-        let weight_out = empty_device::<R, F>(
-            client.clone(),
-            device.clone(),
-            Shape::from([
-                config.batch_size,
-                config.num_heads,
-                config.head_dim,
-                config.head_dim,
-            ]),
-        );
-        let bias_out = empty_device::<R, F>(
-            client.clone(),
-            device.clone(),
-            Shape::from([config.batch_size, config.num_heads, config.head_dim]),
-        );
-        let output = empty_device::<R, F>(
-            client.clone(),
-            device.clone(),
-            Shape::from([
-                config.batch_size,
-                config.num_heads,
-                config.mini_batch_len,
-                config.head_dim,
-            ]),
-        );
+        // Array buffers for HIP pointer loads (per-cube sized)
+        let qkv_buf_size = mini_batch_len * head_dim;
+        let eta_buf_size = mini_batch_len;
+        let xq_buf = alloc(vec![qkv_buf_size]);
+        let xk_buf = alloc(vec![qkv_buf_size]);
+        let xv_buf = alloc(vec![qkv_buf_size]);
+        let eta_buf = alloc(vec![eta_buf_size]);
 
-        // Allocate dummy Array buffers for kernel parameters
-        // These get predictable buffer_N names that injected HIP code can reference
-        // Size: batch * heads * mini_batch_len * head_dim (for qkv)
-        // Size: batch * heads * mini_batch_len (for eta)
-        let qkv_buf_size = config.batch_size * config.num_heads * config.mini_batch_len * config.head_dim;
-        let eta_buf_size = config.batch_size * config.num_heads * config.mini_batch_len;
-        let xq_buf = empty_device::<R, F>(
-            client.clone(),
-            device.clone(),
-            Shape::from([qkv_buf_size]),
-        );
-        let xk_buf = empty_device::<R, F>(
-            client.clone(),
-            device.clone(),
-            Shape::from([qkv_buf_size]),
-        );
-        let xv_buf = empty_device::<R, F>(
-            client.clone(),
-            device.clone(),
-            Shape::from([qkv_buf_size]),
-        );
-        let eta_buf = empty_device::<R, F>(
-            client.clone(),
-            device.clone(),
-            Shape::from([eta_buf_size]),
-        );
+        // Scratch tensors for Inputs (single mini-batch)
+        let xq_scratch = alloc(vec![mini_batch_len, head_dim]);
+        let xk_scratch = alloc(vec![mini_batch_len, head_dim]);
+        let xv_scratch = alloc(vec![mini_batch_len, head_dim]);
+        let ttt_lr_eta_scratch = alloc(vec![mini_batch_len]);
 
-        // Get raw pointers BEFORE launching the kernel
+        // Outputs
+        let output = alloc(vec![mini_batch_len, head_dim]);
+        let weight_out = alloc(vec![head_dim, head_dim]);
+        let bias_out = alloc(vec![head_dim]);
+
+        // ForwardIntermediates (single mini-batch)
+        let x_hat_fused = alloc(vec![mini_batch_len, head_dim]);
+        let std_fused = alloc(vec![mini_batch_len]);
+        let grad_output_fused = alloc(vec![mini_batch_len, head_dim]);
+        let grad_x_hat_fused = alloc(vec![mini_batch_len, head_dim]);
+        let grad_l_wrt_Z1 = alloc(vec![mini_batch_len, head_dim]);
+        let x_hat_ln = alloc(vec![mini_batch_len, head_dim]);
+        let std_ln = alloc(vec![mini_batch_len]);
+
+        // Get raw pointers for host access
         let ptr_table_ptr: GpuPtr<'static, u64> =
             unsafe { std::mem::transmute(stream.ptr::<u64, R>(&client, &ptr_table.handle)) };
         let control_ptr: GpuPtr<'static, u32> =
@@ -206,18 +193,29 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let tensors = PtrStreamingTensors {
             ptr_table,
             control,
+            output,
             weight_out,
             bias_out,
-            output,
-            weight: initial_weight,
-            bias: initial_bias,
-            token_eta,
-            ln_weight,
-            ln_bias,
             xq_buf,
             xk_buf,
             xv_buf,
             eta_buf,
+            xq_scratch,
+            xk_scratch,
+            xv_scratch,
+            weight: initial_weight,
+            bias: initial_bias,
+            token_eta,
+            ttt_lr_eta_scratch,
+            ln_weight,
+            ln_bias,
+            x_hat_fused,
+            std_fused,
+            grad_output_fused,
+            grad_x_hat_fused,
+            grad_l_wrt_Z1,
+            x_hat_ln,
+            std_ln,
         };
 
         let mut state = Self {
@@ -244,6 +242,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             self.config.epsilon,
             self.config.threads,
         );
+        let debug = self.config.debug;
         let batch_size = self.config.batch_size as u32;
         let num_heads = self.config.num_heads as u32;
         let mini_batch_len = self.config.mini_batch_len;
@@ -253,26 +252,69 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let cube_count = CubeCount::Static(batch_size, num_heads, 1);
         let vectorization = LINE_SIZE;
 
-        // Get handle refs
-        let ptr_table_ref = self.tensors.ptr_table.as_handle_ref();
-        let control_ref = self.tensors.control.as_handle_ref();
-        let weight_ref = self.tensors.weight.as_handle_ref();
-        let bias_ref = self.tensors.bias.as_handle_ref();
-        let token_eta_ref = self.tensors.token_eta.as_handle_ref();
-        let ln_weight_ref = self.tensors.ln_weight.as_handle_ref();
-        let ln_bias_ref = self.tensors.ln_bias.as_handle_ref();
-        let weight_out_ref = self.tensors.weight_out.as_handle_ref();
-        let bias_out_ref = self.tensors.bias_out.as_handle_ref();
+        // Array sizes (in Line<F> units)
+        let qkv_arr_len = mini_batch_len * head_dim / LINE_SIZE;
+        let eta_arr_len = mini_batch_len / LINE_SIZE;
 
-        // Array sizes for ArrayArgs (in Line<F> units = float4)
-        let qkv_arr_len = self.config.batch_size * self.config.num_heads * mini_batch_len * head_dim / 4;
-        let eta_arr_len = self.config.batch_size * self.config.num_heads * mini_batch_len / 4;
-
-        // Create ArrayArgs for the Array parameters (only one match arm executes, no need to clone)
+        // Create ArrayArgs
         let xq_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.xq_buf.handle, qkv_arr_len, vectorization) };
         let xk_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.xk_buf.handle, qkv_arr_len, vectorization) };
         let xv_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.xv_buf.handle, qkv_arr_len, vectorization) };
         let eta_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.eta_buf.handle, eta_arr_len, vectorization) };
+
+        // Get all handle refs (must outlive the Launch structs)
+        let xq_scratch_ref = self.tensors.xq_scratch.as_handle_ref();
+        let xk_scratch_ref = self.tensors.xk_scratch.as_handle_ref();
+        let xv_scratch_ref = self.tensors.xv_scratch.as_handle_ref();
+        let weight_ref = self.tensors.weight.as_handle_ref();
+        let bias_ref = self.tensors.bias.as_handle_ref();
+        let token_eta_ref = self.tensors.token_eta.as_handle_ref();
+        let ttt_lr_eta_ref = self.tensors.ttt_lr_eta_scratch.as_handle_ref();
+        let ln_weight_ref = self.tensors.ln_weight.as_handle_ref();
+        let ln_bias_ref = self.tensors.ln_bias.as_handle_ref();
+        let output_ref = self.tensors.output.as_handle_ref();
+        let weight_out_ref = self.tensors.weight_out.as_handle_ref();
+        let bias_out_ref = self.tensors.bias_out.as_handle_ref();
+        let x_hat_fused_ref = self.tensors.x_hat_fused.as_handle_ref();
+        let std_fused_ref = self.tensors.std_fused.as_handle_ref();
+        let grad_output_fused_ref = self.tensors.grad_output_fused.as_handle_ref();
+        let grad_x_hat_fused_ref = self.tensors.grad_x_hat_fused.as_handle_ref();
+        let grad_l_wrt_Z1_ref = self.tensors.grad_l_wrt_Z1.as_handle_ref();
+        let x_hat_ln_ref = self.tensors.x_hat_ln.as_handle_ref();
+        let std_ln_ref = self.tensors.std_ln.as_handle_ref();
+        let ptr_table_ref = self.tensors.ptr_table.as_handle_ref();
+        let control_ref = self.tensors.control.as_handle_ref();
+
+        // Build InputsLaunch
+        let inputs = InputsLaunch::<F, R>::new(
+            xq_scratch_ref.as_tensor_arg(vectorization),
+            xk_scratch_ref.as_tensor_arg(vectorization),
+            xv_scratch_ref.as_tensor_arg(vectorization),
+            weight_ref.as_tensor_arg(vectorization),
+            bias_ref.as_tensor_arg(vectorization),
+            token_eta_ref.as_tensor_arg(vectorization),
+            ttt_lr_eta_ref.as_tensor_arg(vectorization),
+            ln_weight_ref.as_tensor_arg(vectorization),
+            ln_bias_ref.as_tensor_arg(vectorization),
+        );
+
+        // Build OutputsLaunch
+        let outputs = OutputsLaunch::<F, R>::new(
+            output_ref.as_tensor_arg(vectorization),
+            weight_out_ref.as_tensor_arg(vectorization),
+            bias_out_ref.as_tensor_arg(vectorization),
+        );
+
+        // Build ForwardIntermediatesLaunch
+        let fwd_intermediates = ForwardIntermediatesLaunch::<F, R>::new(
+            x_hat_fused_ref.as_tensor_arg(vectorization),
+            std_fused_ref.as_tensor_arg(vectorization),
+            grad_output_fused_ref.as_tensor_arg(vectorization),
+            grad_x_hat_fused_ref.as_tensor_arg(vectorization),
+            grad_l_wrt_Z1_ref.as_tensor_arg(vectorization),
+            x_hat_ln_ref.as_tensor_arg(vectorization),
+            std_ln_ref.as_tensor_arg(vectorization),
+        );
 
         // Dispatch based on tile configuration
         match (mini_batch_len, head_dim, threads) {
@@ -281,35 +323,12 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
                 let cube_dim = CubeDim::new(&self.client, threads);
                 fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
                     &self.client, cube_count, cube_dim,
-                    ptr_table_ref.as_tensor_arg(1), // u64, no vectorization
-                    control_ref.as_tensor_arg(1),   // atomic u32
-                    weight_ref.as_tensor_arg(vectorization),
-                    bias_ref.as_tensor_arg(vectorization),
-                    token_eta_ref.as_tensor_arg(vectorization),
-                    ln_weight_ref.as_tensor_arg(vectorization),
-                    ln_bias_ref.as_tensor_arg(vectorization),
-                    weight_out_ref.as_tensor_arg(vectorization),
-                    bias_out_ref.as_tensor_arg(vectorization),
-                    xq_arg, xk_arg, xv_arg, eta_arg,
-                    fused_config,
-                ).unwrap();
-            }
-            (16, 32, 16) => {
-                type P<E> = Params<E, D16, D32, D4, D8>;
-                let cube_dim = CubeDim::new(&self.client, threads);
-                fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
-                    &self.client, cube_count, cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
-                    weight_ref.as_tensor_arg(vectorization),
-                    bias_ref.as_tensor_arg(vectorization),
-                    token_eta_ref.as_tensor_arg(vectorization),
-                    ln_weight_ref.as_tensor_arg(vectorization),
-                    ln_bias_ref.as_tensor_arg(vectorization),
-                    weight_out_ref.as_tensor_arg(vectorization),
-                    bias_out_ref.as_tensor_arg(vectorization),
                     xq_arg, xk_arg, xv_arg, eta_arg,
+                    inputs, outputs, fwd_intermediates,
                     fused_config,
+                    debug,
                 ).unwrap();
             }
             (16, 64, 64) => {
@@ -319,15 +338,10 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
                     &self.client, cube_count, cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
-                    weight_ref.as_tensor_arg(vectorization),
-                    bias_ref.as_tensor_arg(vectorization),
-                    token_eta_ref.as_tensor_arg(vectorization),
-                    ln_weight_ref.as_tensor_arg(vectorization),
-                    ln_bias_ref.as_tensor_arg(vectorization),
-                    weight_out_ref.as_tensor_arg(vectorization),
-                    bias_out_ref.as_tensor_arg(vectorization),
                     xq_arg, xk_arg, xv_arg, eta_arg,
+                    inputs, outputs, fwd_intermediates,
                     fused_config,
+                    debug,
                 ).unwrap();
             }
             (64, 64, 64) => {
@@ -337,15 +351,10 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
                     &self.client, cube_count, cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
-                    weight_ref.as_tensor_arg(vectorization),
-                    bias_ref.as_tensor_arg(vectorization),
-                    token_eta_ref.as_tensor_arg(vectorization),
-                    ln_weight_ref.as_tensor_arg(vectorization),
-                    ln_bias_ref.as_tensor_arg(vectorization),
-                    weight_out_ref.as_tensor_arg(vectorization),
-                    bias_out_ref.as_tensor_arg(vectorization),
                     xq_arg, xk_arg, xv_arg, eta_arg,
+                    inputs, outputs, fwd_intermediates,
                     fused_config,
+                    debug,
                 ).unwrap();
             }
             _ => panic!(
@@ -432,8 +441,14 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let shutdown_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_SHUTDOWN).collect();
         self.stream.write(self.control_ptr, 0, &shutdown_signals);
 
-        // Wait a bit for kernel to exit and write final state
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Sync to ensure the SHUTDOWN signal is written
+        self.stream.sync();
+
+        // Wait for kernel to exit and write final state
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Sync GPU to ensure all kernel operations complete
+        wait_for_sync(&self.client).expect("GPU sync failed");
 
         // Read final weight and bias
         let weight_len =
@@ -456,127 +471,213 @@ unsafe impl<R: CubeRuntime> Send for TttPtrStreamingState<R> {}
 
 #[cfg(all(test, feature = "rocm"))]
 mod tests {
+    use std::sync::Arc;
     use super::*;
+    use burn::tensor::{Tensor, TensorData};
+    use burn::module::Param;
     use burn_cubecl::ops::numeric::empty_device;
     use cubecl::hip::HipRuntime;
+    use crate::ttt::{
+        GpuBackend,
+        layer::{Qkv, TTTInnerModel, TTTInputsInner},
+        linear::{TTTLinear, TTTLinearConfig},
+    };
 
     type R = HipRuntime;
+    type RefBackend = GpuBackend;
 
-    /// Test that pointer indirection works: xq data should be copied to output.
+    fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
+        assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match: {} vs {}", a.len(), b.len());
+
+        let mut max_diff = 0.0f32;
+        let mut max_idx = 0;
+        let mut max_av = 0.0f32;
+        let mut max_bv = 0.0f32;
+
+        for (i, (&av, &bv)) in a.iter().zip(b.iter()).enumerate() {
+            let diff = (av - bv).abs();
+            if diff > max_diff {
+                max_diff = diff;
+                max_idx = i;
+                max_av = av;
+                max_bv = bv;
+            }
+        }
+
+        let tolerance = atol + rtol * max_bv.abs();
+        assert!(
+            max_diff <= tolerance,
+            "{name}: Max mismatch at index {max_idx}: {max_av} vs {max_bv} (diff: {max_diff}, tolerance: {tolerance})",
+        );
+    }
+
+    /// Test ptr streaming kernel against CPU reference implementation.
     #[test]
-    fn test_ptr_streaming_passthrough() {
-        let device = <R as cubecl::Runtime>::Device::default();
-        let client = R::client(&device);
+    fn test_ptr_streaming_vs_cpu() {
+        let batch_size = 1usize;
+        let num_heads = 1usize;
+        let head_dim = 32usize;
+        let seq_len = 8usize; // mini_batch_size
+        let hidden_size = num_heads * head_dim;
+        let epsilon = 1e-6f64;
+        let threads = 8;
 
-        let batch_size = 1;
-        let num_heads = 1;
-        let mini_batch_len = 16;
-        let head_dim = 64;
-        let epsilon = 1e-6;
-        let threads = 64;
+        let config = Arc::new(crate::ttt::TTTConfig {
+            num_heads,
+            hidden_size,
+            token_size: hidden_size,
+            mini_batch_size: seq_len,
+            base_lr: 1.0,
+            epsilon,
+            threads,
+            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
+        });
+        let linear_config = Arc::new(TTTLinearConfig::new());
 
-        let config = PtrStreamingConfig::new(
-            batch_size, num_heads, mini_batch_len, head_dim, epsilon, threads,
+        // Use GPU for both reference and streaming kernel
+        let gpu_device = <R as cubecl::Runtime>::Device::default();
+        let ref_device = Default::default();
+
+        // Create random input tensors on GPU
+        let xq_ref: Tensor<RefBackend, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &ref_device,
+        );
+        let xk_ref: Tensor<RefBackend, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &ref_device,
+        );
+        let xv_ref: Tensor<RefBackend, 4> = Tensor::random(
+            [batch_size, num_heads, seq_len, head_dim],
+            burn::tensor::Distribution::Normal(0.0, 0.1),
+            &ref_device,
+        );
+        let token_eta_ref: Tensor<RefBackend, 1> =
+            Tensor::arange(1..(seq_len as i64 + 1), &ref_device)
+                .float()
+                .recip();
+        let ttt_lr_eta_ref: Tensor<RefBackend, 3> = Tensor::random(
+            [batch_size, num_heads, seq_len],
+            burn::tensor::Distribution::Uniform(0.01, 0.05),
+            &ref_device,
         );
 
-        // Create test tensors with known values
-        let qkv_shape = Shape::from([batch_size, num_heads, mini_batch_len, head_dim]);
-        let weight_shape = Shape::from([num_heads, head_dim, head_dim]);
-        let ln_shape = Shape::from([num_heads, head_dim]);
-        let eta_shape = Shape::from([mini_batch_len]);
+        // Get data as vectors
+        let xq_data: Vec<f32> = xq_ref.to_data().to_vec().unwrap();
+        let xk_data: Vec<f32> = xk_ref.to_data().to_vec().unwrap();
+        let xv_data: Vec<f32> = xv_ref.to_data().to_vec().unwrap();
+        let token_eta_data: Vec<f32> = token_eta_ref.to_data().to_vec().unwrap();
+        let ttt_lr_eta_data: Vec<f32> = ttt_lr_eta_ref.to_data().to_vec().unwrap();
 
-        // Fill xq with sequential values for easy verification
-        let xq_data: Vec<f32> = (0..batch_size * num_heads * mini_batch_len * head_dim)
-            .map(|i| i as f32 * 0.01)
-            .collect();
-        let xk_data: Vec<f32> = vec![0.1; batch_size * num_heads * mini_batch_len * head_dim];
-        let xv_data: Vec<f32> = vec![0.2; batch_size * num_heads * mini_batch_len * head_dim];
-        let eta_data: Vec<f32> = vec![0.001; batch_size * num_heads * mini_batch_len];
+        // Create GPU reference implementation
+        let ttt_linear_ref: TTTLinear<RefBackend> =
+            TTTLinear::new(&config, &linear_config, &ref_device);
+        let mut state_ref = ttt_linear_ref.init_state(batch_size);
 
-        // Create input tensors using empty_device and write
+        // Get weight/bias/ln params
+        let weight_init_data: Vec<f32> =
+            ttt_linear_ref.weight_init.val().to_data().to_vec().unwrap();
+        let bias_init_data: Vec<f32> = ttt_linear_ref.bias_init.val().to_data().to_vec().unwrap();
+        let ln_weight_data: Vec<f32> = ttt_linear_ref
+            .layer_norm
+            .weight
+            .val()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let ln_bias_data: Vec<f32> = ttt_linear_ref
+            .layer_norm
+            .bias
+            .val()
+            .to_data()
+            .to_vec()
+            .unwrap();
+
+        // Run GPU reference
+        let inputs_ref = TTTInputsInner {
+            qkv: Qkv {
+                xq: xq_ref.clone(),
+                xk: xk_ref.clone(),
+                xv: xv_ref.clone(),
+            },
+            token_eta: token_eta_ref.clone(),
+            ttt_lr_eta: ttt_lr_eta_ref.clone(),
+            start_idx: 0,
+        };
+
+        let output_ref = ttt_linear_ref.forward_mini_batch(&mut state_ref, &inputs_ref, 0..seq_len);
+        let output_ref_data: Vec<f32> = output_ref.to_data().to_vec().unwrap();
+        let weight_ref_data: Vec<f32> = state_ref.weight.to_data().to_vec().unwrap();
+        let bias_ref_data: Vec<f32> = state_ref.bias.to_data().to_vec().unwrap();
+
+        // --- Now run the ptr streaming kernel ---
+        let client = R::client(&gpu_device);
         let stream = AsyncStream::new();
 
-        let xq = empty_device::<R, f32>(client.clone(), device.clone(), qkv_shape.clone());
-        let xk = empty_device::<R, f32>(client.clone(), device.clone(), qkv_shape.clone());
-        let xv = empty_device::<R, f32>(client.clone(), device.clone(), qkv_shape.clone());
-        let ttt_lr_eta = empty_device::<R, f32>(
-            client.clone(), device.clone(),
-            Shape::from([batch_size, num_heads, mini_batch_len]),
-        );
+        let ptr_config = PtrStreamingConfig::new(
+            batch_size, num_heads, seq_len, head_dim, epsilon as f32, threads,
+        ).with_debug(true);
 
-        // Write data to tensors
-        let xq_ptr: GpuPtr<f32> = stream.ptr(&client, &xq.handle);
-        let xk_ptr: GpuPtr<f32> = stream.ptr(&client, &xk.handle);
-        let xv_ptr: GpuPtr<f32> = stream.ptr(&client, &xv.handle);
-        let eta_ptr: GpuPtr<f32> = stream.ptr(&client, &ttt_lr_eta.handle);
+        // Allocate GPU tensors and write data
+        let xq_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([batch_size, num_heads, seq_len, head_dim]));
+        let xk_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([batch_size, num_heads, seq_len, head_dim]));
+        let xv_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([batch_size, num_heads, seq_len, head_dim]));
+        let ttt_lr_eta_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([batch_size, num_heads, seq_len]));
 
-        stream.write(xq_ptr, 0, &xq_data);
-        stream.write(xk_ptr, 0, &xk_data);
-        stream.write(xv_ptr, 0, &xv_data);
-        stream.write(eta_ptr, 0, &eta_data);
+        stream.write(stream.ptr(&client, &xq_gpu.handle), 0, &xq_data);
+        stream.write(stream.ptr(&client, &xk_gpu.handle), 0, &xk_data);
+        stream.write(stream.ptr(&client, &xv_gpu.handle), 0, &xv_data);
+        stream.write(stream.ptr(&client, &ttt_lr_eta_gpu.handle), 0, &ttt_lr_eta_data);
+
+        // Allocate state tensors
+        let weight_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([num_heads, head_dim, head_dim]));
+        let bias_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([num_heads, head_dim]));
+        let token_eta_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([seq_len]));
+        let ln_weight_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([num_heads, head_dim]));
+        let ln_bias_gpu = empty_device::<R, f32>(client.clone(), gpu_device.clone(),
+            Shape::from([num_heads, head_dim]));
+
+        stream.write(stream.ptr(&client, &weight_gpu.handle), 0, &weight_init_data);
+        stream.write(stream.ptr(&client, &bias_gpu.handle), 0, &bias_init_data);
+        stream.write(stream.ptr(&client, &token_eta_gpu.handle), 0, &token_eta_data);
+        stream.write(stream.ptr(&client, &ln_weight_gpu.handle), 0, &ln_weight_data);
+        stream.write(stream.ptr(&client, &ln_bias_gpu.handle), 0, &ln_bias_data);
         stream.sync();
 
-        // Create initial state tensors (identity weight, zero bias)
-        let weight_data: Vec<f32> = (0..num_heads * head_dim * head_dim)
-            .map(|i| {
-                let r = (i / head_dim) % head_dim;
-                let c = i % head_dim;
-                if r == c { 1.0 } else { 0.0 }
-            })
-            .collect();
-        let bias_data: Vec<f32> = vec![0.0; num_heads * head_dim];
-        let token_eta_data: Vec<f32> = vec![1.0; mini_batch_len];
-        let ln_weight_data: Vec<f32> = vec![1.0; num_heads * head_dim];
-        let ln_bias_data: Vec<f32> = vec![0.0; num_heads * head_dim];
-
-        let initial_weight = empty_device::<R, f32>(client.clone(), device.clone(), weight_shape);
-        let initial_bias = empty_device::<R, f32>(client.clone(), device.clone(), Shape::from([num_heads, head_dim]));
-        let token_eta = empty_device::<R, f32>(client.clone(), device.clone(), eta_shape);
-        let ln_weight = empty_device::<R, f32>(client.clone(), device.clone(), ln_shape.clone());
-        let ln_bias = empty_device::<R, f32>(client.clone(), device.clone(), ln_shape);
-
-        // Write state data
-        let weight_ptr: GpuPtr<f32> = stream.ptr(&client, &initial_weight.handle);
-        let bias_ptr: GpuPtr<f32> = stream.ptr(&client, &initial_bias.handle);
-        let token_eta_ptr: GpuPtr<f32> = stream.ptr(&client, &token_eta.handle);
-        let ln_weight_ptr: GpuPtr<f32> = stream.ptr(&client, &ln_weight.handle);
-        let ln_bias_ptr: GpuPtr<f32> = stream.ptr(&client, &ln_bias.handle);
-
-        stream.write(weight_ptr, 0, &weight_data);
-        stream.write(bias_ptr, 0, &bias_data);
-        stream.write(token_eta_ptr, 0, &token_eta_data);
-        stream.write(ln_weight_ptr, 0, &ln_weight_data);
-        stream.write(ln_bias_ptr, 0, &ln_bias_data);
-        stream.sync();
-
-        // Create streaming state (this launches the kernel)
+        // Create streaming state and run
         let mut state = TttPtrStreamingState::new::<f32>(
-            config,
+            ptr_config,
             client.clone(),
-            device.clone(),
-            initial_weight,
-            initial_bias,
-            token_eta,
-            ln_weight,
-            ln_bias,
+            gpu_device.clone(),
+            weight_gpu,
+            bias_gpu,
+            token_eta_gpu,
+            ln_weight_gpu,
+            ln_bias_gpu,
         );
 
-        // Feed mini-batch and wait for output
-        let output = state.forward(&xq, &xk, &xv, &ttt_lr_eta);
+        let output_streaming = state.forward(&xq_gpu, &xk_gpu, &xv_gpu, &ttt_lr_eta_gpu);
+        let (weight_streaming, bias_streaming) = state.shutdown();
 
-        // The kernel currently just copies xq to output, so they should match
-        assert_eq!(output.len(), xq_data.len(), "Output length mismatch");
+        // Debug output
+        eprintln!("Output streaming (first 8): {:?}", &output_streaming[..8.min(output_streaming.len())]);
+        eprintln!("Output ref (first 8):       {:?}", &output_ref_data[..8.min(output_ref_data.len())]);
 
-        // Check that output matches xq (within floating point tolerance)
-        let max_diff = output.iter().zip(xq_data.iter())
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0f32, f32::max);
+        // Compare results
+        assert_data_close(&output_streaming, &output_ref_data, 1e-3, 1e-4, "output");
+        assert_data_close(&weight_streaming, &weight_ref_data, 1e-3, 1e-4, "weight");
+        assert_data_close(&bias_streaming, &bias_ref_data, 1e-3, 1e-4, "bias");
 
-        assert!(max_diff < 1e-5, "Output differs from xq by {}, expected < 1e-5", max_diff);
-        eprintln!("Pointer indirection test passed! Max diff: {}", max_diff);
-
-        // Shutdown
-        let (final_weight, final_bias) = state.shutdown();
-        eprintln!("Final weight len: {}, bias len: {}", final_weight.len(), final_bias.len());
+        eprintln!("Ptr streaming vs CPU test passed!");
     }
 }

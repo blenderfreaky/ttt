@@ -29,9 +29,11 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
 use cubecl::prelude::*;
-use thundercube::prelude::*;
+use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp};
+use thundercube::util::transpose_4;
 
 use super::helpers::ParamsTrait;
+use super::forward::{Inputs, Outputs, ForwardIntermediates, fused_ttt_forward_stage};
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
 /// Pointer table slot indices
@@ -51,13 +53,13 @@ pub const STATUS_READY: u32 = 1;
 pub const STATUS_DONE: u32 = 2;
 pub const STATUS_SHUTDOWN: u32 = 3;
 
-/// Buffer indices for injected HIP code
+/// Buffer indices for injected HIP code (must match kernel parameter order)
 pub const BUF_PTR_TABLE: usize = 0;
 pub const BUF_CONTROL: usize = 1;
-pub const BUF_XQ: usize = 9;
-pub const BUF_XK: usize = 10;
-pub const BUF_XV: usize = 11;
-pub const BUF_ETA: usize = 12;
+pub const BUF_XQ: usize = 2;
+pub const BUF_XK: usize = 3;
+pub const BUF_XV: usize = 4;
+pub const BUF_ETA: usize = 5;
 
 /// Inject HIP code to load from pointer table into Array parameters.
 ///
@@ -151,86 +153,213 @@ fn store_to_output<P: ParamsTrait>(
     });
 }
 
+/// Cooperatively copy from Array to Tensor.
+/// All threads participate in the copy.
+#[cube]
+fn copy_array_to_tensor<F: Float>(
+    src: &Array<Line<F>>,
+    dst: &mut Tensor<Line<F>>,
+    dst_offset: usize,
+    #[comptime] count: usize,
+) {
+    for i in range_stepped(UNIT_POS as usize, count, CUBE_DIM as usize) {
+        dst[dst_offset + i] = src[i];
+    }
+}
+
+/// Cooperatively copy from Tensor to Array.
+/// All threads participate in the copy.
+#[cube]
+fn copy_tensor_to_array<F: Float>(
+    src: &Tensor<Line<F>>,
+    src_offset: usize,
+    dst: &mut Array<Line<F>>,
+    #[comptime] count: usize,
+) {
+    for i in range_stepped(UNIT_POS as usize, count, CUBE_DIM as usize) {
+        dst[i] = src[src_offset + i];
+    }
+}
+
+/// Load from a Slice into shared memory tile (direct, no transpose).
+/// Assumes row-major contiguous layout with known dimensions.
+#[cube]
+pub fn load_st_from_slice<F: Float, R: Dim, C: Dim>(
+    src: Slice<Line<F>>,
+    dst: &mut St<F, R, C>,
+    #[comptime] src_cols: usize, // Number of columns in source (head_dim)
+) {
+    let vec_stride = C::LINES;
+    let total_vecs = R::VALUE * vec_stride;
+    let mask = vec_stride - 1;
+
+    let num_threads = CUBE_DIM as usize;
+    let tid = UNIT_POS as usize;
+
+    // Source has src_cols columns, so LINE stride is src_cols / LINE_SIZE
+    let src_line_stride = comptime!(src_cols / LINE_SIZE);
+
+    for i in range_stepped(tid, total_vecs, num_threads) {
+        let r = i / vec_stride;
+        let c_vec = i % vec_stride;
+
+        // Source index: row * line_stride + col_vec
+        let src_idx = r * src_line_stride + c_vec;
+        let val = src[src_idx];
+
+        let phys_c = cube::swizzle(r, c_vec, mask);
+        let s_idx = r * vec_stride + phys_c;
+        dst.data[s_idx] = val;
+    }
+}
+
+/// Load from a Slice into shared memory tile with transpose.
+/// Assumes row-major contiguous layout with known dimensions.
+#[cube]
+pub fn load_st_from_slice_transpose<F: Float, R: Dim, C: Dim>(
+    src: Slice<Line<F>>,
+    dst: &mut St<F, R, C>,
+    #[comptime] src_cols: usize, // Number of columns in source (head_dim)
+) {
+
+    let s_stride = C::LINES;
+    let patches_h = R::LINES;
+    let patches_w = C::LINES;
+    let total_patches = patches_h * patches_w;
+
+    let num_threads = CUBE_DIM as usize;
+    let tid = UNIT_POS as usize;
+    let mask = s_stride - 1;
+
+    // Source has src_cols columns, so LINE stride is src_cols / LINE_SIZE
+    let src_line_stride = comptime!(src_cols / LINE_SIZE);
+
+    for i in range_stepped(tid, total_patches, num_threads) {
+        let patch_row = i / patches_w;
+        let patch_col = i % patches_w;
+
+        let base_row = patch_row * LINE_SIZE;
+        let base_col_vec = patch_col;
+
+        // Load 4 consecutive rows
+        let r0 = src[(base_row + 0) * src_line_stride + base_col_vec];
+        let r1 = src[(base_row + 1) * src_line_stride + base_col_vec];
+        let r2 = src[(base_row + 2) * src_line_stride + base_col_vec];
+        let r3 = src[(base_row + 3) * src_line_stride + base_col_vec];
+
+        // Transpose
+        let (c0, c1, c2, c3) = transpose_4(r0, r1, r2, r3);
+
+        // Store transposed
+        let s_base_row = patch_col * LINE_SIZE;
+        let s_col_vec = patch_row;
+
+        let s0 = cube::swizzle(s_base_row + 0, s_col_vec, mask);
+        let s1 = cube::swizzle(s_base_row + 1, s_col_vec, mask);
+        let s2 = cube::swizzle(s_base_row + 2, s_col_vec, mask);
+        let s3 = cube::swizzle(s_base_row + 3, s_col_vec, mask);
+
+        dst.data[(s_base_row + 0) * s_stride + s0] = c0;
+        dst.data[(s_base_row + 1) * s_stride + s1] = c1;
+        dst.data[(s_base_row + 2) * s_stride + s2] = c2;
+        dst.data[(s_base_row + 3) * s_stride + s3] = c3;
+    }
+}
+
 /// Streaming kernel with pointer indirection.
 ///
-/// Parameter order (determines buffer indices):
-/// - buffer_0: ptr_table (u64 addresses)
-/// - buffer_1: control (atomic u32)
-/// - buffer_2: weight
-/// - buffer_3: bias
-/// - buffer_4: token_eta
-/// - buffer_5: ln_weight
-/// - buffer_6: ln_bias
-/// - buffer_7: weight_out
-/// - buffer_8: bias_out
-/// - buffer_9: xq_buf (Array for loading xq)
-/// - buffer_10: xk_buf (Array for loading xk)
-/// - buffer_11: xv_buf (Array for loading xv)
-/// - buffer_12: eta_buf (Array for loading eta)
+/// The kernel receives data via pointer table (zero-copy from host tensors),
+/// copies to scratch Tensors, then calls the standard TTT forward stage.
+///
+/// Arrays (buffer_9-12) receive data via injected HIP code that dereferences
+/// addresses from ptr_table. After sync, we copy Array -> scratch Tensor
+/// so the standard forward stage can operate on Tensors.
 #[cube(launch)]
 pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     // Pointer table: addresses of input tensors [PTR_TABLE_SIZE]
-    ptr_table: &Tensor<u64>, // buffer_0
+    ptr_table: &Tensor<u64>,
     // Control array [batch * heads] - mutable for atomic ops
-    control: &mut Tensor<Atomic<u32>>, // buffer_1
-    // Constant/state tensors
-    weight: &Tensor<Line<P::E>>,    // buffer_2
-    bias: &Tensor<Line<P::E>>,      // buffer_3
-    token_eta: &Tensor<Line<P::E>>, // buffer_4
-    ln_weight: &Tensor<Line<P::E>>, // buffer_5
-    ln_bias: &Tensor<Line<P::E>>,   // buffer_6
-    // Output state tensors
-    weight_out: &mut Tensor<Line<P::E>>, // buffer_7
-    bias_out: &mut Tensor<Line<P::E>>,   // buffer_8
+    control: &mut Tensor<Atomic<u32>>,
     // Array buffers for pointer-based loading (get predictable buffer_N names)
-    xq_buf: &mut Array<Line<P::E>>,  // buffer_9
-    xk_buf: &mut Array<Line<P::E>>,  // buffer_10
-    xv_buf: &mut Array<Line<P::E>>,  // buffer_11
-    eta_buf: &mut Array<Line<P::E>>, // buffer_12
+    xq_buf: &mut Array<Line<P::E>>,
+    xk_buf: &mut Array<Line<P::E>>,
+    xv_buf: &mut Array<Line<P::E>>,
+    eta_buf: &mut Array<Line<P::E>>,
+    // Inputs struct (scratch tensors for xq/xk/xv/ttt_lr_eta, constants for others)
+    inputs: &mut Inputs<P::E>,
+    // Outputs struct (output tensor, weight_out, bias_out)
+    outputs: &mut Outputs<P::E>,
+    // Forward intermediates (for backward pass compatibility)
+    fwd_intermediates: &mut ForwardIntermediates<P::E>,
     #[comptime] config: FusedTttConfig,
+    #[comptime] debug: bool,
 ) {
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;
     let num_heads = CUBE_COUNT_Y as usize;
-    let _epsilon = comptime!(config.epsilon());
+    let epsilon = comptime!(config.epsilon());
     let mini_batch_len = comptime!(config.mini_batch_len);
     let head_dim = comptime!(config.head_dim);
-    let _threads = comptime!(config.threads);
 
     // Control index for this cube
     let ctrl_idx = batch_idx * num_heads + head_idx;
 
-    // Compute sizes for pointer loads
-    let _qkv_size = mini_batch_len * head_dim / 4; // In float_4 units
-    let _eta_size = mini_batch_len / 4; // In float_4 units (ttt_lr_eta is smaller)
+    if comptime!(debug) {
+        if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+            debug_print!("PTR_STREAM: kernel start ctrl_idx=%u\n", ctrl_idx);
+        }
+    }
 
-    // Initialize weight in shared memory
+    // Sizes in Lines (float_4 units)
+    let qkv_lines = comptime!(mini_batch_len * head_dim / LINE_SIZE);
+    let eta_lines = comptime!(mini_batch_len / LINE_SIZE);
+
+    // Initialize weight in shared memory from inputs.weight
     let mut weight_smem = P::f_f_tile();
-    let weight_offset = (batch_idx * num_heads + head_idx) * head_dim * head_dim / 4;
-    cube::load_st_direct(weight, &mut weight_smem, weight_offset, 0, 0);
+    let weight_offset = (batch_idx * num_heads + head_idx) * head_dim * head_dim / LINE_SIZE;
+    cube::load_st_direct(&inputs.weight, &mut weight_smem, weight_offset, 0, 0);
 
     sync_cube();
 
-    // Initialize bias in registers
+    // Initialize bias in registers from inputs.bias
     let mut bias_rv = P::f_reg_big();
-    let bias_offset = (batch_idx * num_heads + head_idx) * head_dim / 4;
-    cube::broadcast::load_rv_direct(bias, &mut bias_rv, bias_offset);
+    let bias_offset = (batch_idx * num_heads + head_idx) * head_dim / LINE_SIZE;
+    cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, bias_offset);
 
     // Load layer norm params
-    let ln_offset = head_idx * head_dim / 4;
+    let ln_offset = head_idx * head_dim / LINE_SIZE;
     let mut ln_weight_rv = P::f_reg_big();
     let mut ln_bias_rv = P::f_reg_big();
-    cube::broadcast::load_rv_direct(ln_weight, &mut ln_weight_rv, ln_offset);
-    cube::broadcast::load_rv_direct(ln_bias, &mut ln_bias_rv, ln_offset);
+    cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, ln_offset);
+    cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, ln_offset);
+
+    if comptime!(debug) {
+        if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+            debug_print!("PTR_STREAM: init done, entering main loop ctrl=%u\n", ctrl_idx);
+        }
+    }
 
     // Main processing loop
     loop {
+        if comptime!(debug) {
+            if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                debug_print!("PTR_STREAM: loop iteration ctrl=%u\n", ctrl_idx);
+            }
+        }
+
         // Poll for status change (only thread 0)
+        // Wait for READY (1) or SHUTDOWN (3), skip IDLE (0) and DONE (2)
         let mut status: u32 = 0u32;
         if UNIT_POS == 0 {
             loop {
                 status = Atomic::load(&control[ctrl_idx]);
-                if status != 0u32 {
+                if comptime!(debug) {
+                    if batch_idx == 0 && head_idx == 0 {
+                        debug_print!("PTR_STREAM: poll status=%u\n", status);
+                    }
+                }
+                // Only break on READY (1) or SHUTDOWN (3)
+                if status == 1u32 || status == 3u32 {
                     break;
                 }
                 // Small sleep to reduce memory bus contention
@@ -242,9 +371,26 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
         sync_cube();
         status = Atomic::load(&control[ctrl_idx]);
 
+        if comptime!(debug) {
+            if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                debug_print!("PTR_STREAM: after sync status=%u\n", status);
+            }
+        }
+
         if status == 3u32 {
             // SHUTDOWN
+            if comptime!(debug) {
+                if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                    debug_print!("PTR_STREAM: shutdown received ctrl=%u\n", ctrl_idx);
+                }
+            }
             break;
+        }
+
+        if comptime!(debug) {
+            if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                debug_print!("PTR_STREAM: loading from pointers ctrl=%u\n", ctrl_idx);
+            }
         }
 
         // Load input data from pointers via injected HIP code
@@ -253,18 +399,60 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             xk_buf,
             xv_buf,
             eta_buf,
-            comptime!(config.mini_batch_len * config.head_dim / 4),
-            comptime!(config.mini_batch_len / 4),
+            qkv_lines,
+            eta_lines,
         );
 
         sync_cube();
 
-        // TODO: Process the mini-batch using Array buffers
-        // This requires refactoring fused_ttt_forward_stage to work with Arrays
-        // instead of Tensor slices
+        if comptime!(debug) {
+            if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                debug_print!("PTR_STREAM: copying to scratch tensors ctrl=%u\n", ctrl_idx);
+            }
+        }
 
-        // For now, copy xq to output to verify pointer indirection works
-        store_to_output::<P>(xq_buf, comptime!(config.mini_batch_len * config.head_dim / 4));
+        // Copy from Arrays to scratch Tensors in Inputs struct.
+        // This indirection allows reusing fused_ttt_forward_stage which expects Tensors.
+        // The compiler should optimize this to direct register/memory access.
+        copy_array_to_tensor(xq_buf, &mut inputs.xq, 0, qkv_lines);
+        copy_array_to_tensor(xk_buf, &mut inputs.xk, 0, qkv_lines);
+        copy_array_to_tensor(xv_buf, &mut inputs.xv, 0, qkv_lines);
+        copy_array_to_tensor(eta_buf, &mut inputs.ttt_lr_eta, 0, eta_lines);
+
+        sync_cube();
+
+        if comptime!(debug) {
+            if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                debug_print!("PTR_STREAM: running forward stage ctrl=%u\n", ctrl_idx);
+            }
+        }
+
+        // Run TTT forward stage
+        // stage_offset=0, ttt_lr_eta_idx=0 since scratch tensors contain exactly one mini-batch
+        fused_ttt_forward_stage::<P>(
+            inputs,
+            outputs,
+            fwd_intermediates,
+            &mut weight_smem,
+            &mut bias_rv,
+            &ln_weight_rv,
+            &ln_bias_rv,
+            0,  // stage_offset
+            0,  // ttt_lr_eta_idx
+            epsilon,
+        );
+
+        sync_cube();
+
+        if comptime!(debug) {
+            if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                debug_print!("PTR_STREAM: storing output ctrl=%u\n", ctrl_idx);
+            }
+        }
+
+        // Copy output back to pointer destination
+        copy_tensor_to_array(&outputs.output, 0, xq_buf, qkv_lines);
+        store_to_output::<P>(xq_buf, qkv_lines);
 
         sync_cube();
 
@@ -273,13 +461,34 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             Atomic::store(&control[ctrl_idx], 2u32); // DONE
         }
 
+        if comptime!(debug) {
+            if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+                debug_print!("PTR_STREAM: marked DONE ctrl=%u\n", ctrl_idx);
+            }
+        }
+
         sync_cube();
     }
 
-    // Shutdown: store final weight and bias
-    let weight_out_offset = (batch_idx * num_heads + head_idx) * head_dim * head_dim / 4;
-    let bias_out_offset = (batch_idx * num_heads + head_idx) * head_dim / 4;
+    if comptime!(debug) {
+        if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+            debug_print!("PTR_STREAM: storing final weight/bias ctrl=%u\n", ctrl_idx);
+        }
+    }
 
-    cube::store_st_direct(&weight_smem, weight_out, weight_out_offset, 0, 0);
-    cube::broadcast::store_rv_direct(&bias_rv, bias_out, bias_out_offset);
+    // Shutdown: store final weight and bias to outputs
+    let weight_out_offset = (batch_idx * num_heads + head_idx) * head_dim * head_dim / LINE_SIZE;
+    let bias_out_offset = (batch_idx * num_heads + head_idx) * head_dim / LINE_SIZE;
+
+    cube::store_st_direct(&weight_smem, &mut outputs.weight_out, weight_out_offset, 0, 0);
+    cube::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, bias_out_offset);
+
+    // Ensure all stores are complete before kernel exits
+    sync_cube();
+
+    if comptime!(debug) {
+        if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
+            debug_print!("PTR_STREAM: kernel exit ctrl=%u\n", ctrl_idx);
+        }
+    }
 }
