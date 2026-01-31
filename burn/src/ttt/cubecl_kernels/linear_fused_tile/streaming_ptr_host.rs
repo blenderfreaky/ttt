@@ -55,7 +55,7 @@ impl PtrStreamingConfig {
             head_dim,
             epsilon,
             threads,
-            debug: false,
+            debug: true, // Enable debug output
         }
     }
 
@@ -237,33 +237,33 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let ptr_table = alloc_u64(vec![PTR_TABLE_SIZE]);
         let control = alloc_u32(vec![num_cubes * CTRL_ARRAY_SIZE]);
 
-        // Array buffers for HIP pointer loads (per-cube sized)
-        let qkv_buf_size = mini_batch_len * head_dim;
-        let eta_buf_size = mini_batch_len;
-        let xq_buf = alloc(vec![qkv_buf_size]);
-        let xk_buf = alloc(vec![qkv_buf_size]);
-        let xv_buf = alloc(vec![qkv_buf_size]);
-        let eta_buf = alloc(vec![eta_buf_size]);
+        // Array buffers for HIP pointer loads (sized for ALL cubes - each cube uses its own offset)
+        let qkv_buf_size_per_cube = mini_batch_len * head_dim;
+        let eta_buf_size_per_cube = mini_batch_len;
+        let xq_buf = alloc(vec![num_cubes * qkv_buf_size_per_cube]);
+        let xk_buf = alloc(vec![num_cubes * qkv_buf_size_per_cube]);
+        let xv_buf = alloc(vec![num_cubes * qkv_buf_size_per_cube]);
+        let eta_buf = alloc(vec![num_cubes * eta_buf_size_per_cube]);
 
-        // Scratch tensors for Inputs (single mini-batch)
-        let xq_scratch = alloc(vec![mini_batch_len, head_dim]);
-        let xk_scratch = alloc(vec![mini_batch_len, head_dim]);
-        let xv_scratch = alloc(vec![mini_batch_len, head_dim]);
-        let ttt_lr_eta_scratch = alloc(vec![mini_batch_len]);
+        // Scratch tensors for Inputs (sized for all cubes, each cube uses its own offset)
+        let xq_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let xk_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let xv_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let ttt_lr_eta_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
 
         // Outputs - 4D to match expected tensor shapes
         let output = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
         let weight_out = alloc(vec![config.batch_size, config.num_heads, head_dim, head_dim]);
         let bias_out = alloc(vec![config.batch_size, config.num_heads, head_dim]);
 
-        // ForwardIntermediates (single mini-batch)
-        let x_hat_fused = alloc(vec![mini_batch_len, head_dim]);
-        let std_fused = alloc(vec![mini_batch_len]);
-        let grad_output_fused = alloc(vec![mini_batch_len, head_dim]);
-        let grad_x_hat_fused = alloc(vec![mini_batch_len, head_dim]);
-        let grad_l_wrt_Z1 = alloc(vec![mini_batch_len, head_dim]);
-        let x_hat_ln = alloc(vec![mini_batch_len, head_dim]);
-        let std_ln = alloc(vec![mini_batch_len]);
+        // ForwardIntermediates (sized for all cubes)
+        let x_hat_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let std_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
+        let grad_output_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let grad_x_hat_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let grad_l_wrt_Z1 = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let x_hat_ln = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let std_ln = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
 
         // Get raw pointers for host access
         let ptr_table_ptr: GpuPtr<'static, u64> =
@@ -356,9 +356,10 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let cube_count = CubeCount::Static(batch_size, num_heads, 1);
         let vectorization = LINE_SIZE;
 
-        // Array sizes (in Line<F> units)
-        let qkv_arr_len = mini_batch_len * head_dim / LINE_SIZE;
-        let eta_arr_len = mini_batch_len / LINE_SIZE;
+        // Array sizes (in Line<F> units) - total for all cubes
+        let num_cubes = self.config.num_cubes();
+        let qkv_arr_len = num_cubes * mini_batch_len * head_dim / LINE_SIZE;
+        let eta_arr_len = num_cubes * mini_batch_len / LINE_SIZE;
 
         // Create ArrayArgs
         let xq_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.xq_buf.handle, qkv_arr_len, vectorization) };
@@ -566,6 +567,10 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
                 std::hint::spin_loop();
             }
         }
+        // Sync the AsyncStream to ensure control flag reads/writes are complete.
+        // The kernel writes output data BEFORE setting DONE (with atomic release),
+        // so if we read DONE, the output is ready.
+        self.stream.sync();
         // Reset to IDLE
         let idle_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_IDLE).collect();
         self.stream.write(self.control_ptr, 0, &idle_signals);
@@ -691,10 +696,8 @@ mod tests {
             .try_init();
 
         // Test with multiple mini-batches to exercise persistent kernel
-        // TODO: Use batch_size=1, num_heads=1 for now since ptr streaming kernel
-        // doesn't yet handle per-cube output offsets for multi-batch/head cases
-        let batch_size = 1usize;
-        let num_heads = 1usize;
+        let batch_size = 2usize;
+        let num_heads = 2usize;
         let head_dim = 32usize;
         let mini_batch_size = 8usize;
         let num_mini_batches = 2usize;

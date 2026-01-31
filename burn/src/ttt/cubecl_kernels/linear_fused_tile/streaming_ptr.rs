@@ -79,33 +79,29 @@ fn load_from_pointers<P: ParamsTrait>(
         scope.register(cubecl::ir::NonSemantic::Comment {
             content: format!(
                 r#"*/
+// Per-cube offset for Array buffers (each cube has its own region)
+const uint32 cube_idx = blockIdx.x * gridDim.y + blockIdx.y;
+const uint32 qkv_off = cube_idx * {qkv}u;
+const uint32 eta_off = cube_idx * {eta}u;
 // Load xq from pointer table slot 0 into buffer_9
 {{
-    const uint64 xq_addr = ((const uint64*)buffer_{buf_ptr})[{ptr_xq}];
-    const float_4* xq_src = (const float_4*)(xq_addr);
-    const uint32 xq_offset = (blockIdx.x * gridDim.y + blockIdx.y) * {qkv}u;
-    for (uint32 i = 0; i < {qkv}u; i++) {{ buffer_{buf_xq}[i] = xq_src[xq_offset + i]; }}
+    const float_4* xq_src = (const float_4*)((const uint64*)buffer_{buf_ptr})[{ptr_xq}];
+    for (uint32 i = 0; i < {qkv}u; i++) {{ buffer_{buf_xq}[qkv_off + i] = xq_src[qkv_off + i]; }}
 }}
 // Load xk from pointer table slot 1 into buffer_10
 {{
-    const uint64 xk_addr = ((const uint64*)buffer_{buf_ptr})[{ptr_xk}];
-    const float_4* xk_src = (const float_4*)(xk_addr);
-    const uint32 xk_offset = (blockIdx.x * gridDim.y + blockIdx.y) * {qkv}u;
-    for (uint32 i = 0; i < {qkv}u; i++) {{ buffer_{buf_xk}[i] = xk_src[xk_offset + i]; }}
+    const float_4* xk_src = (const float_4*)((const uint64*)buffer_{buf_ptr})[{ptr_xk}];
+    for (uint32 i = 0; i < {qkv}u; i++) {{ buffer_{buf_xk}[qkv_off + i] = xk_src[qkv_off + i]; }}
 }}
 // Load xv from pointer table slot 2 into buffer_11
 {{
-    const uint64 xv_addr = ((const uint64*)buffer_{buf_ptr})[{ptr_xv}];
-    const float_4* xv_src = (const float_4*)(xv_addr);
-    const uint32 xv_offset = (blockIdx.x * gridDim.y + blockIdx.y) * {qkv}u;
-    for (uint32 i = 0; i < {qkv}u; i++) {{ buffer_{buf_xv}[i] = xv_src[xv_offset + i]; }}
+    const float_4* xv_src = (const float_4*)((const uint64*)buffer_{buf_ptr})[{ptr_xv}];
+    for (uint32 i = 0; i < {qkv}u; i++) {{ buffer_{buf_xv}[qkv_off + i] = xv_src[qkv_off + i]; }}
 }}
 // Load ttt_lr_eta from pointer table slot 3 into buffer_12
 {{
-    const uint64 eta_addr = ((const uint64*)buffer_{buf_ptr})[{ptr_eta}];
-    const float_4* eta_src = (const float_4*)(eta_addr);
-    const uint32 eta_offset = (blockIdx.x * gridDim.y + blockIdx.y) * {eta}u;
-    for (uint32 i = 0; i < {eta}u; i++) {{ buffer_{buf_eta}[i] = eta_src[eta_offset + i]; }}
+    const float_4* eta_src = (const float_4*)((const uint64*)buffer_{buf_ptr})[{ptr_eta}];
+    for (uint32 i = 0; i < {eta}u; i++) {{ buffer_{buf_eta}[eta_off + i] = eta_src[eta_off + i]; }}
 }}
 /*"#,
                 buf_ptr = BUF_PTR_TABLE,
@@ -136,12 +132,11 @@ fn store_to_output<P: ParamsTrait>(
         scope.register(cubecl::ir::NonSemantic::Comment {
             content: format!(
                 r#"*/
-// Store from buffer_9 to output via pointer table slot 4
+// Store from buffer_9 to output via pointer table slot 4 (per-cube offsets)
 {{
-    const uint64 out_addr = ((const uint64*)buffer_{buf_ptr})[{ptr_out}];
-    float_4* out_dst = (float_4*)(out_addr);
-    const uint32 out_offset = (blockIdx.x * gridDim.y + blockIdx.y) * {count}u;
-    for (uint32 i = 0; i < {count}u; i++) {{ out_dst[out_offset + i] = buffer_{buf_xq}[i]; }}
+    float_4* out_dst = (float_4*)((const uint64*)buffer_{buf_ptr})[{ptr_out}];
+    const uint32 off = (blockIdx.x * gridDim.y + blockIdx.y) * {count}u;
+    for (uint32 i = 0; i < {count}u; i++) {{ out_dst[off + i] = buffer_{buf_xq}[off + i]; }}
 }}
 /*"#,
                 buf_ptr = BUF_PTR_TABLE,
@@ -158,12 +153,13 @@ fn store_to_output<P: ParamsTrait>(
 #[cube]
 fn copy_array_to_tensor<F: Float>(
     src: &Array<Line<F>>,
+    src_offset: usize,
     dst: &mut Tensor<Line<F>>,
     dst_offset: usize,
     #[comptime] count: usize,
 ) {
     for i in range_stepped(UNIT_POS as usize, count, CUBE_DIM as usize) {
-        dst[dst_offset + i] = src[i];
+        dst[dst_offset + i] = src[src_offset + i];
     }
 }
 
@@ -174,10 +170,11 @@ fn copy_tensor_to_array<F: Float>(
     src: &Tensor<Line<F>>,
     src_offset: usize,
     dst: &mut Array<Line<F>>,
+    dst_offset: usize,
     #[comptime] count: usize,
 ) {
     for i in range_stepped(UNIT_POS as usize, count, CUBE_DIM as usize) {
-        dst[i] = src[src_offset + i];
+        dst[dst_offset + i] = src[src_offset + i];
     }
 }
 
@@ -412,12 +409,22 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
         }
 
         // Copy from Arrays to scratch Tensors in Inputs struct.
-        // This indirection allows reusing fused_ttt_forward_stage which expects Tensors.
-        // The compiler should optimize this to direct register/memory access.
-        copy_array_to_tensor(xq_buf, &mut inputs.xq, 0, qkv_lines);
-        copy_array_to_tensor(xk_buf, &mut inputs.xk, 0, qkv_lines);
-        copy_array_to_tensor(xv_buf, &mut inputs.xv, 0, qkv_lines);
-        copy_array_to_tensor(eta_buf, &mut inputs.ttt_lr_eta, 0, eta_lines);
+        // Each cube writes to its own offset in the scratch tensors.
+        // The offset is (batch_idx * num_heads + head_idx) * elements_per_cube.
+        let qkv_offset = (batch_idx * num_heads + head_idx) * qkv_lines;
+        let eta_offset = (batch_idx * num_heads + head_idx) * eta_lines;
+
+        if comptime!(debug) {
+            if UNIT_POS == 0 {
+                debug_print!("PTR_STREAM: cube b=%u h=%u qkv_off=%u eta_off=%u\n",
+                    batch_idx as u32, head_idx as u32, qkv_offset as u32, eta_offset as u32);
+            }
+        }
+
+        copy_array_to_tensor(xq_buf, qkv_offset, &mut inputs.xq, qkv_offset, qkv_lines);
+        copy_array_to_tensor(xk_buf, qkv_offset, &mut inputs.xk, qkv_offset, qkv_lines);
+        copy_array_to_tensor(xv_buf, qkv_offset, &mut inputs.xv, qkv_offset, qkv_lines);
+        copy_array_to_tensor(eta_buf, eta_offset, &mut inputs.ttt_lr_eta, eta_offset, eta_lines);
 
         sync_cube();
 
@@ -427,8 +434,16 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             }
         }
 
+        if comptime!(debug) {
+            if UNIT_POS == 0 {
+                debug_print!("PTR_STREAM: cube b=%u h=%u forward_stage qkv=%u eta=%u\n",
+                    batch_idx as u32, head_idx as u32, qkv_offset as u32, eta_offset as u32);
+            }
+        }
+
         // Run TTT forward stage
-        // stage_offset=0, ttt_lr_eta_idx=0 since scratch tensors contain exactly one mini-batch
+        // Use per-cube offsets for xq/xk/xv and ttt_lr_eta since scratch tensors
+        // are sized for all cubes.
         fused_ttt_forward_stage::<P>(
             inputs,
             outputs,
@@ -437,8 +452,8 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             &mut bias_rv,
             &ln_weight_rv,
             &ln_bias_rv,
-            0,  // stage_offset
-            0,  // ttt_lr_eta_idx
+            qkv_offset,  // stage_offset - where to read from in scratch tensors
+            eta_offset,  // ttt_lr_eta_idx - this cube's offset in ttt_lr_eta scratch
             epsilon,
         );
 
@@ -450,8 +465,8 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             }
         }
 
-        // Copy output back to pointer destination
-        copy_tensor_to_array(&outputs.output, 0, xq_buf, qkv_lines);
+        // Copy output back to pointer destination (from this cube's offset)
+        copy_tensor_to_array(&outputs.output, qkv_offset, xq_buf, qkv_offset, qkv_lines);
         store_to_output::<P>(xq_buf, qkv_lines);
 
         sync_cube();

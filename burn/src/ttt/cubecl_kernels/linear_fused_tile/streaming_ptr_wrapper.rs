@@ -10,7 +10,7 @@ use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
 use burn::module::Ignored;
 use burn::tensor::{Tensor, TensorPrimitive};
-use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
+use burn_cubecl::{CubeRuntime, FloatElement, kernel::into_contiguous, tensor::CubeTensor};
 use tracing::trace;
 
 use super::{
@@ -148,16 +148,38 @@ impl FusedKernel<9, 10> for TttPtrStreamingKernel {
         );
 
         trace!("ptr streaming forward start");
+
+        // Make input tensors contiguous - the kernel reads from base addresses
+        // and non-contiguous views (from slicing) would have wrong data at offset 0
+        let xq = into_contiguous(inputs.xq);
+        let xk = into_contiguous(inputs.xk);
+        let xv = into_contiguous(inputs.xv);
+        let ttt_lr_eta = into_contiguous(inputs.ttt_lr_eta);
+
+        // Sync the default stream to ensure contiguous copies are complete
+        // before the persistent kernel (on a different stream) reads from them.
+        use thundercube::util::wait_for_sync;
+        if let Err(e) = wait_for_sync(&client) {
+            trace!("forward_launch sync warning: {:?}", e);
+        }
+
         // Use pointer-based forward
         let output = state.forward_tensor(
-            &inputs.xq,
-            &inputs.xk,
-            &inputs.xv,
-            &inputs.ttt_lr_eta,
+            &xq,
+            &xk,
+            &xv,
+            &ttt_lr_eta,
         );
 
         trace!("ptr streaming forward complete");
-        let output = output.clone();
+        // Make a true copy of the output - the kernel reuses its buffer for each mini-batch
+        // so we need to copy the data before it gets overwritten by the next call.
+        // Note: into_contiguous skips copy if already contiguous, so we force a copy
+        // using mul_scalar by 1.0 which allocates a new output buffer.
+        use burn_cubecl::ops::numeric::mul_scalar;
+        use cubecl::prelude::InputScalar;
+        let dtype = output.dtype;
+        let output = mul_scalar(output.clone(), InputScalar::new(1.0f32, dtype));
 
         TttTileOutputs {
             output,
