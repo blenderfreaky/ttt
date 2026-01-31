@@ -149,8 +149,9 @@ impl FusedKernel<9, 10> for TttPtrStreamingKernel {
 
         trace!("ptr streaming forward start");
 
-        // Make input tensors contiguous - the kernel reads from base addresses
-        // and non-contiguous views (from slicing) would have wrong data at offset 0
+        // Make input tensors contiguous if they have non-contiguous strides.
+        // Sliced tensors with contiguous strides but an offset are handled by
+        // feed_mini_batch which adds handle.offset_start to the GPU addresses.
         let xq = into_contiguous(inputs.xq);
         let xk = into_contiguous(inputs.xk);
         let xv = into_contiguous(inputs.xv);

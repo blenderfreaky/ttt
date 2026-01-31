@@ -107,6 +107,7 @@ pub fn fused_ttt_streaming_kernel<P: ParamsTrait>(
     let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
     let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
     let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
+    let base_eta = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
 
     // Initialize weight in shared memory from inputs.weight
     let mut weight_smem = P::f_f_tile();
@@ -170,7 +171,7 @@ pub fn fused_ttt_streaming_kernel<P: ParamsTrait>(
             &ln_weight_rv,
             &ln_bias_rv,
             base_qkv,
-            0,
+            base_eta,
             epsilon,
         );
 

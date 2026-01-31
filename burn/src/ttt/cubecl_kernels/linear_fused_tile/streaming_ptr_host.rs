@@ -265,6 +265,11 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let x_hat_ln = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
         let std_ln = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
 
+        // Allocate weight/bias buffers with full [batch, heads, ...] shape
+        // The kernel expects these to have data for each cube (batch, head) pair
+        let weight = alloc(vec![config.batch_size, config.num_heads, head_dim, head_dim]);
+        let bias = alloc(vec![config.batch_size, config.num_heads, head_dim]);
+
         // Get raw pointers for host access
         let ptr_table_ptr: GpuPtr<'static, u64> =
             unsafe { std::mem::transmute(stream.ptr::<u64, R>(&client, &ptr_table.handle)) };
@@ -273,6 +278,12 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let output_ptr: GpuPtr<'static, f32> =
             unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &output.handle)) };
 
+        // Get pointers for weight/bias initialization
+        let weight_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &weight.handle)) };
+        let bias_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &bias.handle)) };
+
         // Initialize control to IDLE
         let zeros = vec![STATUS_IDLE; num_cubes * CTRL_ARRAY_SIZE];
         stream.write(control_ptr, 0, &zeros);
@@ -280,6 +291,34 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         // Write output address to pointer table
         let output_addr = output_ptr.address();
         stream.write(ptr_table_ptr, PTR_OUTPUT, &[output_addr]);
+
+        // Initialize weight/bias buffers from initial values
+        // The initial values are [num_heads, head_dim, head_dim] - replicate for each batch
+        trace!("ptr_stream: initializing weight/bias from initial values...");
+        let src_weight: GpuPtr<f32> = stream.ptr(&client, &initial_weight.handle);
+        let src_bias: GpuPtr<f32> = stream.ptr(&client, &initial_bias.handle);
+
+        let per_head_weight_size = head_dim * head_dim;
+        let per_head_bias_size = head_dim;
+
+        if src_weight.len() == config.num_heads * per_head_weight_size {
+            // Source is [num_heads, head_dim, head_dim] - replicate for each batch
+            for batch in 0..config.batch_size {
+                let batch_offset = batch * config.num_heads * per_head_weight_size;
+                stream.copy_d2d(weight_ptr, batch_offset, src_weight, 0, config.num_heads * per_head_weight_size);
+            }
+            for batch in 0..config.batch_size {
+                let batch_offset = batch * config.num_heads * per_head_bias_size;
+                stream.copy_d2d(bias_ptr, batch_offset, src_bias, 0, config.num_heads * per_head_bias_size);
+            }
+        } else {
+            // Source already has batch dimension - just copy
+            let full_weight_len = config.batch_size * config.num_heads * per_head_weight_size;
+            let full_bias_len = config.batch_size * config.num_heads * per_head_bias_size;
+            stream.copy_d2d(weight_ptr, 0, src_weight, 0, full_weight_len.min(src_weight.len()));
+            stream.copy_d2d(bias_ptr, 0, src_bias, 0, full_bias_len.min(src_bias.len()));
+        }
+        stream.sync();
 
         let tensors = PtrStreamingTensors {
             ptr_table,
@@ -294,8 +333,8 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             xq_scratch,
             xk_scratch,
             xv_scratch,
-            weight: initial_weight,
-            bias: initial_bias,
+            weight,
+            bias,
             token_eta,
             ttt_lr_eta_scratch,
             ln_weight,
@@ -482,21 +521,26 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
     ) {
         trace!("ptr_stream: feed_mini_batch start");
 
-        // Get addresses of input tensors
+        // Get addresses of input tensors, accounting for tensor offsets from slicing.
+        // When a tensor is sliced, handle.offset_start contains the byte offset into the buffer.
         let xq_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &xq.handle);
         let xk_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &xk.handle);
         let xv_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &xv.handle);
         let eta_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &ttt_lr_eta.handle);
 
-        // Write addresses to pointer table
+        // Write addresses to pointer table (base + offset for sliced tensors)
         let addrs = [
-            xq_ptr.address(),
-            xk_ptr.address(),
-            xv_ptr.address(),
-            eta_ptr.address(),
-            self.output_ptr.address(), // Keep output address updated
+            xq_ptr.address() + xq.handle.offset_start.unwrap_or(0),
+            xk_ptr.address() + xk.handle.offset_start.unwrap_or(0),
+            xv_ptr.address() + xv.handle.offset_start.unwrap_or(0),
+            eta_ptr.address() + ttt_lr_eta.handle.offset_start.unwrap_or(0),
+            self.output_ptr.address(),
         ];
         self.stream.write(self.ptr_table_ptr, 0, &addrs);
+
+        // Sync to ensure addresses are written before signaling kernel
+        // (kernel is on a different stream, so needs explicit sync)
+        self.stream.sync();
 
         trace!("ptr_stream: writing READY to {} cubes", self.config.num_cubes());
 
@@ -695,7 +739,7 @@ mod tests {
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
             .try_init();
 
-        // Test with multiple mini-batches to exercise persistent kernel
+        // Test with multiple cubes
         let batch_size = 2usize;
         let num_heads = 2usize;
         let head_dim = 32usize;
@@ -713,7 +757,7 @@ mod tests {
             mini_batch_size,
             base_lr: 1.0,
             epsilon,
-            threads,
+            threads: Some(threads),
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());

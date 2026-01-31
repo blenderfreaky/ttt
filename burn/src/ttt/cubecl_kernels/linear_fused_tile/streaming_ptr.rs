@@ -30,7 +30,7 @@
 
 use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp};
-use thundercube::util::transpose_4;
+use thundercube::util::{transpose_4, index_2d};
 
 use super::helpers::ParamsTrait;
 use super::forward::{Inputs, Outputs, ForwardIntermediates, fused_ttt_forward_stage};
@@ -408,23 +408,28 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             }
         }
 
-        // Copy from Arrays to scratch Tensors in Inputs struct.
-        // Each cube writes to its own offset in the scratch tensors.
-        // The offset is (batch_idx * num_heads + head_idx) * elements_per_cube.
-        let qkv_offset = (batch_idx * num_heads + head_idx) * qkv_lines;
-        let eta_offset = (batch_idx * num_heads + head_idx) * eta_lines;
+        // Use index_2d for proper stride-aware offset calculation (returns scalar offset)
+        // This matches how the non-streaming forward and d2d streaming compute offsets
+        let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
+        let base_eta = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
+
+        // Convert to Line offsets for Array/direct-Tensor indexing
+        let qkv_offset_lines = base_qkv / LINE_SIZE;
+        let eta_offset_lines = base_eta / LINE_SIZE;
 
         if comptime!(debug) {
             if UNIT_POS == 0 {
-                debug_print!("PTR_STREAM: cube b=%u h=%u qkv_off=%u eta_off=%u\n",
-                    batch_idx as u32, head_idx as u32, qkv_offset as u32, eta_offset as u32);
+                debug_print!("PTR_STREAM: cube b=%u h=%u qkv=%u eta=%u\n",
+                    batch_idx as u32, head_idx as u32, base_qkv as u32, base_eta as u32);
             }
         }
 
-        copy_array_to_tensor(xq_buf, qkv_offset, &mut inputs.xq, qkv_offset, qkv_lines);
-        copy_array_to_tensor(xk_buf, qkv_offset, &mut inputs.xk, qkv_offset, qkv_lines);
-        copy_array_to_tensor(xv_buf, qkv_offset, &mut inputs.xv, qkv_offset, qkv_lines);
-        copy_array_to_tensor(eta_buf, eta_offset, &mut inputs.ttt_lr_eta, eta_offset, eta_lines);
+        // Copy from Arrays to scratch Tensors in Inputs struct.
+        // Array and direct Tensor indexing use Line offsets
+        copy_array_to_tensor(xq_buf, qkv_offset_lines, &mut inputs.xq, qkv_offset_lines, qkv_lines);
+        copy_array_to_tensor(xk_buf, qkv_offset_lines, &mut inputs.xk, qkv_offset_lines, qkv_lines);
+        copy_array_to_tensor(xv_buf, qkv_offset_lines, &mut inputs.xv, qkv_offset_lines, qkv_lines);
+        copy_array_to_tensor(eta_buf, eta_offset_lines, &mut inputs.ttt_lr_eta, eta_offset_lines, eta_lines);
 
         sync_cube();
 
@@ -434,16 +439,8 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             }
         }
 
-        if comptime!(debug) {
-            if UNIT_POS == 0 {
-                debug_print!("PTR_STREAM: cube b=%u h=%u forward_stage qkv=%u eta=%u\n",
-                    batch_idx as u32, head_idx as u32, qkv_offset as u32, eta_offset as u32);
-            }
-        }
-
         // Run TTT forward stage
-        // Use per-cube offsets for xq/xk/xv and ttt_lr_eta since scratch tensors
-        // are sized for all cubes.
+        // base_qkv and base_eta are scalar offsets from index_2d
         fused_ttt_forward_stage::<P>(
             inputs,
             outputs,
@@ -452,8 +449,8 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             &mut bias_rv,
             &ln_weight_rv,
             &ln_bias_rv,
-            qkv_offset,  // stage_offset - where to read from in scratch tensors
-            eta_offset,  // ttt_lr_eta_idx - this cube's offset in ttt_lr_eta scratch
+            base_qkv,   // stage_offset - scalar offset for load_st_transpose
+            base_eta,   // ttt_lr_eta_idx - scalar offset for ttt_lr_eta
             epsilon,
         );
 
@@ -465,8 +462,8 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             }
         }
 
-        // Copy output back to pointer destination (from this cube's offset)
-        copy_tensor_to_array(&outputs.output, qkv_offset, xq_buf, qkv_offset, qkv_lines);
+        // Copy output back to pointer destination using Line offset
+        copy_tensor_to_array(&outputs.output, qkv_offset_lines, xq_buf, qkv_offset_lines, qkv_lines);
         store_to_output::<P>(xq_buf, qkv_lines);
 
         sync_cube();

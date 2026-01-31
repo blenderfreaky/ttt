@@ -6,7 +6,10 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Range;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use burn::module::Ignored;
 use burn::tensor::{Tensor, TensorPrimitive};
@@ -15,13 +18,15 @@ use tracing::trace;
 
 use super::{
     launch::TttTileOutputs,
-    streaming_host::{StreamingConfig, get_or_create_streaming_state, remove_streaming_state_by_id},
+    streaming_host::{
+        StreamingConfig, get_or_create_streaming_state, remove_streaming_state_by_id,
+    },
 };
 use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{
         Fused, FusedTttBackend,
-        kernel::{FusedKernel, CanBackwardNoOut},
+        kernel::{CanBackwardNoOut, FusedKernel},
         ttt::TttInputs,
     },
     layer::{TTTInnerModel, TTTInputsInner},
@@ -148,12 +153,7 @@ impl FusedKernel<9, 10> for TttStreamingKernel {
 
         trace!("streaming forward_d2d start");
         // Use D2D copy to feed inputs to the streaming kernel (no CPU round-trip)
-        let output = state.forward_d2d(
-            &inputs.xq,
-            &inputs.xk,
-            &inputs.xv,
-            &inputs.ttt_lr_eta,
-        );
+        let output = state.forward_d2d(&inputs.xq, &inputs.xk, &inputs.xv, &inputs.ttt_lr_eta);
 
         trace!("streaming forward_d2d complete, cloning output");
         // Clone output tensor since we're returning ownership
@@ -173,7 +173,10 @@ impl FusedKernel<9, 10> for TttStreamingKernel {
             x_hat_ln: state.tensors.x_hat_ln.clone(),
             std_ln: state.tensors.std_ln.clone(),
         };
-        trace!("streaming forward complete, output handle stream: {:?}", result.output.handle.stream);
+        trace!(
+            "streaming forward complete, output handle stream: {:?}",
+            result.output.handle.stream
+        );
         result
     }
 }
@@ -279,9 +282,7 @@ pub fn fused_ttt_streaming_forward<B: FusedTttBackend>(
 ///
 /// The streaming kernel maintains a persistent GPU kernel that processes
 /// mini-batches incrementally, keeping weight/bias in shared memory between calls.
-impl<B: FusedTttBackend> TTTInnerModel<B>
-    for Fused<B, Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>>
-{
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
     type State = FusedTileStreamingState<B>;
 
@@ -338,7 +339,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B>
         let epsilon = inner.layer_norm.epsilon as f32;
 
         let inner_config = inner.get_config();
-        let threads = inner_config.threads
+        let threads = inner_config
+            .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
 
         let (output, weight_updated, bias_updated) = fused_ttt_streaming_forward(
@@ -574,8 +576,10 @@ mod tests {
                 TensorData::new(xv_data, [batch_size, num_heads, seq_len, head_dim]),
                 &gpu_device,
             );
-            let token_eta_gpu: Tensor<GpuBackend, 1> =
-                Tensor::from_data(TensorData::new(token_eta_data.clone(), [seq_len]), &gpu_device);
+            let token_eta_gpu: Tensor<GpuBackend, 1> = Tensor::from_data(
+                TensorData::new(token_eta_data.clone(), [seq_len]),
+                &gpu_device,
+            );
             let ttt_lr_eta_gpu: Tensor<GpuBackend, 3> = Tensor::from_data(
                 TensorData::new(ttt_lr_eta_data, [batch_size, num_heads, seq_len]),
                 &gpu_device,
@@ -595,7 +599,10 @@ mod tests {
             // Run GPU forward (state carries over between iterations)
             trace!("[TEST] calling forward (iter {})...", iter + 1);
             let output_streaming = fused_streaming.forward(&mut streaming_state, inputs_gpu);
-            trace!("[TEST] forward returned, output shape: {:?}", output_streaming.shape());
+            trace!(
+                "[TEST] forward returned, output shape: {:?}",
+                output_streaming.shape()
+            );
 
             // Sync and compare
             thundercube::util::wait_for_sync(&client).expect("sync failed");
@@ -613,18 +620,26 @@ mod tests {
                 sum_sq_b += b * b;
             }
             let correlation = sum_product / (sum_sq_a.sqrt() * sum_sq_b.sqrt());
-            trace!("Iteration {} - Output max diff: {}, correlation: {}", iter + 1, max_diff, correlation);
+            trace!(
+                "Iteration {} - Output max diff: {}, correlation: {}",
+                iter + 1,
+                max_diff,
+                correlation
+            );
 
             // Compare outputs
             assert_data_close(
                 &output_streaming_data,
                 &output_ref_data,
-                0.5,
-                0.2,
+                1e-3,
+                1e-3,
                 &format!("Iteration {}: output", iter + 1),
             );
         }
 
-        trace!("D2D streaming vs CPU ref test passed with {} iterations!", num_iterations);
+        trace!(
+            "D2D streaming vs CPU ref test passed with {} iterations!",
+            num_iterations
+        );
     }
 }
