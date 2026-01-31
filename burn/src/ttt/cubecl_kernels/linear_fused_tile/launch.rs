@@ -12,10 +12,8 @@ use thundercube::prelude::{D4, D8, D16, D32, D64, D128, LINE_SIZE};
 
 use super::{
     backward::{
-        GradOutputsLaunch, SavedTensorsLaunch,
-    },
-    backward_optimized::{
-        fused_ttt_backward_kernel_optimized, fused_ttt_backward_kernel_multi_optimized,
+        GradOutputsLaunch, SavedTensorsLaunch, fused_ttt_backward_kernel,
+        fused_ttt_backward_kernel_multi,
     },
     forward::{
         ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch, fused_ttt_forward_kernel,
@@ -216,7 +214,7 @@ macro_rules! impl_tile_dispatch_backward {
                 ($s, $h, $t) => {
                     type P<E> = Params<E, $CS, $F, $CSR, $FR>;
                     let cube_dim = CubeDim::new($client, $t);
-                    fused_ttt_backward_kernel_optimized::launch::<P<_>, _>(
+                    fused_ttt_backward_kernel::launch::<P<_>, _>(
                         $client, $cube_count, cube_dim, $saved, $fwd, $grad_output, $grads, $config,
                     ).unwrap()
                 }
@@ -257,7 +255,7 @@ macro_rules! impl_tile_dispatch_backward_multi {
                 ($s, $h, $t) => {
                     type P<E> = Params<E, $CS, $F, $CSR, $FR>;
                     let cube_dim = CubeDim::new($client, $t);
-                    fused_ttt_backward_kernel_multi_optimized::launch::<P<_>, _>(
+                    fused_ttt_backward_kernel_multi::launch::<P<_>, _>(
                         $client, $cube_count, cube_dim, $saved, $fwd, $grad_output, $grads, $num_stages, $config,
                     ).unwrap()
                 }
