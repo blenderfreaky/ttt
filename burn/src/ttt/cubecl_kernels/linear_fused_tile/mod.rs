@@ -3,6 +3,27 @@
 //! This module contains the tiled fused TTT-Linear implementation that uses
 //! shared memory tiles from the thundercube library for optimized memory access.
 
+#[cfg(feature = "rocm")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(feature = "rocm")]
+use burn_backend::StreamId;
+
+/// Shared counter for generating unique kernel stream IDs across all persistent kernels.
+/// Starts at 1 to avoid collision with the default stream (0).
+/// CubeCL maps stream IDs to physical streams via `stream_id % max_streams`.
+#[cfg(feature = "rocm")]
+static PERSISTENT_KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+/// Get a unique stream ID for a persistent kernel.
+/// All persistent kernel types share this counter to avoid stream ID collisions.
+#[cfg(feature = "rocm")]
+pub fn next_persistent_kernel_stream_id() -> StreamId {
+    StreamId {
+        value: PERSISTENT_KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),
+    }
+}
+
 mod api;
 mod backward;
 mod forward;
