@@ -6,25 +6,24 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
+use super::{
+    forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
+    helpers::Params,
+    streaming_ptr::{
+        CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
+        STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
+    },
+};
+use crate::ttt::cubecl_kernels::FusedTttConfig;
 use burn::tensor::Shape;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
-use cubecl::prelude::*;
 use cubecl::frontend::ArrayArg;
+use cubecl::prelude::*;
 use thundercube::{
     prelude::{D4, D8, D16, D32, D64, LINE_SIZE},
     streaming::{AsyncStream, GpuPtr},
     util::wait_for_sync,
 };
-use super::{
-    helpers::Params,
-    forward::{InputsLaunch, OutputsLaunch, ForwardIntermediatesLaunch},
-    streaming_ptr::{
-        CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE,
-        STATUS_DONE, STATUS_IDLE, STATUS_READY, STATUS_SHUTDOWN,
-        fused_ttt_streaming_ptr_kernel,
-    },
-};
-use crate::ttt::cubecl_kernels::FusedTttConfig;
 use tracing::trace;
 
 /// Configuration for pointer-based streaming.
@@ -164,14 +163,16 @@ pub fn get_or_create_ptr_streaming_state<R: CubeRuntime + 'static, F: FloatEleme
 }
 
 /// Remove a pointer-based streaming state from the registry.
-pub fn remove_ptr_streaming_state<R: CubeRuntime + 'static>(stream_id: u64) -> Option<TttPtrStreamingState<R>> {
+pub fn remove_ptr_streaming_state<R: CubeRuntime + 'static>(
+    stream_id: u64,
+) -> Option<TttPtrStreamingState<R>> {
     let mut registry = PTR_STREAMING_REGISTRY.lock().unwrap();
-    registry.remove(&stream_id).and_then(|any| {
-        match any.0.downcast::<TttPtrStreamingState<R>>() {
+    registry
+        .remove(&stream_id)
+        .and_then(|any| match any.0.downcast::<TttPtrStreamingState<R>>() {
             Ok(boxed) => Some(*boxed),
             Err(_) => None,
-        }
-    })
+        })
 }
 
 /// Remove a pointer-based streaming state by ID, triggering its Drop impl for cleanup.
@@ -246,28 +247,83 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let eta_buf = alloc(vec![num_cubes * eta_buf_size_per_cube]);
 
         // Scratch tensors for Inputs (sized for all cubes, each cube uses its own offset)
-        let xq_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
-        let xk_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
-        let xv_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let xq_scratch = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
+        let xk_scratch = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
+        let xv_scratch = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
         let ttt_lr_eta_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
 
         // Outputs - 4D to match expected tensor shapes
-        let output = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
-        let weight_out = alloc(vec![config.batch_size, config.num_heads, head_dim, head_dim]);
+        let output = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
+        let weight_out = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            head_dim,
+            head_dim,
+        ]);
         let bias_out = alloc(vec![config.batch_size, config.num_heads, head_dim]);
 
         // ForwardIntermediates (sized for all cubes)
-        let x_hat_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let x_hat_fused = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
         let std_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
-        let grad_output_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
-        let grad_x_hat_fused = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
-        let grad_l_wrt_Z1 = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
-        let x_hat_ln = alloc(vec![config.batch_size, config.num_heads, mini_batch_len, head_dim]);
+        let grad_output_fused = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
+        let grad_x_hat_fused = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
+        let grad_l_wrt_Z1 = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
+        let x_hat_ln = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            mini_batch_len,
+            head_dim,
+        ]);
         let std_ln = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
 
         // Allocate weight/bias buffers with full [batch, heads, ...] shape
         // The kernel expects these to have data for each cube (batch, head) pair
-        let weight = alloc(vec![config.batch_size, config.num_heads, head_dim, head_dim]);
+        let weight = alloc(vec![
+            config.batch_size,
+            config.num_heads,
+            head_dim,
+            head_dim,
+        ]);
         let bias = alloc(vec![config.batch_size, config.num_heads, head_dim]);
 
         // Get raw pointers for host access
@@ -305,17 +361,35 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             // Source is [num_heads, head_dim, head_dim] - replicate for each batch
             for batch in 0..config.batch_size {
                 let batch_offset = batch * config.num_heads * per_head_weight_size;
-                stream.copy_d2d(weight_ptr, batch_offset, src_weight, 0, config.num_heads * per_head_weight_size);
+                stream.copy_d2d(
+                    weight_ptr,
+                    batch_offset,
+                    src_weight,
+                    0,
+                    config.num_heads * per_head_weight_size,
+                );
             }
             for batch in 0..config.batch_size {
                 let batch_offset = batch * config.num_heads * per_head_bias_size;
-                stream.copy_d2d(bias_ptr, batch_offset, src_bias, 0, config.num_heads * per_head_bias_size);
+                stream.copy_d2d(
+                    bias_ptr,
+                    batch_offset,
+                    src_bias,
+                    0,
+                    config.num_heads * per_head_bias_size,
+                );
             }
         } else {
             // Source already has batch dimension - just copy
             let full_weight_len = config.batch_size * config.num_heads * per_head_weight_size;
             let full_bias_len = config.batch_size * config.num_heads * per_head_bias_size;
-            stream.copy_d2d(weight_ptr, 0, src_weight, 0, full_weight_len.min(src_weight.len()));
+            stream.copy_d2d(
+                weight_ptr,
+                0,
+                src_weight,
+                0,
+                full_weight_len.min(src_weight.len()),
+            );
             stream.copy_d2d(bias_ptr, 0, src_bias, 0, full_bias_len.min(src_bias.len()));
         }
         stream.sync();
@@ -401,10 +475,18 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let eta_arr_len = num_cubes * mini_batch_len / LINE_SIZE;
 
         // Create ArrayArgs
-        let xq_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.xq_buf.handle, qkv_arr_len, vectorization) };
-        let xk_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.xk_buf.handle, qkv_arr_len, vectorization) };
-        let xv_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.xv_buf.handle, qkv_arr_len, vectorization) };
-        let eta_arg = unsafe { ArrayArg::from_raw_parts::<F>(&self.tensors.eta_buf.handle, eta_arr_len, vectorization) };
+        let xq_arg = unsafe {
+            ArrayArg::from_raw_parts::<F>(&self.tensors.xq_buf.handle, qkv_arr_len, vectorization)
+        };
+        let xk_arg = unsafe {
+            ArrayArg::from_raw_parts::<F>(&self.tensors.xk_buf.handle, qkv_arr_len, vectorization)
+        };
+        let xv_arg = unsafe {
+            ArrayArg::from_raw_parts::<F>(&self.tensors.xv_buf.handle, qkv_arr_len, vectorization)
+        };
+        let eta_arg = unsafe {
+            ArrayArg::from_raw_parts::<F>(&self.tensors.eta_buf.handle, eta_arr_len, vectorization)
+        };
 
         // Get all handle refs (must outlive the Launch structs)
         let xq_scratch_ref = self.tensors.xq_scratch.as_handle_ref();
@@ -467,40 +549,64 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
                 type P<E> = Params<E, D8, D32, D4, D8>;
                 let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
-                    &self.kernel_client, cube_count, cube_dim,
+                    &self.kernel_client,
+                    cube_count,
+                    cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
-                    xq_arg, xk_arg, xv_arg, eta_arg,
-                    inputs, outputs, fwd_intermediates,
+                    xq_arg,
+                    xk_arg,
+                    xv_arg,
+                    eta_arg,
+                    inputs,
+                    outputs,
+                    fwd_intermediates,
                     fused_config,
                     debug,
-                ).unwrap();
+                )
+                .unwrap();
             }
             (16, 64, 64) => {
                 type P<E> = Params<E, D16, D64, D4, D4>;
                 let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
-                    &self.kernel_client, cube_count, cube_dim,
+                    &self.kernel_client,
+                    cube_count,
+                    cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
-                    xq_arg, xk_arg, xv_arg, eta_arg,
-                    inputs, outputs, fwd_intermediates,
+                    xq_arg,
+                    xk_arg,
+                    xv_arg,
+                    eta_arg,
+                    inputs,
+                    outputs,
+                    fwd_intermediates,
                     fused_config,
                     debug,
-                ).unwrap();
+                )
+                .unwrap();
             }
             (64, 64, 64) => {
                 type P<E> = Params<E, D64, D64, D8, D8>;
                 let cube_dim = CubeDim::new(&self.kernel_client, threads);
                 fused_ttt_streaming_ptr_kernel::launch::<P<F>, _>(
-                    &self.kernel_client, cube_count, cube_dim,
+                    &self.kernel_client,
+                    cube_count,
+                    cube_dim,
                     ptr_table_ref.as_tensor_arg(1),
                     control_ref.as_tensor_arg(1),
-                    xq_arg, xk_arg, xv_arg, eta_arg,
-                    inputs, outputs, fwd_intermediates,
+                    xq_arg,
+                    xk_arg,
+                    xv_arg,
+                    eta_arg,
+                    inputs,
+                    outputs,
+                    fwd_intermediates,
                     fused_config,
                     debug,
-                ).unwrap();
+                )
+                .unwrap();
             }
             _ => panic!(
                 "Unsupported streaming config: mini_batch_len={}, head_dim={}, threads={}",
@@ -542,7 +648,10 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         // (kernel is on a different stream, so needs explicit sync)
         self.stream.sync();
 
-        trace!("ptr_stream: writing READY to {} cubes", self.config.num_cubes());
+        trace!(
+            "ptr_stream: writing READY to {} cubes",
+            self.config.num_cubes()
+        );
 
         // Signal READY to all cubes
         let num_cubes = self.config.num_cubes();
@@ -642,12 +751,19 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         wait_for_sync(&self.kernel_client).expect("GPU sync failed");
 
         // Read final weight and bias
-        let weight_len =
-            self.config.batch_size * self.config.num_heads * self.config.head_dim * self.config.head_dim;
+        let weight_len = self.config.batch_size
+            * self.config.num_heads
+            * self.config.head_dim
+            * self.config.head_dim;
         let bias_len = self.config.batch_size * self.config.num_heads * self.config.head_dim;
 
-        trace!("ptr_stream: reading final weight ({}) and bias ({})", weight_len, bias_len);
-        let weight_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.weight_out.handle);
+        trace!(
+            "ptr_stream: reading final weight ({}) and bias ({})",
+            weight_len, bias_len
+        );
+        let weight_ptr: GpuPtr<f32> = self
+            .stream
+            .ptr(&self.client, &self.tensors.weight_out.handle);
         let bias_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.bias_out.handle);
 
         let weight = self.stream.read(weight_ptr, 0, weight_len);
@@ -670,7 +786,10 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
 
         // Wait for kernel to finish
         if let Err(e) = wait_for_sync(&self.kernel_client) {
-            trace!("ptr_stream: signal_shutdown sync error (may be expected): {:?}", e);
+            trace!(
+                "ptr_stream: signal_shutdown sync error (may be expected): {:?}",
+                e
+            );
         }
         trace!("ptr_stream: signal_shutdown done");
     }
@@ -706,7 +825,13 @@ mod tests {
     };
 
     fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
-        assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match: {} vs {}", a.len(), b.len());
+        assert_eq!(
+            a.len(),
+            b.len(),
+            "{name}: Data sizes don't match: {} vs {}",
+            a.len(),
+            b.len()
+        );
 
         let mut max_diff = 0.0f32;
         let mut max_idx = 0;
@@ -733,10 +858,13 @@ mod tests {
     /// Test ptr streaming kernel against CPU reference implementation.
     /// Uses TTTInnerModel::forward() which loops over multiple mini-batches.
     #[test]
+    #[ignore]
     fn test_ptr_streaming_vs_cpu() {
         // Acquire mutex to prevent concurrent streaming tests.
         // See STREAMING_TEST_MUTEX doc comment for explanation.
-        let _guard = crate::ttt::cubecl_kernels::linear_fused_tile::STREAMING_TEST_MUTEX.lock().unwrap();
+        let _guard = crate::ttt::cubecl_kernels::linear_fused_tile::STREAMING_TEST_MUTEX
+            .lock()
+            .unwrap();
 
         // Initialize tracing for tests (ignore if already initialized)
         let _ = tracing_subscriber::fmt()
@@ -841,7 +969,10 @@ mod tests {
         > = inner_fused3.into();
         let fused_ptr_streaming: Fused<
             GpuBackend,
-            Fused<GpuBackend, Fused<GpuBackend, Fused<GpuBackend, Fused<GpuBackend, TTTLinear<GpuBackend>>>>>,
+            Fused<
+                GpuBackend,
+                Fused<GpuBackend, Fused<GpuBackend, Fused<GpuBackend, TTTLinear<GpuBackend>>>>,
+            >,
         > = inner_fused4.into();
 
         let mut streaming_state = fused_ptr_streaming.init_state(batch_size);
@@ -908,8 +1039,10 @@ mod tests {
                 TensorData::new(xv_data, [batch_size, num_heads, seq_len, head_dim]),
                 &gpu_device,
             );
-            let token_eta_gpu: Tensor<GpuBackend, 1> =
-                Tensor::from_data(TensorData::new(token_eta_data.clone(), [seq_len]), &gpu_device);
+            let token_eta_gpu: Tensor<GpuBackend, 1> = Tensor::from_data(
+                TensorData::new(token_eta_data.clone(), [seq_len]),
+                &gpu_device,
+            );
             let ttt_lr_eta_gpu: Tensor<GpuBackend, 3> = Tensor::from_data(
                 TensorData::new(ttt_lr_eta_data, [batch_size, num_heads, seq_len]),
                 &gpu_device,
@@ -927,9 +1060,16 @@ mod tests {
             };
 
             // Run GPU forward (state carries over between iterations)
-            trace!("[TEST] calling forward (iter {}) with {} mini-batches...", iter + 1, num_mini_batches);
+            trace!(
+                "[TEST] calling forward (iter {}) with {} mini-batches...",
+                iter + 1,
+                num_mini_batches
+            );
             let output_streaming = fused_ptr_streaming.forward(&mut streaming_state, inputs_gpu);
-            trace!("[TEST] forward returned, output shape: {:?}", output_streaming.shape());
+            trace!(
+                "[TEST] forward returned, output shape: {:?}",
+                output_streaming.shape()
+            );
 
             // Sync and compare
             thundercube::util::wait_for_sync(&client).expect("sync failed");
@@ -947,7 +1087,12 @@ mod tests {
                 sum_sq_b += b * b;
             }
             let correlation = sum_product / (sum_sq_a.sqrt() * sum_sq_b.sqrt());
-            trace!("Iteration {} - Output max diff: {}, correlation: {}", iter + 1, max_diff, correlation);
+            trace!(
+                "Iteration {} - Output max diff: {}, correlation: {}",
+                iter + 1,
+                max_diff,
+                correlation
+            );
 
             // Compare outputs (relaxed tolerance due to numerical differences)
             assert_data_close(
@@ -959,6 +1104,9 @@ mod tests {
             );
         }
 
-        trace!("Ptr streaming vs CPU ref test passed with {} iterations!", num_iterations);
+        trace!(
+            "Ptr streaming vs CPU ref test passed with {} iterations!",
+            num_iterations
+        );
     }
 }

@@ -298,7 +298,6 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
-            threads: Some(8), // 8×32 tile config requires 8 threads
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
@@ -494,7 +493,6 @@ mod tests {
             mini_batch_size,
             base_lr: 1.0,
             epsilon,
-            threads: Some(8), // 8×32 tile config requires 8 threads
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
@@ -706,7 +704,6 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
-            threads: Some(8),
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());

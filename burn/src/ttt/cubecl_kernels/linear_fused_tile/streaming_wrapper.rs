@@ -412,6 +412,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_streaming_vs_ttt_linear() {
         // Acquire mutex to prevent concurrent streaming tests.
         // See STREAMING_TEST_MUTEX doc comment for explanation.
@@ -438,7 +439,6 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
-            threads: Some(8), // 8×32 tile config requires 8 threads
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());

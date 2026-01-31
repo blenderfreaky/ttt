@@ -8,15 +8,13 @@ use crate::ttt::cubecl_kernels::{
 };
 
 pub fn default_threads(mini_batch_len: usize, head_dim: usize) -> usize {
+    // Note: 16x128, 32x64, 64x64 removed due to GPU shared memory limits
     match (mini_batch_len, head_dim) {
-        (8, 32) => 8,
-        (8, 64) => 8,
+        (8, 32) => 64,
+        (8, 64) => 64,
         (16, 32) => 16,
-        (16, 64) => 64,
-        (16, 128) => 16,
-        (32, 32) => 32,
-        (32, 64) => 32,
-        (64, 64) => 64,
+        (16, 64) => 256,
+        (32, 32) => 64,
         _ => panic!(
             "No default thread count for tile config: mini_batch_len={}, head_dim={}",
             mini_batch_len, head_dim
