@@ -7,6 +7,14 @@ use std::{
 
 use cubecl::{prelude::*, server::Handle};
 
+#[cfg(all(
+    any(test, feature = "test-utils"),
+    not(any(feature = "cuda", feature = "rocm", feature = "wgpu", feature = "cpu"))
+))]
+pub type TestRuntime = compile_error!(
+    "At least one backend must be enabled for test-utils, please run with `--features cuda/rocm/wgpu/cpu`"
+);
+
 #[cfg(feature = "rocm")]
 pub type TestRuntime = cubecl::hip::HipRuntime;
 

@@ -9,13 +9,13 @@
 )]
 #![allow(clippy::needless_range_loop)]
 
-#[cfg(all(
-    any(test, feature = "test-utils"),
-    not(any(feature = "cuda", feature = "rocm", feature = "wgpu", feature = "cpu"))
-))]
-compile_error!(
-    "At least one backend must be enabled for test-utils, please run with `--features cuda/rocm/wgpu/cpu`"
-);
+// #[cfg(all(
+//     any(test, feature = "test-utils"),
+//     not(any(feature = "cuda", feature = "rocm", feature = "wgpu", feature = "cpu"))
+// ))]
+// compile_error!(
+//     "At least one backend must be enabled for test-utils, please run with `--features cuda/rocm/wgpu/cpu`"
+// );
 
 pub mod binary_ops;
 pub mod cube;
