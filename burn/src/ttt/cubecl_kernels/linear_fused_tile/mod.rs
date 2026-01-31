@@ -36,6 +36,7 @@ pub fn next_persistent_kernel_stream_id() -> StreamId {
 
 mod api;
 mod backward;
+mod backward_optimized;
 mod forward;
 mod helpers;
 mod launch;
