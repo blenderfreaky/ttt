@@ -173,7 +173,7 @@ impl FusedKernel<9, 10> for TttStreamingKernel {
             x_hat_ln: state.tensors.x_hat_ln.clone(),
             std_ln: state.tensors.std_ln.clone(),
         };
-        trace!("streaming forward complete");
+        trace!("streaming forward complete, output handle stream: {:?}", result.output.handle.stream);
         result
     }
 }
@@ -585,17 +585,21 @@ mod tests {
         };
 
         // Run streaming kernel via TTTInnerModel interface (uses forward which calls forward_mini_batch)
+        trace!("[TEST] calling forward...");
         let output_streaming = fused_streaming.forward(&mut streaming_state, inputs_gpu);
+        trace!("[TEST] forward returned, output shape: {:?}", output_streaming.shape());
 
-        // Shutdown the persistent kernel before reading results
-        // (to_data() blocks even with separate kernel stream due to Burn's sync behavior)
-        use crate::ttt::cubecl_kernels::linear_fused_tile::streaming_host::shutdown_streaming_state;
-        use cubecl::hip::HipRuntime;
-        trace!("[TEST] shutting down stream_id={}", streaming_state.stream_id());
-        let shutdown_result = shutdown_streaming_state::<HipRuntime>(streaming_state.stream_id());
-        trace!("[TEST] shutdown returned: {:?}", shutdown_result.is_some());
+        // NO EXPLICIT SHUTDOWN - testing if to_data() hangs
+        trace!("[TEST] about to read output_streaming WITHOUT shutdown...");
 
-        trace!("[TEST] reading output_streaming...");
+        // Try syncing the default stream using thundercube's utility
+        let gpu_device: <GpuBackend as burn_backend::Backend>::Device = Default::default();
+        use cubecl::prelude::ComputeClient;
+        let client = ComputeClient::<cubecl::hip::HipRuntime>::load(&gpu_device);
+        trace!("[TEST] got client, about to sync default stream...");
+        thundercube::util::wait_for_sync(&client).expect("sync failed");
+        trace!("[TEST] default stream synced! Now calling to_data()...");
+
         let output_streaming_data: Vec<f32> = output_streaming.to_data().to_vec().unwrap();
         trace!("[TEST] reading weight...");
         let weight_streaming_data: Vec<f32> = streaming_state.inner.weight.to_data().to_vec().unwrap();

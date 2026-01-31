@@ -127,10 +127,13 @@ pub struct PtrStreamingTensors<R: CubeRuntime> {
 }
 
 /// Counter for generating unique kernel stream IDs.
-/// Uses high values (starting at 2_000_000) to avoid collisions with normal CubeCL stream IDs.
-static PTR_KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(2_000_000);
+/// Uses values starting at 2 to map to physical stream 2 (avoiding collision with stream 0
+/// and the regular streaming kernel which uses stream 1).
+/// Note: CubeCL uses `stream_id.value % max_streams` to map to physical streams.
+static PTR_KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(2);
 
 /// Get a unique stream ID for a persistent kernel.
+/// Returns a stream ID that maps to a different physical stream than stream 0.
 fn next_ptr_kernel_stream_id() -> StreamId {
     StreamId {
         value: PTR_KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),

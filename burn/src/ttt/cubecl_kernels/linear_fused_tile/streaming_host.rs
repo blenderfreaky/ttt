@@ -198,10 +198,13 @@ pub struct StreamingBufferTensors<R: CubeRuntime> {
 }
 
 /// Counter for generating unique kernel stream IDs.
-/// Uses high values (starting at 1_000_000) to avoid collisions with normal CubeCL stream IDs.
-static KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(1_000_000);
+/// Uses values starting at 1 to map to physical stream 1 (avoiding collision with stream 0).
+/// Note: CubeCL uses `stream_id.value % max_streams` to map to physical streams,
+/// so we use small sequential values (1, 2, 3, ...) to get distinct physical streams.
+static KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Get a unique stream ID for a persistent kernel.
+/// Returns a stream ID that maps to a different physical stream than stream 0.
 fn next_kernel_stream_id() -> StreamId {
     StreamId {
         value: KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),
@@ -222,6 +225,19 @@ pub struct TttStreamingState<R: CubeRuntime> {
     /// This prevents the persistent kernel from blocking normal operations.
     pub kernel_client: ComputeClient<R>,
     pub is_initialized: bool,
+    // Cached GPU pointers - obtained BEFORE kernel launch to avoid
+    // triggering cross-stream synchronization when accessing kernel-written buffers
+    cached_xq_ptr: GpuPtr<'static, f32>,
+    cached_xk_ptr: GpuPtr<'static, f32>,
+    cached_xv_ptr: GpuPtr<'static, f32>,
+    cached_eta_ptr: GpuPtr<'static, f32>,
+    cached_ctrl_ptr: GpuPtr<'static, u32>,
+    cached_output_ptr: GpuPtr<'static, f32>,
+    cached_weight_ptr: GpuPtr<'static, f32>,
+    cached_bias_ptr: GpuPtr<'static, f32>,
+    cached_result_output_ptr: GpuPtr<'static, f32>,
+    cached_result_weight_ptr: GpuPtr<'static, f32>,
+    cached_result_bias_ptr: GpuPtr<'static, f32>,
 }
 
 // SAFETY: TttStreamingState is only accessed from the same thread via the registry lock.
@@ -453,6 +469,34 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             kernel_client.set_stream(kernel_stream_id);
         }
 
+        // Get all cached pointers BEFORE launching the kernel.
+        // This is critical: get_resource() triggers cross-stream synchronization,
+        // so we must obtain all pointers before the persistent kernel starts.
+        // After the kernel launches, accessing kernel-written buffers via get_resource()
+        // would block forever waiting for the (never-ending) kernel to complete.
+        let cached_xq_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.xq.handle)) };
+        let cached_xk_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.xk.handle)) };
+        let cached_xv_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.xv.handle)) };
+        let cached_eta_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.ttt_lr_eta.handle)) };
+        let cached_ctrl_ptr: GpuPtr<'static, u32> =
+            unsafe { std::mem::transmute(stream.ptr::<u32, R>(&client, &tensors.control.handle)) };
+        let cached_output_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.output.handle)) };
+        let cached_weight_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.weight.handle)) };
+        let cached_bias_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.bias.handle)) };
+        let cached_result_output_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_output.handle)) };
+        let cached_result_weight_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_weight.handle)) };
+        let cached_result_bias_ptr: GpuPtr<'static, f32> =
+            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_bias.handle)) };
+
         let mut state = Self {
             config,
             stream,
@@ -460,6 +504,17 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             client: client.clone(),
             kernel_client,
             is_initialized: false,
+            cached_xq_ptr,
+            cached_xk_ptr,
+            cached_xv_ptr,
+            cached_eta_ptr,
+            cached_ctrl_ptr,
+            cached_output_ptr,
+            cached_weight_ptr,
+            cached_bias_ptr,
+            cached_result_output_ptr,
+            cached_result_weight_ptr,
+            cached_result_bias_ptr,
         };
 
         // Initialize weight/bias buffers from initial values
@@ -467,8 +522,9 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         trace!("[HOST] initializing weight/bias from initial values...");
         let src_weight: GpuPtr<f32> = state.stream.ptr(&client, &initial_weight.handle);
         let src_bias: GpuPtr<f32> = state.stream.ptr(&client, &initial_bias.handle);
-        let dst_weight: GpuPtr<f32> = state.stream.ptr(&client, &state.tensors.weight.handle);
-        let dst_bias: GpuPtr<f32> = state.stream.ptr(&client, &state.tensors.bias.handle);
+        // Use cached pointers for destination
+        let dst_weight = state.cached_weight_ptr;
+        let dst_bias = state.cached_bias_ptr;
 
         // Check if source is already the full size or needs replication
         let per_head_weight_size = config.head_dim * config.head_dim;
@@ -508,9 +564,8 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
     /// Reset all control flags to zero (idle state).
     fn reset_control(&mut self) {
-        let ctrl_ptr: GpuPtr<u32> = self.stream.ptr(&self.client, &self.tensors.control.handle);
         let zeros = vec![0u32; self.config.ctrl_array_len()];
-        self.stream.write(ctrl_ptr, 0, &zeros);
+        self.stream.write(self.cached_ctrl_ptr, 0, &zeros);
     }
 
     /// Launch the persistent streaming kernel.
@@ -633,17 +688,18 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         ttt_lr_eta: &CubeTensor<R>,
     ) -> &CubeTensor<R> {
         trace!("[HOST] forward_d2d start");
-        // Get GPU pointers for D2D copy
+        // Get GPU pointers for source tensors (these are new each call, not kernel-written)
         let src_xq: GpuPtr<f32> = self.stream.ptr(&self.client, &xq.handle);
         let src_xk: GpuPtr<f32> = self.stream.ptr(&self.client, &xk.handle);
         let src_xv: GpuPtr<f32> = self.stream.ptr(&self.client, &xv.handle);
         let src_eta: GpuPtr<f32> = self.stream.ptr(&self.client, &ttt_lr_eta.handle);
 
-        let dst_xq: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.xq.handle);
-        let dst_xk: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.xk.handle);
-        let dst_xv: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.xv.handle);
-        let dst_eta: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.ttt_lr_eta.handle);
-        let ctrl_ptr: GpuPtr<u32> = self.stream.ptr(&self.client, &self.tensors.control.handle);
+        // Use cached pointers for destination buffers (avoid get_resource on kernel-written buffers)
+        let dst_xq = self.cached_xq_ptr;
+        let dst_xk = self.cached_xk_ptr;
+        let dst_xv = self.cached_xv_ptr;
+        let dst_eta = self.cached_eta_ptr;
+        let ctrl_ptr = self.cached_ctrl_ptr;
 
         trace!("[HOST] D2D copy...");
         // D2D copy input data to streaming buffers
@@ -686,12 +742,13 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         }
 
         // Copy results to separate buffers that can be read without blocking on persistent kernel
-        let output_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.output.handle);
-        let result_output_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.result_output.handle);
-        let weight_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.weight.handle);
-        let result_weight_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.result_weight.handle);
-        let bias_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.bias.handle);
-        let result_bias_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.result_bias.handle);
+        // Use cached pointers to avoid get_resource() which would sync with kernel stream
+        let output_ptr = self.cached_output_ptr;
+        let result_output_ptr = self.cached_result_output_ptr;
+        let weight_ptr = self.cached_weight_ptr;
+        let result_weight_ptr = self.cached_result_weight_ptr;
+        let bias_ptr = self.cached_bias_ptr;
+        let result_bias_ptr = self.cached_result_bias_ptr;
 
         trace!("[HOST] weight tensor shape: {:?}, ptr capacity: {}", &self.tensors.weight.shape, weight_ptr.len());
         trace!("[HOST] result_weight ptr capacity: {}", result_weight_ptr.len());
@@ -713,12 +770,13 @@ impl<R: CubeRuntime> TttStreamingState<R> {
     ///
     /// This is slower than `forward_d2d` but works when you have data on the CPU.
     pub fn forward(&mut self, xq: &[f32], xk: &[f32], xv: &[f32], ttt_lr_eta: &[f32]) -> Vec<f32> {
-        let xq_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.xq.handle);
-        let xk_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.xk.handle);
-        let xv_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.xv.handle);
-        let eta_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.ttt_lr_eta.handle);
-        let ctrl_ptr: GpuPtr<u32> = self.stream.ptr(&self.client, &self.tensors.control.handle);
-        let output_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.output.handle);
+        // Use cached pointers to avoid get_resource() which would sync with kernel stream
+        let xq_ptr = self.cached_xq_ptr;
+        let xk_ptr = self.cached_xk_ptr;
+        let xv_ptr = self.cached_xv_ptr;
+        let eta_ptr = self.cached_eta_ptr;
+        let ctrl_ptr = self.cached_ctrl_ptr;
+        let output_ptr = self.cached_output_ptr;
 
         // Write input data
         self.stream.write(xq_ptr, 0, xq);
@@ -759,9 +817,10 @@ impl<R: CubeRuntime> TttStreamingState<R> {
     /// Shutdown the kernel and return final weight/bias.
     pub fn shutdown(self) -> (Vec<f32>, Vec<f32>) {
         trace!("[HOST] shutdown: signaling SHUTDOWN to {} cubes", self.config.num_cubes());
-        let ctrl_ptr: GpuPtr<u32> = self.stream.ptr(&self.client, &self.tensors.control.handle);
-        let weight_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.weight.handle);
-        let bias_ptr: GpuPtr<f32> = self.stream.ptr(&self.client, &self.tensors.bias.handle);
+        // Use cached pointers to avoid get_resource() which would sync with kernel stream
+        let ctrl_ptr = self.cached_ctrl_ptr;
+        let weight_ptr = self.cached_weight_ptr;
+        let bias_ptr = self.cached_bias_ptr;
 
         // Read current control state before shutdown
         let ctrl_before = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
@@ -836,7 +895,8 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         }
 
         trace!("[HOST] signal_shutdown: signaling SHUTDOWN to {} cubes", self.config.num_cubes());
-        let ctrl_ptr: GpuPtr<u32> = self.stream.ptr(&self.client, &self.tensors.control.handle);
+        // Use cached pointer to avoid get_resource() which would sync with kernel stream
+        let ctrl_ptr = self.cached_ctrl_ptr;
 
         // Signal shutdown to all cubes
         for cube in 0..self.config.num_cubes() {

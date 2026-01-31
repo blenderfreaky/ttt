@@ -17,3 +17,7 @@ cache = "target"
 
 [autotune]
 level = "balanced"
+
+[streaming]
+# Use multiple HIP streams to allow persistent kernels to run independently
+max_streams = 4
