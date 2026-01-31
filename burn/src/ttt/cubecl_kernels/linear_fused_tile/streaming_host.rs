@@ -8,10 +8,7 @@
 use std::{
     collections::HashMap,
     sync::{LazyLock, Mutex},
-    sync::atomic::{AtomicU64, Ordering},
 };
-
-use burn_backend::StreamId;
 
 use burn_backend::Shape;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
@@ -197,19 +194,7 @@ pub struct StreamingBufferTensors<R: CubeRuntime> {
     pub std_ln: CubeTensor<R>,
 }
 
-/// Counter for generating unique kernel stream IDs.
-/// Uses values starting at 1 to map to physical stream 1 (avoiding collision with stream 0).
-/// Note: CubeCL uses `stream_id.value % max_streams` to map to physical streams,
-/// so we use small sequential values (1, 2, 3, ...) to get distinct physical streams.
-static KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-/// Get a unique stream ID for a persistent kernel.
-/// Returns a stream ID that maps to a different physical stream than stream 0.
-fn next_kernel_stream_id() -> StreamId {
-    StreamId {
-        value: KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),
-    }
-}
+use super::next_persistent_kernel_stream_id;
 
 /// State for a running streaming TTT kernel.
 ///
@@ -461,7 +446,7 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         // Create a separate client for the persistent kernel with its own stream ID.
         // This prevents the persistent kernel from blocking normal operations on the main client.
         let mut kernel_client = client.clone();
-        let kernel_stream_id = next_kernel_stream_id();
+        let kernel_stream_id = next_persistent_kernel_stream_id();
         trace!("[HOST] using kernel stream ID: {}", kernel_stream_id);
         // SAFETY: We're setting a unique stream ID that won't conflict with normal operations.
         // The kernel will run on this separate stream.

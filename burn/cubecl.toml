@@ -19,5 +19,7 @@ cache = "target"
 level = "balanced"
 
 [streaming]
-# Use multiple HIP streams to allow persistent kernels to run independently
-max_streams = 4
+# Use multiple HIP streams to allow persistent kernels to run independently.
+# Each persistent kernel layer needs its own stream, plus stream 0 for normal ops.
+# Set high enough to support models with many layers.
+max_streams = 64

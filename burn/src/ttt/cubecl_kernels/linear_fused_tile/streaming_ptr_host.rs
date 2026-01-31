@@ -5,10 +5,8 @@
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use burn::tensor::Shape;
-use burn_backend::StreamId;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
 use cubecl::prelude::*;
 use cubecl::frontend::ArrayArg;
@@ -126,19 +124,7 @@ pub struct PtrStreamingTensors<R: CubeRuntime> {
     pub std_ln: CubeTensor<R>,
 }
 
-/// Counter for generating unique kernel stream IDs.
-/// Uses values starting at 2 to map to physical stream 2 (avoiding collision with stream 0
-/// and the regular streaming kernel which uses stream 1).
-/// Note: CubeCL uses `stream_id.value % max_streams` to map to physical streams.
-static PTR_KERNEL_STREAM_COUNTER: AtomicU64 = AtomicU64::new(2);
-
-/// Get a unique stream ID for a persistent kernel.
-/// Returns a stream ID that maps to a different physical stream than stream 0.
-fn next_ptr_kernel_stream_id() -> StreamId {
-    StreamId {
-        value: PTR_KERNEL_STREAM_COUNTER.fetch_add(1, Ordering::Relaxed),
-    }
-}
+use super::next_persistent_kernel_stream_id;
 
 /// Get or create a pointer-based streaming state from the global registry.
 #[allow(clippy::too_many_arguments)]
@@ -326,7 +312,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         // Create a separate client for the persistent kernel with its own stream ID.
         // This prevents the persistent kernel from blocking normal operations on the main client.
         let mut kernel_client = client.clone();
-        let kernel_stream_id = next_ptr_kernel_stream_id();
+        let kernel_stream_id = next_persistent_kernel_stream_id();
         trace!("ptr_stream: using kernel stream ID: {}", kernel_stream_id);
         // SAFETY: We're setting a unique stream ID that won't conflict with normal operations.
         unsafe {
