@@ -62,11 +62,13 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
         let epsilon = inner.layer_norm.epsilon as f32;
 
         let inner_config = self.inner.inner.get_config();
+        let threads = inner_config.threads
+            .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
         let config = FusedTttConfig::new(
             inner_config.mini_batch_size,
             head_dim,
             epsilon,
-            inner_config.threads,
+            threads,
         );
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
@@ -141,7 +143,9 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
-        let config = FusedTttConfig::new(mini_batch_size, head_dim, epsilon, config.threads);
+        let threads = config.threads
+            .unwrap_or_else(|| super::api::default_threads(mini_batch_size, head_dim));
+        let config = FusedTttConfig::new(mini_batch_size, head_dim, epsilon, threads);
 
         if num_full_batches > 0 {
             // Process full mini-batches with multi-stage kernel
@@ -206,11 +210,13 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
+        let threads = inner.config.threads
+            .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
         let config = FusedTttConfig::new(
             inner.config.mini_batch_size,
             head_dim,
             epsilon,
-            inner.config.threads,
+            threads,
         );
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
@@ -292,7 +298,7 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
-            threads: 8, // 8×32 tile config requires 8 threads
+            threads: Some(8), // 8×32 tile config requires 8 threads
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
@@ -488,7 +494,7 @@ mod tests {
             mini_batch_size,
             base_lr: 1.0,
             epsilon,
-            threads: 8, // 8×32 tile config requires 8 threads
+            threads: Some(8), // 8×32 tile config requires 8 threads
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());
@@ -700,7 +706,7 @@ mod tests {
             mini_batch_size: seq_len,
             base_lr: 1.0,
             epsilon,
-            threads: 8,
+            threads: Some(8),
             ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
         });
         let linear_config = Arc::new(TTTLinearConfig::new());

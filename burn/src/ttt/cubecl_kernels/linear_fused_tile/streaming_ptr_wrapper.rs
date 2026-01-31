@@ -344,13 +344,15 @@ impl<B: FusedTttBackend> TTTInnerModel<B>
         let inner = &self.inner.inner.inner.inner.inner;
 
         let qkv = inputs.qkv;
-        let [_batch_size, _num_heads, _seq_len, head_dim] = qkv.xq.shape().dims();
+        let [_batch_size, _num_heads, seq_len, head_dim] = qkv.xq.shape().dims();
 
         let ln_weight = inner.layer_norm.weight.val();
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
         let inner_config = inner.get_config();
+        let threads = inner_config.threads
+            .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
 
         let (output, weight_updated, bias_updated) = fused_ttt_ptr_streaming_forward(
             qkv.xq,
@@ -366,7 +368,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B>
             inner_config.mini_batch_size,
             head_dim,
             epsilon,
-            inner_config.threads,
+            threads,
         );
 
         state.inner.weight = weight_updated;

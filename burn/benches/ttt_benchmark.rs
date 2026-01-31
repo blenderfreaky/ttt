@@ -117,7 +117,7 @@ impl BenchConfig {
             .with_swi_glu_mlp_intermediate_size(self.mlp_intermediate)
             .with_mini_batch_size(self.mini_batch_size)
             .with_conv_before_ttt(false)
-            .with_threads(threads)
+            .with_threads(Some(threads))
     }
 
     pub fn head_dim(&self) -> usize {

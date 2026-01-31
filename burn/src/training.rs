@@ -195,7 +195,8 @@ fn train_with_inner<
         >,
 {
     let tokenizer = Arc::new(tokenizer);
-    let batcher = TextGenerationBatcher::new(tokenizer.clone(), config.max_seq_len);
+    // Batcher needs max_seq_len + 1 to account for next-token prediction
+    let batcher = TextGenerationBatcher::new(tokenizer.clone(), config.max_seq_len + 1);
 
     std::fs::create_dir_all(artifact_dir).unwrap();
     config.save(format!("{artifact_dir}/config.json")).unwrap();
@@ -274,7 +275,8 @@ fn train_with_inner_pretokenized<
             Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
-    let batcher = TokenBatcher::new(pad_token, config.max_seq_len);
+    // Batcher needs max_seq_len + 1 to account for next-token prediction
+    let batcher = TokenBatcher::new(pad_token, config.max_seq_len + 1);
 
     std::fs::create_dir_all(artifact_dir).unwrap();
     config.save(format!("{artifact_dir}/config.json")).unwrap();
@@ -319,9 +321,11 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     let pad_token = tokenizer.pad_token();
 
     println!("Loading pre-tokenized datasets...");
-    let dataset_train = load_or_pretokenize(tokenizer, "train", config.max_seq_len)
+    // Load max_seq_len + 1 tokens to account for next-token prediction shift
+    // (inputs: 0..max_seq_len, targets: 1..max_seq_len+1)
+    let dataset_train = load_or_pretokenize(tokenizer, "train", config.max_seq_len + 1)
         .expect("Failed to load/create pre-tokenized train dataset");
-    let dataset_test = load_or_pretokenize(tokenizer, "validation", config.max_seq_len)
+    let dataset_test = load_or_pretokenize(tokenizer, "validation", config.max_seq_len + 1)
         .expect("Failed to load/create pre-tokenized test dataset");
 
     println!(

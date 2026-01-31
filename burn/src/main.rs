@@ -205,6 +205,10 @@ struct TrainArgs {
     #[arg(long, default_value = "32")]
     mini_batch_size: usize,
 
+    /// Number of threads per tile (omit to auto-detect based on tile config)
+    #[arg(long)]
+    threads: Option<usize>,
+
     /// MLP expansion factor (hidden_dim = expansion_factor * head_dim)
     #[arg(long, default_value = "4")]
     mlp_expansion: usize,
@@ -302,6 +306,7 @@ impl TrainArgs {
             .with_layer_type(self.inner.to_layer_type())
             .with_pos_encoding(self.pos_encoding.to_pos_encoding_type())
             .with_mini_batch_size(self.mini_batch_size)
+            .with_threads(self.threads)
             .with_base_lr(self.ttt_base_lr)
             .with_max_seq_len(self.seq_len)
             .with_mlp_expansion_factor(self.mlp_expansion);

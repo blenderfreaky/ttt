@@ -162,9 +162,9 @@ pub struct TTTConfig {
     // #[config(default = 0)]
     // pub scan_checkpoint_group_size: usize,
     /// Number of threads to use per (batch, head).
-    /// Only applies to FusedTile impl.
-    #[config(default = 64)]
-    pub threads: usize,
+    /// Only applies to FusedTile impl. None = auto-detect.
+    #[config(default = "None")]
+    pub threads: Option<usize>,
 }
 
 impl TTTConfig {
