@@ -67,3 +67,4 @@ wgpu = ["burn/wgpu", "cubecl/wgpu", "thundercube/wgpu"]
 cpu = ["burn/cpu", "cubecl/cpu", "thundercube/cpu"]
 
 sweep_tests = []
+tile-tuning = []  # Enable additional tile configurations for benchmarking thread counts
