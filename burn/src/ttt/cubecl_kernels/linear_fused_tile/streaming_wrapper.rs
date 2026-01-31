@@ -413,6 +413,10 @@ mod tests {
 
     #[test]
     fn test_streaming_vs_ttt_linear() {
+        // Acquire mutex to prevent concurrent streaming tests.
+        // See STREAMING_TEST_MUTEX doc comment for explanation.
+        let _guard = crate::ttt::cubecl_kernels::linear_fused_tile::STREAMING_TEST_MUTEX.lock().unwrap();
+
         // Initialize tracing for tests (ignore if already initialized)
         let _ = tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

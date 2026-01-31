@@ -9,6 +9,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "rocm")]
 use burn_backend::StreamId;
 
+/// Global mutex for streaming kernel tests.
+///
+/// Streaming tests cannot run concurrently because `get_resource()` triggers
+/// cross-stream synchronization, which blocks forever if a persistent kernel
+/// is running on another stream. This mutex ensures only one streaming test
+/// runs at a time.
+#[cfg(all(test, feature = "rocm"))]
+pub static STREAMING_TEST_MUTEX: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// Shared counter for generating unique kernel stream IDs across all persistent kernels.
 /// Starts at 1 to avoid collision with the default stream (0).
 /// CubeCL maps stream IDs to physical streams via `stream_id % max_streams`.
