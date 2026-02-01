@@ -810,18 +810,8 @@ mod tests {
     use super::super::streaming_ptr_wrapper::FusedTilePtrStreamingState;
     use crate::ttt::{
         GpuBackend,
-        cubecl_kernels::{
-            Fused,
-            test_utils::{TestDims, test_fwd},
-        },
-        linear::TTTLinear,
+        cubecl_kernels::{FusedPtrStreaming, test_utils::{TestDims, test_fwd}},
     };
-
-    type Fused1 = Fused<GpuBackend, TTTLinear<GpuBackend>>;
-    type Fused2 = Fused<GpuBackend, Fused1>;
-    type Fused3 = Fused<GpuBackend, Fused2>;
-    type Fused4 = Fused<GpuBackend, Fused3>;
-    type FusedPtrStreaming = Fused<GpuBackend, Fused4>;
 
     // TODO: ptr streaming kernel has issues, needs investigation
     #[test]
@@ -832,15 +822,9 @@ mod tests {
             .unwrap();
 
         let dims = TestDims::multi_stage(2, 2, 32, 8, 2).with_iterations(2);
-        test_fwd::<GpuBackend, FusedPtrStreaming, FusedTilePtrStreamingState<GpuBackend>, _>(
+        test_fwd::<GpuBackend, FusedPtrStreaming<GpuBackend>, FusedTilePtrStreamingState<GpuBackend>, _>(
             dims,
-            |m| {
-                let a: Fused1 = m.into();
-                let b: Fused2 = a.into();
-                let c: Fused3 = b.into();
-                let d: Fused4 = c.into();
-                d.into()
-            },
+            |m| m.into(),
             0.5,
             0.4,
             "PtrStreaming",

@@ -230,10 +230,10 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
 mod tests {
     use super::*;
     use crate::ttt::{
-        GpuAutodiffBackend, TEST_VOCAB_SIZE, cubecl_kernels::Fused, linear::TTTLinear,
+        GpuAutodiffBackend, TEST_VOCAB_SIZE, cubecl_kernels::FusedLinear,
     };
 
-    type Inner = Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>;
+    type Inner = FusedLinear<GpuAutodiffBackend>;
 
     #[test]
     fn forward_inference_doesnt_crash() {

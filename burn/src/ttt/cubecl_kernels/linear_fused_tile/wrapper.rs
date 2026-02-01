@@ -1,20 +1,19 @@
 //! TTTInnerModel implementation for the tiled TTT-Linear kernel.
 
-use std::{marker::PhantomData, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
 
 use super::api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 use crate::ttt::{
     TTTConfig,
-    cubecl_kernels::{Fused, FusedTttBackend, FusedTttConfig},
+    cubecl_kernels::{Fused, FusedTttBackend, FusedTttConfig, TileKernel, TileMultiKernel},
     layer::{TTTInnerModel, TTTInputsInner},
     linear::TTTLinear,
 };
 
 /// TTTInnerModel implementation for the tiled fused kernel.
-/// Uses double Fused wrapper: `Fused<B, Fused<B, TTTLinear<B>>>`.
-impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
     type State = <TTTLinear<B> as TTTInnerModel<B>>::State;
 
@@ -27,21 +26,15 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
         config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused {
-            inner: Fused {
-                inner: TTTLinear::new(general_config, config, device),
-                _backend: PhantomData,
-            },
-            _backend: PhantomData,
-        }
+        Fused::new(TTTLinear::new(general_config, config, device))
     }
 
     fn get_config(&self) -> &Arc<TTTConfig> {
-        self.inner.inner.get_config()
+        self.inner.get_config()
     }
 
     fn init_state(&self, batch_size: usize) -> Self::State {
-        self.inner.inner.init_state(batch_size)
+        self.inner.init_state(batch_size)
     }
 
     fn forward_mini_batch(
@@ -52,7 +45,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
     ) -> Tensor<B, 4> {
         let inputs = inputs.slice_seq(range);
 
-        let inner = &self.inner.inner;
+        let inner = &self.inner;
 
         let qkv = inputs.qkv;
         let [_batch_size, _num_heads, seq_len, head_dim] = qkv.xq.shape().dims();
@@ -61,7 +54,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
-        let inner_config = self.inner.inner.get_config();
+        let inner_config = self.inner.get_config();
         let threads = inner_config.threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
         let config = FusedTttConfig::new(
@@ -92,11 +85,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, TTTLinear<B>>> {
 }
 
 /// TTTInnerModel implementation for the multi-stage tiled fused kernel.
-/// Uses triple Fused wrapper: `Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>`.
 ///
 /// This implementation overrides `forward()` to process all mini-batches in a
 /// single kernel launch, rather than launching the kernel once per mini-batch.
-impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLinear<B>>>> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
     type State = <TTTLinear<B> as TTTInnerModel<B>>::State;
 
@@ -109,29 +101,20 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
         config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused {
-            inner: Fused {
-                inner: Fused {
-                    inner: TTTLinear::new(general_config, config, device),
-                    _backend: PhantomData,
-                },
-                _backend: PhantomData,
-            },
-            _backend: PhantomData,
-        }
+        Fused::new(TTTLinear::new(general_config, config, device))
     }
 
     fn get_config(&self) -> &Arc<TTTConfig> {
-        self.inner.inner.inner.get_config()
+        self.inner.get_config()
     }
 
     fn init_state(&self, batch_size: usize) -> Self::State {
-        self.inner.inner.inner.init_state(batch_size)
+        self.inner.init_state(batch_size)
     }
 
     /// Override forward to use multi-stage kernel for full sequence processing.
     fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
-        let inner = &self.inner.inner.inner;
+        let inner = &self.inner;
         let config = inner.get_config();
         let mini_batch_size = config.mini_batch_size;
 
@@ -196,13 +179,13 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
         inputs: &TTTInputsInner<B>,
         range: Range<usize>,
     ) -> Tensor<B, 4> {
-        if range.len() != self.inner.inner.inner.config.mini_batch_size {
+        if range.len() != self.inner.config.mini_batch_size {
             panic!("Sequence length must be equal to mini_batch_size");
         }
 
         let inputs = inputs.slice_seq(range);
 
-        let inner = &self.inner.inner.inner;
+        let inner = &self.inner;
 
         let qkv = inputs.qkv;
         let [_batch_size, _num_heads, seq_len, head_dim] = qkv.xq.shape().dims();
@@ -242,44 +225,45 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, TTTLine
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::ttt::{
         GpuAutodiffBackend, GpuBackend,
-        cubecl_kernels::test_utils::{TestDims, test_fmb, test_fwd, test_backward_fmb},
-        linear::{TTTLinear, TTTLinearState},
+        cubecl_kernels::{FusedTile, FusedTileMulti, test_utils::{TestDims, test_fmb, test_fwd, test_backward_fmb}},
+        linear::TTTLinearState,
     };
-
-    type FusedSingle = Fused<GpuBackend, TTTLinear<GpuBackend>>;
-    type FusedTile = Fused<GpuBackend, FusedSingle>;
-    type FusedTileMulti = Fused<GpuBackend, FusedTile>;
 
     #[test]
     fn test_fused_tile_vs_ttt_linear() {
         let dims = TestDims::new(2, 2, 32, 8);
-        test_fmb::<GpuBackend, FusedTile, TTTLinearState<GpuBackend>, _>(dims, |m| {
-            let a: FusedSingle = m.into();
-            a.into()
-        }, 1e-2, 1e-3, "FusedTile");
+        test_fmb::<GpuBackend, FusedTile<GpuBackend>, TTTLinearState<GpuBackend>, _>(
+            dims,
+            |m| m.into(),
+            1e-2,
+            1e-3,
+            "FusedTile",
+        );
     }
 
     #[test]
     fn test_fused_tile_multi_vs_ttt_linear() {
         let dims = TestDims::multi_stage(2, 2, 32, 8, 4);
-        test_fwd::<GpuBackend, FusedTileMulti, TTTLinearState<GpuBackend>, _>(dims, |m| {
-            let a: FusedSingle = m.into();
-            let b: FusedTile = a.into();
-            b.into()
-        }, 1e-2, 1e-3, "FusedTileMulti");
+        test_fwd::<GpuBackend, FusedTileMulti<GpuBackend>, TTTLinearState<GpuBackend>, _>(
+            dims,
+            |m| m.into(),
+            1e-2,
+            1e-3,
+            "FusedTileMulti",
+        );
     }
-
-    type FusedTileAutodiff = Fused<GpuAutodiffBackend, Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>>;
 
     #[test]
     fn test_fused_tile_backward_gradients_vs_reference() {
         let dims = TestDims::new(2, 2, 32, 8);
-        test_backward_fmb::<GpuAutodiffBackend, FusedTileAutodiff, _>(dims, |m| {
-            let a: Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>> = m.into();
-            a.into()
-        }, 2e-2, 1e-3, "FusedTile");
+        test_backward_fmb::<GpuAutodiffBackend, FusedTile<GpuAutodiffBackend>, _>(
+            dims,
+            |m| m.into(),
+            2e-2,
+            1e-3,
+            "FusedTile",
+        );
     }
 }

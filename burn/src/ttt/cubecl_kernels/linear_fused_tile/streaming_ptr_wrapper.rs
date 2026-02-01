@@ -4,7 +4,6 @@
 //! a persistent GPU kernel with true zero-copy input via pointer tables.
 
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
 
@@ -22,7 +21,7 @@ use super::{
 use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{
-        Fused, FusedTttBackend,
+        Fused, FusedTttBackend, PtrStreamingKernel,
         kernel::{FusedKernel, CanBackwardNoOut},
         ttt::TttInputs,
     },
@@ -295,10 +294,7 @@ pub fn fused_ttt_ptr_streaming_forward<B: FusedTttBackend>(
 // ============================================================================
 
 /// TTTInnerModel implementation for the ptr streaming fused kernel.
-/// Uses quintuple Fused wrapper to distinguish from the regular streaming kernel.
-impl<B: FusedTttBackend> TTTInnerModel<B>
-    for Fused<B, Fused<B, Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>>>
-{
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, PtrStreamingKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
     type State = FusedTilePtrStreamingState<B>;
 
@@ -311,31 +307,16 @@ impl<B: FusedTttBackend> TTTInnerModel<B>
         config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused {
-            inner: Fused {
-                inner: Fused {
-                    inner: Fused {
-                        inner: Fused {
-                            inner: TTTLinear::new(general_config, config, device),
-                            _backend: PhantomData,
-                        },
-                        _backend: PhantomData,
-                    },
-                    _backend: PhantomData,
-                },
-                _backend: PhantomData,
-            },
-            _backend: PhantomData,
-        }
+        Fused::new(TTTLinear::new(general_config, config, device))
     }
 
     fn get_config(&self) -> &Arc<TTTConfig> {
-        self.inner.inner.inner.inner.inner.get_config()
+        self.inner.get_config()
     }
 
     fn init_state(&self, batch_size: usize) -> Self::State {
         FusedTilePtrStreamingState {
-            inner: self.inner.inner.inner.inner.inner.init_state(batch_size),
+            inner: self.inner.init_state(batch_size),
             stream_handle: Ignored(PtrStreamHandle::new(next_ptr_stream_id())),
         }
     }
@@ -348,7 +329,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B>
     ) -> Tensor<B, 4> {
         let inputs = inputs.slice_seq(range);
 
-        let inner = &self.inner.inner.inner.inner.inner;
+        let inner = &self.inner;
 
         let qkv = inputs.qkv;
         let [_batch_size, _num_heads, seq_len, head_dim] = qkv.xq.shape().dims();

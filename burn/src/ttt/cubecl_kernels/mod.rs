@@ -39,41 +39,153 @@ pub use ttt::{TttInputs, TttKernel, TttOutputs};
 
 use crate::ttt::linear::TTTLinear;
 
-/// Type alias for the tiled fused TTT-Linear kernel (single-stage).
-/// Uses double Fused wrapper to distinguish from the non-tiled fused version.
+// ============================================================================
+// Kernel marker types
+// ============================================================================
+
+/// Marker for the basic fused TTT-Linear kernel.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LinearKernel;
+
+/// Marker for the tiled fused TTT-Linear kernel (single-stage).
 /// Processes one mini-batch per kernel launch.
-pub type FusedTile<B> = Fused<B, Fused<B, TTTLinear<B>>>;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TileKernel;
 
-/// Type alias for the multi-stage tiled fused TTT-Linear kernel.
-/// Uses triple Fused wrapper. Processes all mini-batches in a single kernel
-/// launch, keeping weight/bias in shared memory between stages.
-pub type FusedTileMulti<B> = Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>;
+/// Marker for the multi-stage tiled fused TTT-Linear kernel.
+/// Processes all mini-batches in a single kernel launch.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TileMultiKernel;
 
-/// Type alias for the streaming tiled fused TTT-Linear kernel.
-/// Uses quadruple Fused wrapper. Runs a persistent kernel on the GPU and
-/// feeds mini-batches incrementally via async memory transfers.
+/// Marker for the streaming tiled fused TTT-Linear kernel.
+/// Runs a persistent kernel on the GPU.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StreamingKernel;
+
+/// Marker for the pointer-based streaming TTT-Linear kernel.
+/// Uses zero-copy pointer tables for input.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PtrStreamingKernel;
+
+// ============================================================================
+// Type aliases
+// ============================================================================
+
+/// Basic fused TTT-Linear kernel.
+pub type FusedLinear<B> = Fused<B, TTTLinear<B>, LinearKernel>;
+
+/// Tiled fused TTT-Linear kernel (single-stage).
+pub type FusedTile<B> = Fused<B, TTTLinear<B>, TileKernel>;
+
+/// Multi-stage tiled fused TTT-Linear kernel.
+pub type FusedTileMulti<B> = Fused<B, TTTLinear<B>, TileMultiKernel>;
+
+/// Streaming tiled fused TTT-Linear kernel.
 #[cfg(feature = "rocm")]
-pub type FusedTileStreaming<B> = Fused<B, Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>>;
+pub type FusedTileStreaming<B> = Fused<B, TTTLinear<B>, StreamingKernel>;
 
-/// Marker type for fused TTT layers.
-/// TTTInnerModel is implemented using a fused kernel,
-/// but uses the same underlying types as the regular version.
-///
-/// We can't write the type bound due to a limitation of the Module derive macro,
-/// but all impls guarantee:
-///     Inner: TTTInnerModel<B>
-#[derive(Module, Debug)]
-pub struct Fused<B: Backend, Inner> {
-    inner: Inner,
-    _backend: PhantomData<B>,
+/// Pointer-based streaming TTT-Linear kernel.
+#[cfg(feature = "rocm")]
+pub type FusedPtrStreaming<B> = Fused<B, TTTLinear<B>, PtrStreamingKernel>;
+
+// ============================================================================
+// Fused wrapper struct
+// ============================================================================
+
+/// Wrapper for fused TTT layers.
+/// The `Kernel` marker type determines which kernel implementation is used.
+#[derive(Debug)]
+pub struct Fused<B: Backend, Inner, Kernel> {
+    pub inner: Inner,
+    _phantom: PhantomData<(B, Kernel)>,
 }
 
-impl<B: Backend, T: TTTInnerModel<B>> From<T> for Fused<B, T> {
-    fn from(inner: T) -> Self {
+impl<B: Backend, Inner: Clone, Kernel> Clone for Fused<B, Inner, Kernel> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<B: Backend, Inner: burn::module::Module<B>, Kernel: Send + Sync + std::fmt::Debug>
+    burn::module::Module<B> for Fused<B, Inner, Kernel>
+{
+    type Record = Inner::Record;
+
+    fn collect_devices(&self, devices: burn::module::Devices<B>) -> burn::module::Devices<B> {
+        self.inner.collect_devices(devices)
+    }
+
+    fn fork(self, device: &B::Device) -> Self {
+        Self::new(self.inner.fork(device))
+    }
+
+    fn to_device(self, device: &B::Device) -> Self {
+        Self::new(self.inner.to_device(device))
+    }
+
+    fn visit<V: burn::module::ModuleVisitor<B>>(&self, visitor: &mut V) {
+        self.inner.visit(visitor);
+    }
+
+    fn map<M: burn::module::ModuleMapper<B>>(self, mapper: &mut M) -> Self {
+        Self::new(self.inner.map(mapper))
+    }
+
+    fn load_record(self, record: Self::Record) -> Self {
+        Self::new(self.inner.load_record(record))
+    }
+
+    fn into_record(self) -> Self::Record {
+        self.inner.into_record()
+    }
+}
+
+impl<B: Backend, Inner: burn::module::ModuleDisplay, Kernel> burn::module::ModuleDisplay
+    for Fused<B, Inner, Kernel>
+{
+    fn custom_settings(&self) -> Option<burn::module::DisplaySettings> {
+        self.inner.custom_settings()
+    }
+
+    fn custom_content(&self, content: burn::module::Content) -> Option<burn::module::Content> {
+        self.inner.custom_content(content)
+    }
+}
+
+impl<B: Backend, Inner: burn::module::ModuleDisplayDefault, Kernel> burn::module::ModuleDisplayDefault
+    for Fused<B, Inner, Kernel>
+{
+    fn content(&self, content: burn::module::Content) -> Option<burn::module::Content> {
+        self.inner.content(content)
+    }
+}
+
+impl<B: burn::tensor::backend::AutodiffBackend, Inner: burn::module::AutodiffModule<B>, Kernel: Send + Sync + std::fmt::Debug + Clone>
+    burn::module::AutodiffModule<B> for Fused<B, Inner, Kernel>
+{
+    type InnerModule = Fused<B::InnerBackend, Inner::InnerModule, Kernel>;
+
+    fn valid(&self) -> Self::InnerModule {
+        Fused::new(self.inner.valid())
+    }
+}
+
+impl<B: Backend, Inner, Kernel> Fused<B, Inner, Kernel> {
+    /// Create a new Fused wrapper with the given inner model.
+    pub fn new(inner: Inner) -> Self {
         Self {
             inner,
-            _backend: PhantomData,
+            _phantom: PhantomData,
         }
+    }
+}
+
+impl<B: Backend, T: TTTInnerModel<B>, K> From<T> for Fused<B, T, K> {
+    fn from(inner: T) -> Self {
+        Self::new(inner)
     }
 }
 

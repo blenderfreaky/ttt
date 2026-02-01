@@ -69,10 +69,7 @@ macro_rules! dispatch_ttt_layer_type {
             TTTLayerType::MLP4 => $f::<$backend, $crate::ttt::mlp4::TTTMLP4<$backend>, $($other),+>($($args),*),
             TTTLayerType::FusedLinear => $f::<
                 $backend,
-                $crate::ttt::cubecl_kernels::Fused<
-                    $backend,
-                    $crate::ttt::linear::TTTLinear<$backend>,
-                >,
+                $crate::ttt::cubecl_kernels::FusedLinear<$backend>,
                 $($other),+
             >($($args),*),
             TTTLayerType::FusedTileLinear => $f::<

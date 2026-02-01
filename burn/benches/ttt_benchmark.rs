@@ -30,7 +30,7 @@ use ttt::{
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
     ttt::{
         TTTConfig,
-        cubecl_kernels::{Fused, FusedTile, FusedTttBackend},
+        cubecl_kernels::{Fused, FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend},
         layer::{Qkv, TTTInnerModel, TTTInputsInner},
         linear::TTTLinear,
         linear_adam::TTTLinearAdam,
@@ -491,8 +491,9 @@ define_all_benches!(
     mlp2 => TTTMLP2<_>,
     mlp3 => TTTMLP3<_>,
     mlp4 => TTTMLP4<_>,
-    fused_linear => Fused<_, TTTLinear<_>>,
+    fused_linear => FusedLinear<_>,
     fused_linear_tile => FusedTile<_>,
+    fused_linear_tile_multi => FusedTileMulti<_>,
 );
 
 criterion_main!(inner_forward, inner_backward, full_forward, full_backward);

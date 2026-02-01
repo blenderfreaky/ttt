@@ -1,18 +1,18 @@
-use std::{marker::PhantomData, ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
 
 use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{
-        Fused,
+        Fused, LinearKernel,
         backend::{FusedTttBackend, api::fused_ttt_forward},
     },
     layer::{TTTInnerModel, TTTInputsInner},
     linear::TTTLinear,
 };
 
-impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, LinearKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
     type State = <TTTLinear<B> as TTTInnerModel<B>>::State;
 
@@ -25,10 +25,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
         config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused {
-            inner: TTTLinear::new(general_config, config, device),
-            _backend: PhantomData,
-        }
+        Fused::new(TTTLinear::new(general_config, config, device))
     }
 
     fn get_config(&self) -> &Arc<TTTConfig> {
@@ -77,19 +74,16 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::ttt::{
         GpuAutodiffBackend, GpuBackend,
-        cubecl_kernels::test_utils::{TestDims, test_backward_fmb, test_fmb},
-        linear::{TTTLinear, TTTLinearState},
+        cubecl_kernels::{FusedLinear, test_utils::{TestDims, test_backward_fmb, test_fmb}},
+        linear::TTTLinearState,
     };
-
-    type FusedLinear = Fused<GpuBackend, TTTLinear<GpuBackend>>;
 
     #[test]
     fn test_fused_ttt_linear_vs_reference() {
         let dims = TestDims::new(2, 4, 16, 8);
-        test_fmb::<GpuBackend, FusedLinear, TTTLinearState<GpuBackend>, _>(
+        test_fmb::<GpuBackend, FusedLinear<GpuBackend>, TTTLinearState<GpuBackend>, _>(
             dims,
             |m| m.into(),
             1e-3,
@@ -105,7 +99,7 @@ mod tests {
         let dims = TestDims::new(2, 2, 8, 4);
         test_backward_fmb::<
             GpuAutodiffBackend,
-            Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>,
+            crate::ttt::cubecl_kernels::FusedLinear<GpuAutodiffBackend>,
             _,
         >(dims, |m| m.into(), 2e-2, 1e-3, "Fused");
     }

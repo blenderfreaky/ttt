@@ -4,7 +4,6 @@
 //! a persistent GPU kernel with a global registry for state management.
 
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::{
     Arc,
@@ -25,7 +24,7 @@ use super::{
 use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{
-        Fused, FusedTttBackend,
+        Fused, FusedTttBackend, StreamingKernel,
         kernel::{CanBackwardNoOut, FusedKernel},
         ttt::TttInputs,
     },
@@ -284,11 +283,10 @@ pub fn fused_ttt_streaming_forward<B: FusedTttBackend>(
 // ============================================================================
 
 /// TTTInnerModel implementation for the streaming fused kernel.
-/// Uses quadruple Fused wrapper: `Fused<B, Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>>`.
 ///
 /// The streaming kernel maintains a persistent GPU kernel that processes
 /// mini-batches incrementally, keeping weight/bias in shared memory between calls.
-impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, Fused<B, TTTLinear<B>>>>> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, StreamingKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
     type State = FusedTileStreamingState<B>;
 
@@ -301,28 +299,16 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, Fused<B
         config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused {
-            inner: Fused {
-                inner: Fused {
-                    inner: Fused {
-                        inner: TTTLinear::new(general_config, config, device),
-                        _backend: PhantomData,
-                    },
-                    _backend: PhantomData,
-                },
-                _backend: PhantomData,
-            },
-            _backend: PhantomData,
-        }
+        Fused::new(TTTLinear::new(general_config, config, device))
     }
 
     fn get_config(&self) -> &Arc<TTTConfig> {
-        self.inner.inner.inner.inner.get_config()
+        self.inner.get_config()
     }
 
     fn init_state(&self, batch_size: usize) -> Self::State {
         FusedTileStreamingState {
-            inner: self.inner.inner.inner.inner.init_state(batch_size),
+            inner: self.inner.init_state(batch_size),
             stream_handle: Ignored(StreamHandle::new(next_stream_id())),
         }
     }
@@ -335,7 +321,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, Fused<B, Fused<B, Fused<B
     ) -> Tensor<B, 4> {
         let inputs = inputs.slice_seq(range);
 
-        let inner = &self.inner.inner.inner.inner;
+        let inner = &self.inner;
 
         let qkv = inputs.qkv;
         let [_batch_size, _num_heads, seq_len, head_dim] = qkv.xq.shape().dims();
@@ -378,17 +364,8 @@ mod tests {
     use super::*;
     use crate::ttt::{
         GpuBackend,
-        cubecl_kernels::{
-            Fused,
-            test_utils::{TestDims, test_fwd},
-        },
-        linear::TTTLinear,
+        cubecl_kernels::{FusedTileStreaming, test_utils::{TestDims, test_fwd}},
     };
-
-    type Fused1 = Fused<GpuBackend, TTTLinear<GpuBackend>>;
-    type Fused2 = Fused<GpuBackend, Fused1>;
-    type Fused3 = Fused<GpuBackend, Fused2>;
-    type FusedStreaming = Fused<GpuBackend, Fused3>;
 
     // TODO: streaming kernel has issues, needs investigation
     #[test]
@@ -399,14 +376,9 @@ mod tests {
             .unwrap();
 
         let dims = TestDims::new(2, 2, 32, 8).with_iterations(2);
-        test_fwd::<GpuBackend, FusedStreaming, FusedTileStreamingState<GpuBackend>, _>(
+        test_fwd::<GpuBackend, FusedTileStreaming<GpuBackend>, FusedTileStreamingState<GpuBackend>, _>(
             dims,
-            |m| {
-                let a: Fused1 = m.into();
-                let b: Fused2 = a.into();
-                let c: Fused3 = b.into();
-                c.into()
-            },
+            |m| m.into(),
             1e-3,
             1e-3,
             "Streaming",
