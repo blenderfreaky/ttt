@@ -30,6 +30,55 @@ use super::{
 };
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
+/// Dispatch macro for streaming kernel.
+/// Matches on (mini_batch_len, head_dim, threads) to select tile config.
+macro_rules! impl_streaming_dispatch {
+    (
+        $client:expr, $cube_count:expr, $cube_dim_client:expr,
+        $inputs:expr, $outputs:expr, $control_arg:expr, $fwd_intermediates:expr,
+        $kernel_config:expr,
+        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
+        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
+    ) => {
+        match ($mini_batch_len, $head_dim, $threads) {
+            $(
+                ($s, $h, $t) => {
+                    type P<E> = Params<E, $CS, $F, $CSR, $FR>;
+                    let cube_dim = CubeDim::new($cube_dim_client, $t);
+                    fused_ttt_streaming_kernel::launch::<P<_>, _>(
+                        $client, $cube_count, cube_dim,
+                        $inputs, $outputs, $control_arg, $fwd_intermediates, $kernel_config,
+                    ).unwrap()
+                }
+            )*
+            _ => {
+                let supported = [$((stringify!($s), stringify!($h), stringify!($t))),*];
+                let supported_str: Vec<_> = supported.iter()
+                    .map(|(s, h, t)| format!("{}×{}@{}", s, h, t))
+                    .collect();
+                panic!(
+                    "Unsupported streaming config: mini_batch_len={}, head_dim={}, threads={}. Supported: {}",
+                    $mini_batch_len, $head_dim, $threads, supported_str.join(", ")
+                )
+            }
+        }
+    };
+}
+
+macro_rules! dispatch_streaming_kernel {
+    ($client:expr, $cube_count:expr, $cube_dim_client:expr,
+     $inputs:expr, $outputs:expr, $control_arg:expr, $fwd_intermediates:expr,
+     $kernel_config:expr,
+     $mini_batch_len:expr, $head_dim:expr, $threads:expr) => {
+        supported_tile_configs!(impl_streaming_dispatch!(
+            $client, $cube_count, $cube_dim_client,
+            $inputs, $outputs, $control_arg, $fwd_intermediates,
+            $kernel_config,
+            $mini_batch_len, $head_dim, $threads;
+        ))
+    };
+}
+
 /// Key for the streaming state registry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StreamKey {
@@ -617,44 +666,12 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
         // Dispatch based on tile configuration
         // Use kernel_client which has a separate stream for the persistent kernel
-        match (mini_batch_len, head_dim, threads) {
-            (8, 32, 8) => {
-                type P<E> = Params<E, D8, D32, D4, D8>;
-                let cube_dim = CubeDim::new(&self.kernel_client, threads);
-                fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.kernel_client, cube_count, cube_dim,
-                    inputs, outputs, control_arg, fwd_intermediates, kernel_config,
-                ).unwrap();
-            }
-            (16, 32, 16) => {
-                type P<E> = Params<E, D16, D32, D4, D8>;
-                let cube_dim = CubeDim::new(&self.kernel_client, threads);
-                fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.kernel_client, cube_count, cube_dim,
-                    inputs, outputs, control_arg, fwd_intermediates, kernel_config,
-                ).unwrap();
-            }
-            (16, 64, 64) => {
-                type P<E> = Params<E, D16, D64, D4, D4>;
-                let cube_dim = CubeDim::new(&self.kernel_client, threads);
-                fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.kernel_client, cube_count, cube_dim,
-                    inputs, outputs, control_arg, fwd_intermediates, kernel_config,
-                ).unwrap();
-            }
-            (64, 64, 64) => {
-                type P<E> = Params<E, D64, D64, D8, D8>;
-                let cube_dim = CubeDim::new(&self.kernel_client, threads);
-                fused_ttt_streaming_kernel::launch::<P<F>, R>(
-                    &self.kernel_client, cube_count, cube_dim,
-                    inputs, outputs, control_arg, fwd_intermediates, kernel_config,
-                ).unwrap();
-            }
-            _ => panic!(
-                "Unsupported streaming config: mini_batch_len={}, head_dim={}, threads={}",
-                mini_batch_len, head_dim, threads
-            ),
-        }
+        dispatch_streaming_kernel!(
+            &self.kernel_client, cube_count, &self.kernel_client,
+            inputs, outputs, control_arg, fwd_intermediates,
+            kernel_config,
+            mini_batch_len, head_dim, threads
+        );
     }
 
     /// Feed a mini-batch to the kernel using D2D copies and wait for output.

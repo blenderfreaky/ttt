@@ -9,6 +9,78 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "rocm")]
 use burn_backend::StreamId;
 
+// =============================================================================
+// Tile configuration macros (shared across launch.rs and streaming modules)
+// =============================================================================
+
+/// Supported tile configurations.
+/// Format: (mini_batch_len, head_dim, threads, CS_dim, F_dim, CS_Reg_dim, F_Reg_dim)
+///
+/// threads = max((CS/CSR)², (CS/CSR)×(F/FR), (F/FR)²)
+/// Dispatch matches on (mini_batch_len, head_dim, threads) to select config.
+#[cfg(not(feature = "tile-tuning"))]
+macro_rules! supported_tile_configs {
+    ($callback:ident!($($args:tt)*)) => {
+        $callback!($($args)*
+            // Base configs
+            // (mini_batch, head_dim, threads, CS, F, CSR, FR)
+            //
+            // Note: Larger tiles (16x128, 32x64, 64x64) exceed GPU shared memory limits
+            // and have been removed. Shared memory usage is approximately:
+            //   2*(F*CS) + 4*(CS*F) + (CS*CS) + (F*F) elements
+            // Most GPUs have 48-64KB shared memory limit per block.
+            ( 8,  32,  64, D8,  D32,  D4, D4),    // max(2², 2×8, 8²) = 64, ~10KB smem
+            ( 8,  64,  64, D8,  D64,  D4, D8),    // max(2², 2×8, 8²) = 64, ~22KB smem
+            (16,  32,  16, D16, D32,  D4, D8),    // max(4², 4×4, 4²) = 16, ~14KB smem
+            (16,  64, 256, D16, D64,  D4, D4),    // max(4², 4×16, 16²) = 256, ~30KB smem
+            (32,  32,  64, D32, D32,  D4, D8),    // max(8², 8×4, 4²) = 64, ~26KB smem
+        )
+    };
+}
+
+#[cfg(feature = "tile-tuning")]
+macro_rules! supported_tile_configs {
+    ($callback:ident!($($args:tt)*)) => {
+        $callback!($($args)*
+            // Base configs
+            // (mini_batch, head_dim, threads, CS, F, CSR, FR)
+            //
+            // Note: Larger tiles (16x128, 32x64, 64x64) exceed GPU shared memory limits
+            // and have been removed. Shared memory usage is approximately:
+            //   2*(F*CS) + 4*(CS*F) + (CS*CS) + (F*F) elements
+            // Most GPUs have 48-64KB shared memory limit per block.
+            ( 8,  32,  64, D8,  D32,  D4, D4),    // max(2², 2×8, 8²) = 64, ~10KB smem
+            ( 8,  64,  64, D8,  D64,  D4, D8),    // max(2², 2×8, 8²) = 64, ~22KB smem
+            (16,  32,  16, D16, D32,  D4, D8),    // max(4², 4×4, 4²) = 16, ~14KB smem
+            (16,  64, 256, D16, D64,  D4, D4),    // max(4², 4×16, 16²) = 256, ~30KB smem
+            (32,  32,  64, D32, D32,  D4, D8),    // max(8², 8×4, 4²) = 64, ~26KB smem
+
+            // Tuning configs - alternative thread counts for each tile size
+
+            // 8x32 - test 4
+            ( 8,  32,   4, D8,  D32,  D4, D16),   // max(2², 2×2, 2²) = 4
+
+            // 8x64 - test 4
+            ( 8,  64,   4, D8,  D64,  D4, D32),   // max(2², 2×2, 2²) = 4
+
+            // 16x32 - test 4 and 64
+            (16,  32,   4, D16, D32,  D8, D16),   // max(2², 2×2, 2²) = 4
+            (16,  32,  64, D16, D32,  D4, D4),    // max(4², 4×8, 8²) = 64
+
+            // 16x64 - test 16 and 64
+            (16,  64,  16, D16, D64,  D4, D16),   // max(4², 4×4, 4²) = 16
+            (16,  64,  64, D16, D64,  D4, D8),    // max(4², 4×8, 8²) = 64
+
+            // 32x32 - test 4 and 16
+            (32,  32,   4, D32, D32, D16, D16),   // max(2², 2×2, 2²) = 4
+            (32,  32,  16, D32, D32,  D8,  D8),   // max(4², 4×4, 4²) = 16
+        )
+    };
+}
+
+// Note: macro_rules! macros are automatically available to submodules
+// defined after the macro in the same module
+
 /// Global mutex for streaming kernel tests.
 ///
 /// Streaming tests cannot run concurrently because `get_resource()` triggers
