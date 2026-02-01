@@ -59,7 +59,7 @@ pub const STATUS_SHUTDOWN: u32 = 3;
 
 /// Buffer indices for injected HIP code (must match kernel parameter order)
 pub const BUF_PTR_TABLE: usize = 0;
-pub const BUF_CONTROL: usize = 1;
+pub const _BUF_CONTROL: usize = 1;
 pub const BUF_XQ: usize = 2;
 pub const BUF_XK: usize = 3;
 pub const BUF_XV: usize = 4;
