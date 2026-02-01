@@ -97,9 +97,7 @@ use rand::{Rng, rngs::StdRng};
 /// ```
 #[macro_export]
 macro_rules! test_kernel {
-    // ==================== ENTRY POINT ====================
-    // Parses the user-facing syntax and normalizes it into internal representation.
-    // Accepts: `fn name(args) for TypeName in [types] or all { ... }`
+    // ==================== ENTRY POINT (HOMOGENEOUS) ====================
     {
     $(
         $(#[$attr:meta])*
@@ -110,7 +108,7 @@ macro_rules! test_kernel {
             $(seed($seed:expr);)?
 
             $(
-            let $var:ident: $vty:ty = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;
+            let $var:ident: $vty:tt = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;
             )*
 
             $({
@@ -135,7 +133,57 @@ macro_rules! test_kernel {
                 name: $name;
                 args: ($($args)*);
                 seed: ($($seed)?);
-                vars: $(let $var: $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;)*;
+                vars: $(let $var: $vty < $float_name > = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;)*;
+                preamble: {
+                    $($($preamble)*)?
+                };
+                kernel: $kernel;
+                kernel_args: ($($kernel_arg_name($($kernel_arg)?)),*);
+                count: ($($count),*);
+                dim: $($max)? ($($dim),*);
+                ref: $ref;
+            };
+        }
+    )*
+    };
+
+    // ==================== ENTRY POINT (HETEROGENEOUS) ====================
+    {
+    $(
+        $(#[$attr:meta])*
+        fn $name:ident($($args:tt)*)
+            for ($fin_name:ident, $facc_name:ident) in [$(($fin_ty:tt, $facc_ty:tt)),+ $(,)?]
+                $($gen_name:ident in [$($gen_opts:tt)+] )*
+        {
+            $(seed($seed:expr);)?
+
+            $(
+            let $var:ident: $vty:tt < $var_float:ident > = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;
+            )*
+
+            $({
+                $($preamble:stmt)*
+            })?
+
+            assert_eq!(
+                $kernel:ident ($($kernel_arg_name:ident($($kernel_arg:expr)?)),* $(,)?) for ($($count:expr),*) @ $($max:ident)? ($($dim:expr),*),
+                $ref:expr $(,)?
+            );
+        }
+    )*
+    } => {
+    $(
+        $crate::test_kernel! {
+            generics_hetero: [
+                ($fin_name, $facc_name) in [$(($fin_ty, $facc_ty)),+];
+                $($gen_name in [$($gen_opts)+] ;)*
+            ];
+            ctx: {
+                attrs: $(#[$attr])*;
+                name: $name;
+                args: ($($args)*);
+                seed: ($($seed)?);
+                vars: $(let $var: $vty < $var_float > = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;)*;
                 preamble: {
                     $($($preamble)*)?
                 };
@@ -177,8 +225,57 @@ macro_rules! test_kernel {
         }
     };
 
-    // ==================== FUNCTION GENERATION ====================
-    // Creates the actual test function with type suffix (e.g., `test_name_f32`)
+    // ==================== GENERICS EXPANSION (HETEROGENEOUS) ====================
+    {
+        generics_hetero: [
+            ($fin_name:ident, $facc_name:ident) in [$($float_pairs:tt)+];
+            $($gen_rest:tt)*
+        ];
+        ctx: $ctx:tt;
+    } => {
+        $crate::test_kernel! {
+            @hetero_expand_pairs
+            fin_name: $fin_name;
+            facc_name: $facc_name;
+            pairs: [$($float_pairs)+];
+            rest: [$($gen_rest)*];
+            ctx: $ctx;
+        }
+    };
+
+    {
+        @hetero_expand_pairs
+        fin_name: $fin_name:ident;
+        facc_name: $facc_name:ident;
+        pairs: [$(($fin_ty:tt, $facc_ty:tt)),+];
+        rest: $rest:tt;
+        ctx: $ctx:tt;
+    } => {
+        $(
+            $crate::test_kernel! {
+                @hetero_cartesian
+                fin: $fin_name = $fin_ty;
+                facc: $facc_name = $facc_ty;
+                rest: $rest;
+                ctx: $ctx;
+            }
+        )+
+    };
+
+    {
+        @hetero_cartesian
+        fin: $fin_name:ident = $fin_ty:tt;
+        facc: $facc_name:ident = $facc_ty:tt;
+        rest: [$($gen_name:ident in [$($gen_opts:tt)+] ;)*];
+        ctx: { $($ctx:tt)+ };
+    } => {
+        $crate::cartesian! {
+            test_kernel!(hetero: $fin_name = $fin_ty, $facc_name = $facc_ty; $($ctx)+);
+            $($gen_name in [$($gen_opts)+] ;)*
+        }
+    };
+
+    // ==================== FUNCTION GENERATION (HOMOGENEOUS) ====================
     {
         types: [
             $float_name:ident = $float_ty:ty as $float_str:ident;
@@ -193,7 +290,6 @@ macro_rules! test_kernel {
             $(#[$attr])*
             #[allow(unused_mut)]
             fn [< $name _ $float_str $(_ $gen_str:snake)* >]($($args)*) {
-                // Create type aliases so user can refer to the types by name
                 #[allow(dead_code)]
                 type $float_name = $float_ty;
                 $(
@@ -203,7 +299,7 @@ macro_rules! test_kernel {
                 test_kernel! {
                     @inner
                     name: $name;
-                    float_type: $float_ty;
+                    launch_types: [$float_ty];
                     gen_names: [$($gen_name),*];
                     args: ($($args)*);
                     $($rest)*
@@ -212,16 +308,78 @@ macro_rules! test_kernel {
         }
     };
 
+    // ==================== FUNCTION GENERATION (HETEROGENEOUS) ====================
+    {
+        types: [
+            $( $gen_name:ident = $gen_t:ty as $gen_str:ident ; )*
+        ];
+        hetero: $fin_name:ident = $fin_ty:tt, $facc_name:ident = $facc_ty:tt;
+        attrs: $(#[$attr:meta])*;
+        name: $name:ident;
+        args: ($($args:tt)*);
+        $($rest:tt)*
+    } => {
+        $crate::test_kernel! {
+            @gen_hetero_fn
+            fin: $fin_name = $fin_ty;
+            facc: $facc_name = $facc_ty;
+            types: [ $( $gen_name = $gen_t as $gen_str ; )* ];
+            attrs: $(#[$attr])*;
+            name: $name;
+            args: ($($args)*);
+            $($rest)*
+        }
+    };
+
+    {
+        @gen_hetero_fn
+        fin: $fin_name:ident = $fin_ty:tt;
+        facc: $facc_name:ident = $facc_ty:tt;
+        types: [ $( $gen_name:ident = $gen_t:ty as $gen_str:ident ; )* ];
+        attrs: $(#[$attr:meta])*;
+        name: $name:ident;
+        args: ($($args:tt)*);
+        $($rest:tt)*
+    } => {
+        ::paste::paste! {
+            $(#[$attr])*
+            #[allow(unused_mut)]
+            fn [< $name _ $fin_ty _ $facc_ty $(_ $gen_str:snake)* >]($($args)*) {
+                #[allow(dead_code)]
+                type $fin_name = test_kernel!{ @resolve_float_ty $fin_ty };
+                #[allow(dead_code)]
+                type $facc_name = test_kernel!{ @resolve_float_ty $facc_ty };
+                $(
+                    #[allow(dead_code)]
+                    type $gen_name = $gen_t;
+                )*
+                test_kernel! {
+                    @inner
+                    name: $name;
+                    launch_types: [test_kernel!{ @resolve_float_ty $fin_ty }, test_kernel!{ @resolve_float_ty $facc_ty }];
+                    gen_names: [$($gen_name),*];
+                    args: ($($args)*);
+                    $($rest)*
+                }
+            }
+        }
+    };
+
+    { @resolve_float_ty bf16 } => { ::half::bf16 };
+    { @resolve_float_ty f16 } => { ::half::f16 };
+    { @resolve_float_ty f32 } => { f32 };
+    { @resolve_float_ty f64 } => { f64 };
+
     // ==================== TEST BODY (@inner) ====================
     // Generates the actual test implementation: setup, kernel launch, and verification
     {
         @inner
         name: $name:ident;
-        float_type: $t:ty;
+        launch_types: [$($launch_ty:ty),+];
         gen_names: [$($($gen_name:ident),+)?];
         args: ($($args:tt)*);
         seed: ($($seed:expr)?);
-        vars: $(let $var:ident: $vty:tt = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;)*;
+        vars: $(let $var:ident: $vty:tt < $var_float:ident > = [$($val:expr),*] $(as $distrib:ident $(($($distrib_param:expr),+))?)?;)*;
         preamble: { $($preamble:stmt)* };
         kernel: $kernel:ident;
         kernel_args: ($($kernel_arg_name:ident($($kernel_arg:expr)?)),*);
@@ -242,7 +400,7 @@ macro_rules! test_kernel {
             //    generated by the macro, they would be unique and not accessible
             //    outside of that invocation due to hygiene.
             $(
-            test_kernel!{ @val($t, rng, client) $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;
+            test_kernel!{ @val($var_float, rng, client) $vty = [$($val),*] $(as $distrib $(($($distrib_param),+))?)?;
                 [< $var _shape >], [< $var _strides >], [< $var _len >], $var
             }
             )*
@@ -252,7 +410,7 @@ macro_rules! test_kernel {
 
             // 2. Upload variables to GPU and create CubeCL args.
             $(
-            test_kernel!{ @upload($t, rng, client) $vty = [$($val),*] ;
+            test_kernel!{ @upload($var_float, rng, client) $vty = [$($val),*] ;
                 [< $var _shape >], [< $var _strides >], [< $var _len >],
                 $var, [< $var _handle >], [< $var _arg >]
             }
@@ -260,7 +418,7 @@ macro_rules! test_kernel {
 
             // 3. Launch the kernel
             println!("Launching kernel");
-            $kernel::launch::<$t $(, $($gen_name),*)?, $crate::test_utils::TestRuntime>(
+            $kernel::launch::<$($launch_ty),+ $(, $($gen_name),*)?, $crate::test_utils::TestRuntime>(
                 &client,
                 CubeCount::Static($(($count) as u32),*),
                 test_kernel!{ @dim(client) $($max)? ($($dim),*) },
