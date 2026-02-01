@@ -249,8 +249,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
     cs_cs_a: &mut CsCsTile<P>,
     cs_cs_b: &mut CsCsTile<P>,
     grad_grad_l_out: &mut CsFTile<P>,
-    grad_xk_mini_out: &mut CsFTile<P>,
-    grad_xk_attn_out: &mut CsFTile<P>,
+    grad_xk_combined_out: &mut CsFTile<P>,
 ) -> Stage3Part1Outputs<P> {
     // --- Compute grad_grad_l from three sources ---
 
@@ -346,7 +345,8 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    cube::store_rt_to_st(&d_xk_attn_reg, grad_xk_attn_out);
+    // Store d_xk_attn to combined output (first contribution)
+    cube::store_rt_to_st(&d_xk_attn_reg, grad_xk_combined_out);
 
     sync_cube();
 
@@ -363,9 +363,14 @@ fn backward_stage3_part1<P: ParamsTrait>(
     sync_cube();
 
     // grad_xk_mini = -grad_l_last * last_eta
-    grad_xk_mini_out.copy_from(scratch1);
-    grad_xk_mini_out.mul_col(last_eta);
-    grad_xk_mini_out.neg();
+    // Compute in scratch1 and add to combined output
+    scratch1.mul_col(last_eta);
+    scratch1.neg();
+
+    sync_cube();
+
+    // Add grad_xk_mini to the combined output (second contribution)
+    grad_xk_combined_out.add(scratch1);
 
     sync_cube();
 
@@ -741,8 +746,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     grad_ln_bias_s4: &FRegBig<P>,
     // Stage 3 outputs
     grad_xq_mini: &CsFTile<P>,
-    grad_xk_mini: &CsFTile<P>,
-    grad_xk_attn: &CsFTile<P>,
+    grad_xk_combined: &CsFTile<P>, // grad_xk_mini + grad_xk_attn already combined
     grad_ttt_lr_eta: &CsRegBig<P>,
     // Stage 2 outputs
     grad_Z1: &CsFTile<P>,
@@ -790,8 +794,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     sync_cube();
 
     scratch1.sub(grad_target);
-    scratch1.add(grad_xk_mini);
-    scratch1.add(grad_xk_attn);
+    scratch1.add(grad_xk_combined);
 
     sync_cube();
 
@@ -836,13 +839,21 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 // Main backward stage function
 // =============================================================================
 
-/// Memory layout (for 16×32 tiles):
-/// - Q/K transposed: q_smem, k_smem (2 F×CS = 8KB)
-/// - Scratch: scratch1, scratch2 (2 CS×F = 8KB)
-/// - CS×CS pool: cs_cs_a, cs_cs_b (2 CS×CS = 8KB)
-/// - CS×F pool: 10 tiles for stage outputs (10 CS×F = 40KB)
-/// - grad_l_smem (CS×F = 4KB) - included in pool as pool_cs_f_a
-/// - temp_f_f: shared F×F tile for grad_W_z1bar (stage 4), weight_init (stage 3.2/1), dW_tile (stage 1)
+/// Memory layout (optimized tile usage):
+/// For CS=mini_batch_size, F=head_dim:
+/// - 11 CS×F tiles: scratch1, scratch2, tile_grad_z1_bar, tile_b, tile_c,
+///                  tile_grad_xk_combined, tile_e, tile_f, tile_grad_Z1,
+///                  tile_grad_target, grad_l_smem
+/// - 2 CS×CS tiles: cs_cs_a, cs_cs_b
+/// - 2 F×CS tiles: q_smem, k_smem
+/// - 2 F×F tiles: temp_f_f, grad_L_W_last
+///
+/// Example sizes:
+/// - 16×32:  11*1KB + 2*0.5KB + 2*1KB + 2*2KB = 18KB
+/// - 16×64:  11*2KB + 2*0.5KB + 2*2KB + 2*8KB = 43KB (fits 64KB LDS!)
+/// - 32×64: 11*4KB + 2*2KB + 2*4KB + 2*8KB = 72KB (exceeds 64KB)
+///
+/// temp_f_f is repurposed across stages:
 ///
 /// F×F tile optimization: Instead of 3 separate F×F tiles (weight_init, grad_W_z1bar, dW_tile),
 /// we use a single temp_f_f tile that is repurposed across stages:
@@ -883,11 +894,12 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut tile_grad_z1_bar = P::cs_f_tile();
     let mut tile_b = P::cs_f_tile();
     let mut tile_c = P::cs_f_tile();
-    let mut tile_grad_xk_mini = P::cs_f_tile();
+    // tile_grad_xk_combined holds grad_xk_mini + grad_xk_attn (combined to save 1 tile)
+    let mut tile_grad_xk_combined = P::cs_f_tile();
     let mut tile_e = P::cs_f_tile();
     let mut tile_f = P::cs_f_tile();
-    let mut tile_grad_xk_attn = P::cs_f_tile();
     // tile_h eliminated: grad_output_fused reuses tile_grad_z1_bar after stage 3 part 2
+    // tile_grad_xk_attn eliminated: combined with grad_xk_mini above
     let mut tile_grad_Z1 = P::cs_f_tile();
     let mut tile_grad_target = P::cs_f_tile();
 
@@ -991,9 +1003,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &mut scratch2,
         &mut cs_cs_a,
         &mut cs_cs_b,
-        &mut tile_e,           // grad_grad_l output
-        &mut tile_grad_xk_mini,
-        &mut tile_grad_xk_attn,
+        &mut tile_e,              // grad_grad_l output
+        &mut tile_grad_xk_combined, // grad_xk_mini + grad_xk_attn combined
     );
 
     // Rename output from stage 3 part 1
@@ -1110,8 +1121,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &stage4_out.grad_ln_bias,
         // Stage 3 outputs
         &grad_xq_mini,
-        &tile_grad_xk_mini,
-        &tile_grad_xk_attn,
+        &tile_grad_xk_combined, // grad_xk_mini + grad_xk_attn already combined
         &stage3_out.grad_ttt_lr_eta,
         // Stage 2 outputs
         &tile_grad_Z1,
