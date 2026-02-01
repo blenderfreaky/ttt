@@ -23,8 +23,6 @@ pub type TrainingBackend = burn::backend::Autodiff<
     GpuBackend,
     burn::backend::autodiff::checkpoint::strategy::BalancedCheckpointing,
 >;
-// Reference CPU backend for tests
-pub type CpuBackend = burn::backend::NdArray;
 
 /// Default vocab size for tests (GPT-2 tokenizer size)
 pub const TEST_VOCAB_SIZE: usize = 50257;

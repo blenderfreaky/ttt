@@ -760,19 +760,14 @@ unsafe impl<R: CubeRuntime> Send for TttPtrStreamingState<R> {}
 #[cfg(all(test, feature = "rocm"))]
 mod tests {
     use super::super::streaming_ptr_wrapper::FusedTilePtrStreamingState;
-    use crate::ttt::{
-        GpuBackend,
-        cubecl_kernels::{
-            FusedPtrStreaming,
-            test_utils::{TestDims, test_fwd},
-        },
-    };
+    use crate::FusedPtrStreaming;
+    use ttt_core::{GpuBackend, test_utils::{TestDims, test_fwd}};
 
     // TODO: ptr streaming kernel has issues, needs investigation
     #[test]
     #[ignore]
     fn test_ptr_streaming_vs_ttt_linear() {
-        let _guard = super::STREAMING_TEST_MUTEX.lock().unwrap();
+        let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX.lock().unwrap();
 
         let dims = TestDims::multi_stage(2, 2, 32, 8, 2).with_iterations(2);
         test_fwd::<

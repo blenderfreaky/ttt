@@ -226,7 +226,8 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ttt::{GpuAutodiffBackend, TEST_VOCAB_SIZE, cubecl_kernels::FusedLinear};
+    use ttt_core::{GpuAutodiffBackend, TEST_VOCAB_SIZE};
+    use ttt_fused::FusedLinear;
 
     type Inner = FusedLinear<GpuAutodiffBackend>;
 
@@ -251,7 +252,7 @@ mod tests {
     #[test]
     #[allow(clippy::cast_precision_loss)]
     fn test_fused_full_model_training_iterations() {
-        use crate::data::TrainingTextGenerationBatch;
+        use ttt_data::TrainingTextGenerationBatch;
 
         let device = Default::default();
 

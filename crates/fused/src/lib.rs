@@ -35,14 +35,9 @@
 
 use std::marker::PhantomData;
 
-use burn::{
-    backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
-    prelude::*,
-};
-use burn_cubecl::{BoolElement, CubeBackend, CubeRuntime, FloatElement, IntElement};
-use burn_fusion::{Fusion, FusionBackend};
+use burn::prelude::*;
 use ttt_core::TTTInnerModel;
-use ttt_kernels::{FusedKernel, FusedKernelBackend, GeluBwdKernel, GeluTanhKernel};
+use ttt_kernels::{FusedKernelBackend, GeluBwdKernel, GeluTanhKernel};
 
 pub mod linear_fused;
 pub mod linear_fused_tile;
@@ -62,7 +57,7 @@ pub use ttt::{TttInputs, TttKernel, TttOutputs};
 
 /// Marker for the basic fused TTT-Linear kernel.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LinearKernel;
+pub struct NaiveKernel;
 
 /// Marker for the tiled fused TTT-Linear kernel (single-stage).
 #[derive(Debug, Clone, Copy, Default)]
@@ -85,7 +80,7 @@ pub struct PtrStreamingKernel;
 // ============================================================================
 
 /// Basic fused TTT-Linear kernel.
-pub type FusedLinear<B> = Fused<B, ttt_core::TTTLinear<B>, LinearKernel>;
+pub type FusedLinear<B> = Fused<B, ttt_core::TTTLinear<B>, NaiveKernel>;
 
 /// Tiled fused TTT-Linear kernel (single-stage).
 pub type FusedTile<B> = Fused<B, ttt_core::TTTLinear<B>, TileKernel>;
@@ -128,66 +123,27 @@ pub trait FusedTttBackend:
 {
 }
 
-impl<R, F, I, BT> FusedTttBackend for CubeBackend<R, F, I, BT>
-where
-    R: CubeRuntime,
-    F: FloatElement,
-    I: IntElement,
-    BT: BoolElement,
-{
-}
-
 #[cfg(feature = "rocm")]
-impl<B> FusedTttBackend for Fusion<B>
-where
-    B: FusedTttBackend + FusionBackend,
-    Self: FusedKernelBackend<TttKernel, 9, 3>
+impl<B> FusedTttBackend for B where
+    B: Backend
+        + FusedKernelBackend<TttKernel, 9, 3>
         + FusedKernelBackend<TttTileKernel, 9, 10>
         + FusedKernelBackend<TttTileMultiKernel, 9, 10>
         + FusedKernelBackend<TttStreamingKernel, 9, 10>
         + FusedKernelBackend<TttPtrStreamingKernel, 9, 10>
         + FusedKernelBackend<GeluTanhKernel, 1, 1>
-        + FusedKernelBackend<GeluBwdKernel, 1, 1>,
+        + FusedKernelBackend<GeluBwdKernel, 1, 1>
 {
 }
 
 #[cfg(not(feature = "rocm"))]
-impl<B> FusedTttBackend for Fusion<B>
-where
-    B: FusedTttBackend + FusionBackend,
-    Self: FusedKernelBackend<TttKernel, 9, 3>
+impl<B> FusedTttBackend for B where
+    B: Backend
+        + FusedKernelBackend<TttKernel, 9, 3>
         + FusedKernelBackend<TttTileKernel, 9, 10>
         + FusedKernelBackend<TttTileMultiKernel, 9, 10>
         + FusedKernelBackend<GeluTanhKernel, 1, 1>
-        + FusedKernelBackend<GeluBwdKernel, 1, 1>,
-{
-}
-
-#[cfg(feature = "rocm")]
-impl<B, C> FusedTttBackend for Autodiff<B, C>
-where
-    B: FusedTttBackend,
-    C: CheckpointStrategy,
-    Self: FusedKernelBackend<TttKernel, 9, 3>
-        + FusedKernelBackend<TttTileKernel, 9, 10>
-        + FusedKernelBackend<TttTileMultiKernel, 9, 10>
-        + FusedKernelBackend<TttStreamingKernel, 9, 10>
-        + FusedKernelBackend<TttPtrStreamingKernel, 9, 10>
-        + FusedKernelBackend<GeluTanhKernel, 1, 1>
-        + FusedKernelBackend<GeluBwdKernel, 1, 1>,
-{
-}
-
-#[cfg(not(feature = "rocm"))]
-impl<B, C> FusedTttBackend for Autodiff<B, C>
-where
-    B: FusedTttBackend,
-    C: CheckpointStrategy,
-    Self: FusedKernelBackend<TttKernel, 9, 3>
-        + FusedKernelBackend<TttTileKernel, 9, 10>
-        + FusedKernelBackend<TttTileMultiKernel, 9, 10>
-        + FusedKernelBackend<GeluTanhKernel, 1, 1>
-        + FusedKernelBackend<GeluBwdKernel, 1, 1>,
+        + FusedKernelBackend<GeluBwdKernel, 1, 1>
 {
 }
 

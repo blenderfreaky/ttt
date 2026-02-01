@@ -359,19 +359,14 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, StreamingKe
 #[cfg(all(test, feature = "rocm"))]
 mod tests {
     use super::*;
-    use crate::ttt::{
-        GpuBackend,
-        cubecl_kernels::{
-            FusedTileStreaming,
-            test_utils::{TestDims, test_fwd},
-        },
-    };
+    use crate::FusedTileStreaming;
+    use ttt_core::{GpuBackend, test_utils::{TestDims, test_fwd}};
 
     // TODO: streaming kernel has issues, needs investigation
     #[test]
     #[ignore]
     fn test_streaming_vs_ttt_linear() {
-        let _guard = super::STREAMING_TEST_MUTEX.lock().unwrap();
+        let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX.lock().unwrap();
 
         let dims = TestDims::new(2, 2, 32, 8).with_iterations(2);
         test_fwd::<

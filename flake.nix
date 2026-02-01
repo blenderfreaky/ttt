@@ -140,6 +140,7 @@
           buildInputs = with pkgs;
             [
               stdenv.cc.cc.lib
+              sqlite
 
               # intel-llvm
               # oneDNN

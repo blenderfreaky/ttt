@@ -10,7 +10,7 @@ ttt-fused = { workspace = true }
 ttt-layer = { workspace = true }
 ttt-data = { workspace = true }
 ttt-training = { workspace = true }
-burn = { workspace = true, features = ["ndarray", "train", "tui", "metrics", "autodiff", "cubecl", "fusion"] }
+burn = { workspace = true, features = ["train", "tui", "metrics", "autodiff", "cubecl", "fusion"] }
 clap.workspace = true
 clap_complete.workspace = true
 glob.workspace = true

@@ -6,7 +6,8 @@ bench-results/
 gpucore.*
 __pycache__/
 
-# Profiling output
+*-runs/
+
 profile_analysis/
 profile_artifacts/
 profile_out/

@@ -24,8 +24,7 @@ pub mod metrics_export;
 
 // Re-export core types
 pub use ttt_core::{
-    CpuBackend, GpuAutodiffBackend, GpuBackend, PositionEncodingType, TTTConfig, TTTLayerType,
-    TrainingBackend,
+    GpuAutodiffBackend, GpuBackend, PositionEncodingType, TTTConfig, TTTLayerType, TrainingBackend,
 };
 // Re-export inner models
 pub use ttt_core::{TTTInnerModel, TTTLinear, TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4};

@@ -3,9 +3,9 @@ use std::{ops::Range, sync::Arc};
 use burn::tensor::Tensor;
 use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear};
 
-use crate::{Fused, FusedTttBackend, LinearKernel, fused_ttt_forward};
+use crate::{Fused, FusedTttBackend, NaiveKernel, fused_ttt_forward};
 
-impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, LinearKernel> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, NaiveKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
     type State = <TTTLinear<B> as TTTInnerModel<B>>::State;
 
@@ -68,7 +68,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, LinearKerne
 #[cfg(test)]
 mod tests {
     use ttt_core::{GpuAutodiffBackend, GpuBackend, TTTLinearState};
-    use ttt_kernels::test_utils::{TestDims, test_backward_fmb, test_fmb};
+    use ttt_core::test_utils::{TestDims, test_backward_fmb, test_fmb};
 
     use crate::FusedLinear;
 

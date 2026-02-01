@@ -218,7 +218,7 @@ pub fn interactive<B: FusedTttBackend>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ttt::{GpuBackend, TTTConfig};
+    use ttt_core::{GpuBackend, TTTConfig};
 
     /// Basic sanity check that everything runs without raising errors
     #[test]

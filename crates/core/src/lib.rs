@@ -32,12 +32,12 @@ pub mod mlp;
 pub mod mlp2;
 pub mod mlp3;
 pub mod mlp4;
+pub mod test_utils;
 pub mod util;
 
-// Re-export commonly used items
 pub use config::{
-    CpuBackend, GpuAutodiffBackend, GpuBackend, PositionEncodingType, TEST_VOCAB_SIZE, TTTConfig,
-    TTTLayerType, TrainingBackend,
+    GpuAutodiffBackend, GpuBackend, PositionEncodingType, TEST_VOCAB_SIZE, TTTConfig, TTTLayerType,
+    TrainingBackend,
 };
 pub use inner::{Qkv, TTTInnerModel, TTTInputsInner};
 pub use linear::{TTTLinear, TTTLinearConfig, TTTLinearState};
