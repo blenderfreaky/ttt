@@ -30,7 +30,8 @@ num-traits = "0.2"
 derive-new = "0.7"
 glob = "0.3"
 memmap2 = "0.9"
-bytemuck = { version = "1.24", features = ["derive"] }
+rayon = "1.11"
+bytemuck = { version = "1.25", features = ["derive"] }
 dirs = "6.0"
 log = "0.4"
 env_logger = "0.11"
@@ -67,4 +68,5 @@ wgpu = ["burn/wgpu", "cubecl/wgpu", "thundercube/wgpu"]
 cpu = ["burn/cpu", "cubecl/cpu", "thundercube/cpu"]
 
 sweep_tests = []
-tile-tuning = []  # Enable additional tile configurations for benchmarking thread counts
+tile-tuning = [
+] # Enable additional tile configurations for benchmarking thread counts

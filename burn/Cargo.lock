@@ -939,9 +939,9 @@ dependencies = [
 
 [[package]]
 name = "bytemuck"
-version = "1.24.0"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fbdf580320f38b612e485521afda1ee26d10cc9884efaaa750d383e13e3c5f4"
+checksum = "c8efb64bd706a16a1bdde310ae86b351e4d21550d98d056f22f8a7f7a2183fec"
 dependencies = [
  "bytemuck_derive",
 ]
@@ -1059,9 +1059,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.54"
+version = "1.2.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6354c81bbfd62d9cfa9cb3c773c2b7b2a3a482d569de977fd0e961f6e7c00583"
+checksum = "47b26a0954ae34af09b50f0de26458fa95369a0d478d8236d3f93082b219bd29"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1140,9 +1140,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.55"
+version = "4.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e34525d5bbbd55da2bb745d34b36121baac88d07619a9a09cfcf4a6c0832785"
+checksum = "a75ca66430e33a14957acc24c5077b503e7d374151b2b4b3a10c83b4ceb4be0e"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1150,9 +1150,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.55"
+version = "4.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59a20016a20a3da95bef50ec7238dbd09baeef4311dcdd38ec15aba69812fb61"
+checksum = "793207c7fa6300a0608d1080b858e5fdbe713cdc1c8db9fb17777d8a13e63df0"
 dependencies = [
  "anstream",
  "anstyle",
@@ -2516,9 +2516,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8591b0bcc8a98a64310a2fae1bb3e9b8564dd10e381e6e28010fde8e8e8568db"
+checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "fixedbitset"
@@ -3438,7 +3438,7 @@ dependencies = [
  "rgb",
  "tiff",
  "zune-core 0.5.1",
- "zune-jpeg 0.5.11",
+ "zune-jpeg 0.5.12",
 ]
 
 [[package]]
@@ -4523,18 +4523,18 @@ checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "portable-atomic"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
+checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "portable-atomic-util"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
+checksum = "7a9db96d7fa8782dd8c15ce32ffe8680bbd1e978a43bf51a34d39483540495f5"
 dependencies = [
  "portable-atomic",
 ]
@@ -5510,9 +5510,9 @@ dependencies = [
 
 [[package]]
 name = "slab"
-version = "0.4.11"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slotmap"
@@ -6229,9 +6229,9 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tracel-llvm"
-version = "20.1.4-6"
+version = "20.1.4-7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e35a47ae632d2e79a905d8edfaa95bc3fbcc11ed8fcab2591db57decd9f61f1"
+checksum = "982535db9eb1a30ac0f2c50239a0eec3e5cf50993a88e92b04747bd2f4d365b2"
 dependencies = [
  "tracel-mlir-rs",
  "tracel-mlir-sys",
@@ -6239,9 +6239,9 @@ dependencies = [
 
 [[package]]
 name = "tracel-llvm-bundler"
-version = "20.1.4-6"
+version = "20.1.4-7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71d48eaa6cab9e2b215328791e5e5e1484dc8bba154834493601783fba59d3fe"
+checksum = "3c75b8e477cb8d49d907afab029ca74d48459f5b88c27bdb4c6cd6acb5e61977"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6259,9 +6259,9 @@ dependencies = [
 
 [[package]]
 name = "tracel-mlir-rs"
-version = "20.1.4-6"
+version = "20.1.4-7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f451ed4fd027e73a35abd35413aa27e39c8dc23603aab4428c3e272b166bb7d"
+checksum = "77a478a35efd68d0ba73f747adfb7923b121c64e7f5be9cd8364ca1dcb772d5c"
 dependencies = [
  "tracel-mlir-rs-macros",
  "tracel-mlir-sys",
@@ -6269,9 +6269,9 @@ dependencies = [
 
 [[package]]
 name = "tracel-mlir-rs-macros"
-version = "20.1.4-6"
+version = "20.1.4-7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b525a2eca2e67be29494e05ae0205286b61567715c769c31eb805410ea66566c"
+checksum = "7a94f36868c3b10b1825945223d99d106c73f4d249f063caa4651deeb9379344"
 dependencies = [
  "comrak",
  "convert_case 0.8.0",
@@ -6286,18 +6286,18 @@ dependencies = [
 
 [[package]]
 name = "tracel-mlir-sys"
-version = "20.1.4-6"
+version = "20.1.4-7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bdc8d6e648105d1807f94a7fe74b2f814de6f024dcd085aa00873dca638ab4d"
+checksum = "02f26d31af0c225a6d2e3d65d012fd6de848c9fc776897b152ee83b7d1bd15c4"
 dependencies = [
  "tracel-llvm-bundler",
 ]
 
 [[package]]
 name = "tracel-tblgen-rs"
-version = "20.1.4-6"
+version = "20.1.4-7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f8d06d0dc95d1caab0cc83b891ee37a7b5171e95a657a545a4045941450a2c0"
+checksum = "00d2581070380418ccc33b500f3739e4d4869421fdb477fcea51ff97c6253a52"
 dependencies = [
  "bindgen",
  "cc",
@@ -6410,6 +6410,7 @@ dependencies = [
  "num-traits",
  "paste",
  "rand 0.9.2",
+ "rayon",
  "safetensors 0.7.0",
  "serde",
  "serde_json",
@@ -7403,18 +7404,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.35"
+version = "0.8.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdea86ddd5568519879b8187e1cf04e24fce28f7fe046ceecbce472ff19a2572"
+checksum = "7456cf00f0685ad319c5b1693f291a650eaf345e941d082fc4e03df8a03996ac"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.35"
+version = "0.8.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c15e1b46eff7c6c91195752e0eeed8ef040e391cdece7c25376957d5f15df22"
+checksum = "1328722bbf2115db7e19d69ebcc15e795719e2d66b60827c6a69a117365e37a0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7515,9 +7516,9 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02aae0f83f69aafc94776e879363e9771d7ecbffe2c7fbb6c14c5e00dfe88439"
+checksum = "1966f8ac2c1f76987d69a74d0e0f929241c10e78136434e3be70ff7f58f64214"
 
 [[package]]
 name = "zstd"
@@ -7580,9 +7581,9 @@ dependencies = [
 
 [[package]]
 name = "zune-jpeg"
-version = "0.5.11"
+version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2959ca473aae96a14ecedf501d20b3608d2825ba280d5adb57d651721885b0c2"
+checksum = "410e9ecef634c709e3831c2cfdb8d9c32164fae1c67496d5b68fff728eec37fe"
 dependencies = [
  "zune-core 0.5.1",
 ]
