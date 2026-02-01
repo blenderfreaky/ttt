@@ -40,7 +40,7 @@ fn bench_mma_AtB<
     #[unroll]
     for _ in 0..iters {
         rt_c.zero();
-        mma_AtB(&mut rt_c, &st_a, &st_b);
+        mma_AtB::<F, F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(&mut rt_c, &st_a, &st_b);
     }
 
     store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
@@ -73,7 +73,7 @@ fn bench_mma_AB<
     #[unroll]
     for _ in 0..iters {
         rt_c.zero();
-        mma_AB(&mut rt_c, &st_a, &st_b);
+        mma_AB::<F, F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(&mut rt_c, &st_a, &st_b);
     }
 
     store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);

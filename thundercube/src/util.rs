@@ -208,3 +208,14 @@ pub fn wait_for_sync<R: Runtime>(
 ) -> Result<(), cubecl::server::ExecutionError> {
     pollster::block_on(client.sync())
 }
+
+/// Casts a Line<FIn> to Line<FOut> element-wise.
+#[cube]
+pub fn cast_line<FIn: Float, FOut: Float>(input: Line<FIn>) -> Line<FOut> {
+    let mut result = Line::<FOut>::empty(LINE_SIZE);
+    result[0] = FOut::cast_from(input[0]);
+    result[1] = FOut::cast_from(input[1]);
+    result[2] = FOut::cast_from(input[2]);
+    result[3] = FOut::cast_from(input[3]);
+    result
+}

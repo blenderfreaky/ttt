@@ -13,11 +13,7 @@ use thundercube::{
 
 /// Kernel demonstrating various St (shared memory tile) operations
 #[cube(launch)]
-fn demo_st_ops<F: Float>(
-    a: &Tensor<Line<F>>,
-    b: &Tensor<Line<F>>,
-    out: &mut Tensor<Line<F>>,
-) {
+fn demo_st_ops<F: Float>(a: &Tensor<Line<F>>, b: &Tensor<Line<F>>, out: &mut Tensor<Line<F>>) {
     // Create shared memory tiles for 8x8 matrices
     let mut tile_a = St::<F, D8, D8>::new();
     let mut tile_b = St::<F, D8, D8>::new();
@@ -49,11 +45,7 @@ fn demo_st_ops<F: Float>(
 
 /// Kernel demonstrating Rt (register tile) operations and matrix multiply
 #[cube(launch)]
-fn demo_rt_ops<F: Float>(
-    a: &Tensor<Line<F>>,
-    b: &Tensor<Line<F>>,
-    out: &mut Tensor<Line<F>>,
-) {
+fn demo_rt_ops<F: Float>(a: &Tensor<Line<F>>, b: &Tensor<Line<F>>, out: &mut Tensor<Line<F>>) {
     // Load matrices into shared memory first
     let mut st_a = St::<F, D8, D8>::new();
     let mut st_b = St::<F, D8, D8>::new();
@@ -71,7 +63,7 @@ fn demo_rt_ops<F: Float>(
     sync_cube();
 
     // Apply unary operations on the register tile
-    rt_result.neg();  // Negate all elements
+    rt_result.neg(); // Negate all elements
 
     // Add a scalar to each row
     let mut row_offset = Rv::<F, D8>::new();
@@ -88,10 +80,7 @@ fn demo_rt_ops<F: Float>(
 
 /// Kernel demonstrating Rv (register vector) operations
 #[cube(launch)]
-fn demo_rv_ops<F: Float>(
-    input: &Tensor<Line<F>>,
-    out: &mut Tensor<Line<F>>,
-) {
+fn demo_rv_ops<F: Float>(input: &Tensor<Line<F>>, out: &mut Tensor<Line<F>>) {
     // Load a matrix into shared memory
     let mut st = St::<F, D8, D8>::new();
     cube::load_st_direct(input, &mut st, 0, 0, 0);
@@ -135,30 +124,41 @@ fn main() {
 
         let shape = vec![8usize, 8];
         let strides = vec![8usize, 1];
-        let arg_a = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_a, &strides, &shape, LINE_SIZE) };
-        let arg_b = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_b, &strides, &shape, LINE_SIZE) };
-        let arg_out = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_out, &strides, &shape, LINE_SIZE) };
+        let arg_a = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_a, &strides, &shape, LINE_SIZE)
+        };
+        let arg_b = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_b, &strides, &shape, LINE_SIZE)
+        };
+        let arg_out = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_out, &strides, &shape, LINE_SIZE)
+        };
 
         demo_st_ops::launch::<f32, TestRuntime>(
             &client,
             CubeCount::Static(1, 1, 1),
             CubeDim::new_1d(32),
-            arg_a, arg_b, arg_out,
-        ).expect("st ops failed");
+            arg_a,
+            arg_b,
+            arg_out,
+        )
+        .expect("st ops failed");
 
         let result_bytes = client.read_one(handle_out);
         let result: Vec<f32> = f32::from_bytes(&result_bytes).to_vec();
 
         println!("\n=== St Ops: (A + B) * 2 then tril ===");
         for row in 0..8 {
-            println!("Row {}: {:?}", row, &result[row*8..(row+1)*8]);
+            println!("Row {}: {:?}", row, &result[row * 8..(row + 1) * 8]);
         }
     }
 
     // Demo 2: Rt operations (matmul, neg, add_row)
     {
         let a: Vec<f32> = (0..SIZE).map(|i| (i % 8) as f32 * 0.1).collect();
-        let b: Vec<f32> = (0..SIZE).map(|i| if i / 8 == i % 8 { 1.0 } else { 0.0 }).collect(); // identity
+        let b: Vec<f32> = (0..SIZE)
+            .map(|i| if i / 8 == i % 8 { 1.0 } else { 0.0 })
+            .collect(); // identity
 
         let handle_a = client.create_from_slice(f32::as_bytes(&a));
         let handle_b = client.create_from_slice(f32::as_bytes(&b));
@@ -166,16 +166,25 @@ fn main() {
 
         let shape = vec![8usize, 8];
         let strides = vec![8usize, 1];
-        let arg_a = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_a, &strides, &shape, LINE_SIZE) };
-        let arg_b = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_b, &strides, &shape, LINE_SIZE) };
-        let arg_out = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_out, &strides, &shape, LINE_SIZE) };
+        let arg_a = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_a, &strides, &shape, LINE_SIZE)
+        };
+        let arg_b = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_b, &strides, &shape, LINE_SIZE)
+        };
+        let arg_out = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_out, &strides, &shape, LINE_SIZE)
+        };
 
         demo_rt_ops::launch::<f32, TestRuntime>(
             &client,
             CubeCount::Static(1, 1, 1),
             CubeDim::new_1d(32),
-            arg_a, arg_b, arg_out,
-        ).expect("rt ops failed");
+            arg_a,
+            arg_b,
+            arg_out,
+        )
+        .expect("rt ops failed");
 
         let result_bytes = client.read_one(handle_out);
         let result: Vec<f32> = f32::from_bytes(&result_bytes).to_vec();
@@ -183,7 +192,7 @@ fn main() {
         println!("\n=== Rt Ops: -(A @ I) + 100 ===");
         println!("(A has rows [0, 0.1, 0.2, ..., 0.7])");
         for row in 0..4 {
-            println!("Row {}: {:?}", row, &result[row*8..(row+1)*8]);
+            println!("Row {}: {:?}", row, &result[row * 8..(row + 1) * 8]);
         }
     }
 
@@ -196,15 +205,21 @@ fn main() {
 
         let shape = vec![8usize, 8];
         let strides = vec![8usize, 1];
-        let arg_in = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_in, &strides, &shape, LINE_SIZE) };
-        let arg_out = unsafe { TensorArg::from_raw_parts::<Line<f32>>(&handle_out, &strides, &shape, LINE_SIZE) };
+        let arg_in = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_in, &strides, &shape, LINE_SIZE)
+        };
+        let arg_out = unsafe {
+            TensorArg::from_raw_parts::<Line<f32>>(&handle_out, &strides, &shape, LINE_SIZE)
+        };
 
         demo_rv_ops::launch::<f32, TestRuntime>(
             &client,
             CubeCount::Static(1, 1, 1),
             CubeDim::new_1d(32),
-            arg_in, arg_out,
-        ).expect("rv ops failed");
+            arg_in,
+            arg_out,
+        )
+        .expect("rv ops failed");
 
         let result_bytes = client.read_one(handle_out);
         let result: Vec<f32> = f32::from_bytes(&result_bytes).to_vec();

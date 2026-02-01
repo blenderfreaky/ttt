@@ -2,7 +2,7 @@
 
 use cubecl::prelude::*;
 
-use crate::{cube::swizzle, prelude::*, tiles::Dim, util::write_into_line};
+use crate::{cube::swizzle, prelude::*, tiles::Dim, util::{cast_line, write_into_line}};
 
 /// Indexer for accessing matrices with optional swizzle and transpose.
 #[derive(CubeType, Clone, Copy)]
@@ -63,10 +63,10 @@ impl Indexer {
 
 /// Accumulate along N: B is vectorized, C is row-major.
 #[cube]
-fn accum_n<F: Float, RtR: Dim, RtC: Dim>(
-    c: &mut Rt<F, RtR, RtC>,
-    a_data: &SharedMemory<Line<F>>,
-    b_data: &SharedMemory<Line<F>>,
+fn accum_n<FIn: Float, FAcc: Float, RtR: Dim, RtC: Dim>(
+    c: &mut Rt<FAcc, RtR, RtC>,
+    a_data: &SharedMemory<Line<FIn>>,
+    b_data: &SharedMemory<Line<FIn>>,
     a_idx: &Indexer,
     b_idx: &Indexer,
     c_idx: &Indexer,
@@ -87,15 +87,16 @@ fn accum_n<F: Float, RtR: Dim, RtC: Dim>(
 
     #[unroll(n_lines <= UNROLL_LIMIT_HOT)]
     for nl in 0..n_lines {
-        let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
+        let b_vec_in = b_data[b_idx.vec_index(k, offset_n + nl)];
+        let b_vec = cast_line::<FIn, FAcc>(b_vec_in);
 
         if comptime!(a_idx.transposed) {
             #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
             for ml in 0..m_lines {
-                let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
+                let a_vec_in = a_data[a_idx.vec_index(k, offset_m + ml)];
                 #[unroll]
                 for mi in 0..LINE_SIZE {
-                    let a_val = a_vec[mi];
+                    let a_val = FAcc::cast_from(a_vec_in[mi]);
                     let c_row = ml * LINE_SIZE + mi;
                     let c_line = c_idx.vec_index(c_row, nl);
                     c.data[c_line] += Line::empty(LINE_SIZE).fill(a_val) * b_vec;
@@ -108,7 +109,7 @@ fn accum_n<F: Float, RtR: Dim, RtC: Dim>(
                 for mi in 0..LINE_SIZE {
                     let m = (offset_m + ml) * LINE_SIZE + mi;
                     let (a_line, a_elem) = a_idx.scalar_index(m, k);
-                    let a_val = a_data[a_line][a_elem];
+                    let a_val = FAcc::cast_from(a_data[a_line][a_elem]);
                     let c_row = ml * LINE_SIZE + mi;
                     let c_line = c_idx.vec_index(c_row, nl);
                     c.data[c_line] += Line::empty(LINE_SIZE).fill(a_val) * b_vec;
@@ -120,10 +121,10 @@ fn accum_n<F: Float, RtR: Dim, RtC: Dim>(
 
 /// Accumulate along M: A is vectorized, C is column-major.
 #[cube]
-fn accum_m<F: Float, RtR: Dim, RtC: Dim>(
-    c: &mut Rt<F, RtR, RtC>,
-    a_data: &SharedMemory<Line<F>>,
-    b_data: &SharedMemory<Line<F>>,
+fn accum_m<FIn: Float, FAcc: Float, RtR: Dim, RtC: Dim>(
+    c: &mut Rt<FAcc, RtR, RtC>,
+    a_data: &SharedMemory<Line<FIn>>,
+    b_data: &SharedMemory<Line<FIn>>,
     a_idx: &Indexer,
     b_idx: &Indexer,
     c_idx: &Indexer,
@@ -144,15 +145,16 @@ fn accum_m<F: Float, RtR: Dim, RtC: Dim>(
 
     #[unroll(m_lines <= UNROLL_LIMIT_HOT)]
     for ml in 0..m_lines {
-        let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
+        let a_vec_in = a_data[a_idx.vec_index(k, offset_m + ml)];
+        let a_vec = cast_line::<FIn, FAcc>(a_vec_in);
 
         if comptime!(b_idx.transposed) {
             #[unroll(n_lines <= UNROLL_LIMIT_HOT)]
             for nl in 0..n_lines {
-                let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
+                let b_vec_in = b_data[b_idx.vec_index(k, offset_n + nl)];
                 #[unroll]
                 for ni in 0..LINE_SIZE {
-                    let b_val = b_vec[ni];
+                    let b_val = FAcc::cast_from(b_vec_in[ni]);
                     let c_col = nl * LINE_SIZE + ni;
                     let c_line = c_idx.vec_index(c_col, ml);
                     c.data[c_line] += a_vec * Line::empty(LINE_SIZE).fill(b_val);
@@ -165,7 +167,7 @@ fn accum_m<F: Float, RtR: Dim, RtC: Dim>(
                 for ni in 0..LINE_SIZE {
                     let n = (offset_n + nl) * LINE_SIZE + ni;
                     let (b_line, b_elem) = b_idx.scalar_index(n, k);
-                    let b_val = b_data[b_line][b_elem];
+                    let b_val = FAcc::cast_from(b_data[b_line][b_elem]);
                     let c_col = nl * LINE_SIZE + ni;
                     let c_line = c_idx.vec_index(c_col, ml);
                     c.data[c_line] += a_vec * Line::empty(LINE_SIZE).fill(b_val);
@@ -177,10 +179,10 @@ fn accum_m<F: Float, RtR: Dim, RtC: Dim>(
 
 /// Scalar accumulation fallback.
 #[cube]
-fn accum_scalar<F: Float, RtR: Dim, RtC: Dim>(
-    c: &mut Rt<F, RtR, RtC>,
-    a_data: &SharedMemory<Line<F>>,
-    b_data: &SharedMemory<Line<F>>,
+fn accum_scalar<FIn: Float, FAcc: Float, RtR: Dim, RtC: Dim>(
+    c: &mut Rt<FAcc, RtR, RtC>,
+    a_data: &SharedMemory<Line<FIn>>,
+    b_data: &SharedMemory<Line<FIn>>,
     a_idx: &Indexer,
     b_idx: &Indexer,
     c_idx: &Indexer,
@@ -203,13 +205,13 @@ fn accum_scalar<F: Float, RtR: Dim, RtC: Dim>(
     for ml in 0..m_lines {
         #[unroll]
         for mi in 0..LINE_SIZE {
-            let a_val = if comptime!(a_idx.transposed) {
+            let a_val: FAcc = if comptime!(a_idx.transposed) {
                 let a_vec = a_data[a_idx.vec_index(k, offset_m + ml)];
-                a_vec[mi]
+                FAcc::cast_from(a_vec[mi])
             } else {
                 let m = (offset_m + ml) * LINE_SIZE + mi;
                 let (a_line, a_elem) = a_idx.scalar_index(m, k);
-                a_data[a_line][a_elem]
+                FAcc::cast_from(a_data[a_line][a_elem])
             };
 
             let c_row = ml * LINE_SIZE + mi;
@@ -218,13 +220,13 @@ fn accum_scalar<F: Float, RtR: Dim, RtC: Dim>(
             for nl in 0..n_lines {
                 #[unroll]
                 for ni in 0..LINE_SIZE {
-                    let b_val = if comptime!(b_idx.transposed) {
+                    let b_val: FAcc = if comptime!(b_idx.transposed) {
                         let b_vec = b_data[b_idx.vec_index(k, offset_n + nl)];
-                        b_vec[ni]
+                        FAcc::cast_from(b_vec[ni])
                     } else {
                         let n = (offset_n + nl) * LINE_SIZE + ni;
                         let (b_line, b_elem) = b_idx.scalar_index(n, k);
-                        b_data[b_line][b_elem]
+                        FAcc::cast_from(b_data[b_line][b_elem])
                     };
 
                     let c_col = nl * LINE_SIZE + ni;
@@ -252,15 +254,18 @@ fn accum_scalar<F: Float, RtR: Dim, RtC: Dim>(
 /// CM, CN: register tile dimensions (can be smaller than St tile)
 /// TileM, TileK, TileN: shared tile dimensions
 /// offset_m, offset_n: select which sub-tile of the St to operate on
+///
+/// FIn: input element type (A and B matrices)
+/// FAcc: accumulator element type (C matrix)
 macro_rules! define_mma_rt {
     ($name:ident, $a_trans:tt, $b_trans:tt, $c_trans:tt,
      [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident], $accum:ident,
      [$c_d0:ident, $c_d1:ident]) => {
         #[cube]
-        pub fn $name<F: Float, CM: Dim, CN: Dim, TileM: Dim, TileK: Dim, TileN: Dim>(
-            c: &mut Rt<F, $c_d0, $c_d1>,
-            a: &St<F, $a_d0, $a_d1>,
-            b: &St<F, $b_d0, $b_d1>,
+        pub fn $name<FIn: Float, FAcc: Float, CM: Dim, CN: Dim, TileM: Dim, TileK: Dim, TileN: Dim>(
+            c: &mut Rt<FAcc, $c_d0, $c_d1>,
+            a: &St<FIn, $a_d0, $a_d1>,
+            b: &St<FIn, $b_d0, $b_d1>,
             offset_m: usize,
             offset_n: usize,
         ) {
@@ -274,7 +279,7 @@ macro_rules! define_mma_rt {
             let c_idx = Indexer::new(c_stride, $c_trans, false);
 
             for k in 0..TileK::VALUE {
-                $accum::<F, $c_d0, $c_d1>(
+                $accum::<FIn, FAcc, $c_d0, $c_d1>(
                     c, &a.data, &b.data, &a_idx, &b_idx, &c_idx, k, offset_m, offset_n,
                 );
             }
@@ -425,7 +430,8 @@ mod tests {
                 rt_c.zero();
 
                 // CM=TileM, CN=TileN (full tile per thread in this test)
-                $mma_fn::<F, TileM, TileN, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
+                // Using F, F for homogeneous types (backward compatible)
+                $mma_fn::<F, F, TileM, TileN, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
                 rt_c.copy_to_array(output);
             }
         };
@@ -448,7 +454,8 @@ mod tests {
                 let mut rt_c = Rt::<F, TileN, TileM>::new();
                 rt_c.zero();
 
-                $mma_fn::<F, TileM, TileN, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
+                // Using F, F for homogeneous types (backward compatible)
+                $mma_fn::<F, F, TileM, TileN, TileM, TileK, TileN>(&mut rt_c, &st_a, &st_b, 0, 0);
                 rt_c.transpose().copy_to_array(output);
             }
         };
