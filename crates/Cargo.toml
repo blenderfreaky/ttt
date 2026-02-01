@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernels", "core", "fused", "layer", "data", "training", "cli"]
+members = ["kernels", "core", "fused", "layer", "data", "training", "cli", "thundercube"]
 resolver = "2"
 
 [workspace.package]
@@ -14,6 +14,9 @@ ttt-fused = { path = "fused" }
 ttt-layer = { path = "layer" }
 ttt-data = { path = "data" }
 ttt-training = { path = "training" }
+
+thundercube = { version = "0.1", path = "thundercube" }
+
 
 # Burn ecosystem
 burn = { version = "0.20", default-features = false }
@@ -46,15 +49,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 paste = "1"
-
-# Local
-thundercube = { version = "0.1", path = "../thundercube" }
-
 # Dev dependencies
 criterion = { version = "0.8", features = ["html_reports", "csv_output"] }
 safetensors = "0.7"
 rand = "0.9"
 test-case = "3.3"
-
-[workspace.features]
-# Empty, features are defined per-crate but coordinated here
