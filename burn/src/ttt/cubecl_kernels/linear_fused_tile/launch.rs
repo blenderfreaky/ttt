@@ -54,170 +54,6 @@ pub struct FwdIntermediates<T> {
 
 // TODO: 64 subtiles (full cubes?)
 
-/// Dispatch macro for single-stage kernel.
-/// Matches on (mini_batch_len, head_dim, threads) to select tile config.
-macro_rules! impl_tile_dispatch {
-    (
-        $client:expr, $cube_count:expr,
-        $inputs:expr, $outputs:expr, $fwd_intermediates:expr, $config:expr,
-        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
-        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
-    ) => {
-        match ($mini_batch_len, $head_dim, $threads) {
-            $(
-                ($s, $h, $t) => {
-                    type P<E> = Params<E, $CS, $F, $CSR, $FR>;
-                    let cube_dim = CubeDim::new($client, $t);
-                    fused_ttt_forward_kernel::launch::<P<_>, _>(
-                        $client, $cube_count, cube_dim, $inputs, $outputs, $fwd_intermediates, $config,
-                    ).unwrap()
-                }
-            )*
-            _ => {
-                let supported = [$((stringify!($s), stringify!($h), stringify!($t))),*];
-                let supported_str: Vec<_> = supported.iter()
-                    .map(|(s, h, t)| format!("{}×{}@{}", s, h, t))
-                    .collect();
-                panic!(
-                    "Unsupported tile config: mini_batch_len={}, head_dim={}, threads={}. Supported: {}",
-                    $mini_batch_len, $head_dim, $threads, supported_str.join(", ")
-                )
-            }
-        }
-    };
-}
-
-/// Dispatch macro for multi-stage kernel.
-/// Matches on (mini_batch_len, head_dim, threads) to select tile config.
-macro_rules! impl_tile_dispatch_multi {
-    (
-        $client:expr, $cube_count:expr,
-        $inputs:expr, $outputs:expr, $fwd_intermediates:expr, $num_stages:expr, $config:expr,
-        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
-        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
-    ) => {
-        match ($mini_batch_len, $head_dim, $threads) {
-            $(
-                ($s, $h, $t) => {
-                    type P<E> = Params<E, $CS, $F, $CSR, $FR>;
-                    let cube_dim = CubeDim::new($client, $t);
-                    fused_ttt_forward_kernel_multi::launch::<P<_>, _>(
-                        $client, $cube_count, cube_dim, $inputs, $outputs, $fwd_intermediates, $num_stages, $config,
-                    ).unwrap()
-                }
-            )*
-            _ => {
-                let supported = [$((stringify!($s), stringify!($h), stringify!($t))),*];
-                let supported_str: Vec<_> = supported.iter()
-                    .map(|(s, h, t)| format!("{}×{}@{}", s, h, t))
-                    .collect();
-                panic!(
-                    "Unsupported tile config: mini_batch_len={}, head_dim={}, threads={}. Supported: {}",
-                    $mini_batch_len, $head_dim, $threads, supported_str.join(", ")
-                )
-            }
-        }
-    };
-}
-
-macro_rules! dispatch_tile_kernel {
-    ($client:expr, $cube_count:expr, $inputs:expr, $outputs:expr, $fwd_intermediates:expr, $config:expr, $mini_batch_len:expr, $head_dim:expr, $threads:expr) => {
-        supported_tile_configs!(impl_tile_dispatch!(
-            $client, $cube_count, $inputs, $outputs, $fwd_intermediates, $config, $mini_batch_len, $head_dim, $threads;
-        ))
-    };
-}
-
-macro_rules! dispatch_tile_kernel_multi {
-    ($client:expr, $cube_count:expr, $inputs:expr, $outputs:expr, $fwd_intermediates:expr, $num_stages:expr, $config:expr, $mini_batch_len:expr, $head_dim:expr, $threads:expr) => {
-        supported_tile_configs!(impl_tile_dispatch_multi!(
-            $client, $cube_count, $inputs, $outputs, $fwd_intermediates, $num_stages, $config, $mini_batch_len, $head_dim, $threads;
-        ))
-    };
-}
-
-/// Dispatch macro for backward kernel.
-/// Matches on (mini_batch_len, head_dim, threads) to select tile config.
-macro_rules! impl_tile_dispatch_backward {
-    (
-        $client:expr, $cube_count:expr,
-        $saved:expr, $fwd:expr, $grad_output:expr, $grads:expr, $config:expr,
-        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
-        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
-    ) => {
-        match ($mini_batch_len, $head_dim, $threads) {
-            $(
-                ($s, $h, $t) => {
-                    type P<E> = Params<E, $CS, $F, $CSR, $FR>;
-                    let cube_dim = CubeDim::new($client, $t);
-                    fused_ttt_backward_kernel::launch::<P<_>, _>(
-                        $client, $cube_count, cube_dim, $saved, $fwd, $grad_output, $grads, $config,
-                    ).unwrap()
-                }
-            )*
-            _ => {
-                let supported = [$((stringify!($s), stringify!($h), stringify!($t))),*];
-                let supported_str: Vec<_> = supported.iter()
-                    .map(|(s, h, t)| format!("{}×{}@{}", s, h, t))
-                    .collect();
-                panic!(
-                    "Unsupported tile config for backward: mini_batch_len={}, head_dim={}, threads={}. Supported: {}",
-                    $mini_batch_len, $head_dim, $threads, supported_str.join(", ")
-                )
-            }
-        }
-    };
-}
-
-macro_rules! dispatch_tile_kernel_backward {
-    ($client:expr, $cube_count:expr, $saved:expr, $fwd:expr, $grad_output:expr, $grads:expr, $config:expr, $mini_batch_len:expr, $head_dim:expr, $threads:expr) => {
-        supported_tile_configs!(impl_tile_dispatch_backward!(
-            $client, $cube_count, $saved, $fwd, $grad_output, $grads, $config, $mini_batch_len, $head_dim, $threads;
-        ))
-    };
-}
-
-/// Dispatch macro for multi-stage backward kernel.
-/// Matches on (mini_batch_len, head_dim, threads) to select tile config.
-macro_rules! impl_tile_dispatch_backward_multi {
-    (
-        $client:expr, $cube_count:expr,
-        $saved:expr, $fwd:expr, $grad_output:expr, $grads:expr, $num_stages:expr, $config:expr,
-        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
-        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
-    ) => {
-        match ($mini_batch_len, $head_dim, $threads) {
-            $(
-                ($s, $h, $t) => {
-                    type P<E> = Params<E, $CS, $F, $CSR, $FR>;
-                    let cube_dim = CubeDim::new($client, $t);
-                    fused_ttt_backward_kernel_multi::launch::<P<_>, _>(
-                        $client, $cube_count, cube_dim, $saved, $fwd, $grad_output, $grads, $num_stages, $config,
-                    ).unwrap()
-                }
-            )*
-            _ => {
-                let supported = [$((stringify!($s), stringify!($h), stringify!($t))),*];
-                let supported_str: Vec<_> = supported.iter()
-                    .map(|(s, h, t)| format!("{}×{}@{}", s, h, t))
-                    .collect();
-                panic!(
-                    "Unsupported tile config for backward_multi: mini_batch_len={}, head_dim={}, threads={}. Supported: {}",
-                    $mini_batch_len, $head_dim, $threads, supported_str.join(", ")
-                )
-            }
-        }
-    };
-}
-
-macro_rules! dispatch_tile_kernel_backward_multi {
-    ($client:expr, $cube_count:expr, $saved:expr, $fwd:expr, $grad_output:expr, $grads:expr, $num_stages:expr, $config:expr, $mini_batch_len:expr, $head_dim:expr, $threads:expr) => {
-        supported_tile_configs!(impl_tile_dispatch_backward_multi!(
-            $client, $cube_count, $saved, $fwd, $grad_output, $grads, $num_stages, $config, $mini_batch_len, $head_dim, $threads;
-        ))
-    };
-}
-
 /// Marker type for the tiled TTT kernel (single mini-batch).
 #[derive(Debug, Clone, Copy)]
 pub struct TttTileKernel;
@@ -294,16 +130,11 @@ pub fn launch_tile_forward<R: Runtime, F: Float + CubeElement>(
         std_ln.as_tensor_arg(vectorization),
     );
 
-    dispatch_tile_kernel!(
-        client,
-        cube_count,
-        inputs_launch,
-        outputs_launch,
-        fwd_intermediates_launch,
-        config,
-        seq_len,
-        head_dim,
-        config.threads
+    tile_dispatch!(
+        fused_ttt_forward_kernel,
+        client, cube_count,
+        seq_len, head_dim, config.threads,
+        inputs_launch, outputs_launch, fwd_intermediates_launch, config
     );
 }
 
@@ -393,17 +224,11 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
         grad_ln_bias.as_tensor_arg(1),
     );
 
-    dispatch_tile_kernel_backward!(
-        client,
-        cube_count,
-        saved_launch,
-        fwd_launch,
-        grad_output_arg,
-        grads_launch,
-        config,
-        seq_len,
-        head_dim,
-        config.threads
+    tile_dispatch!(
+        fused_ttt_backward_kernel,
+        client, cube_count,
+        seq_len, head_dim, config.threads,
+        saved_launch, fwd_launch, grad_output_arg, grads_launch, config
     );
 }
 
@@ -680,18 +505,12 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
         grad_ln_bias.as_tensor_arg(1),
     );
 
-    dispatch_tile_kernel_backward_multi!(
-        client,
-        cube_count,
-        saved_launch,
-        fwd_launch,
-        grad_output_arg,
-        grads_launch,
-        ScalarArg::new(num_stages as u32),
-        config,
-        mini_batch_len,
-        head_dim,
-        config.threads
+    tile_dispatch!(
+        fused_ttt_backward_kernel_multi,
+        client, cube_count,
+        mini_batch_len, head_dim, config.threads,
+        saved_launch, fwd_launch, grad_output_arg, grads_launch,
+        ScalarArg::new(num_stages as u32), config
     );
 }
 
@@ -862,17 +681,12 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
         std_ln.as_tensor_arg(vectorization),
     );
 
-    dispatch_tile_kernel_multi!(
-        client,
-        cube_count,
-        inputs_launch,
-        outputs_launch,
-        fwd_intermediates_launch,
-        ScalarArg::new(num_stages as u32),
-        config,
-        mini_batch_len,
-        head_dim,
-        config.threads
+    tile_dispatch!(
+        fused_ttt_forward_kernel_multi,
+        client, cube_count,
+        mini_batch_len, head_dim, config.threads,
+        inputs_launch, outputs_launch, fwd_intermediates_launch,
+        ScalarArg::new(num_stages as u32), config
     );
 }
 

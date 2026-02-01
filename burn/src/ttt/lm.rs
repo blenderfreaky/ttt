@@ -144,7 +144,7 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
             // Embedding weight is [vocab_size, hidden_size], we need [1, hidden_size, vocab_size] for matmul
             let weight = self.embedding.weight.val(); // [vocab_size, hidden_size]
             let weight = weight.unsqueeze_dim::<3>(0); // [1, vocab_size, hidden_size]
-            let weight = weight.permute([0, 2, 1]); // [1, hidden_size, vocab_size]
+            let weight = weight.transpose(); // [1, hidden_size, vocab_size]
             hidden_states.matmul(weight)
         };
 

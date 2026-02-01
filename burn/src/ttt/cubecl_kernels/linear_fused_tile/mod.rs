@@ -81,6 +81,47 @@ macro_rules! supported_tile_configs {
 // Note: macro_rules! macros are automatically available to submodules
 // defined after the macro in the same module
 
+/// Unified tile dispatch macro.
+/// Args: kernel_ident, client, cube_count, mini_batch_len, head_dim, threads, ...rest
+/// The client is passed to CubeDim::new for inferring max supported dimensions.
+macro_rules! tile_dispatch {
+    (
+        $kernel:ident,
+        $client:expr, $cube_count:expr,
+        $mini_batch_len:expr, $head_dim:expr, $threads:expr
+        $(, $($rest:tt)+)?
+    ) => {
+        supported_tile_configs!(tile_dispatch_inner!(
+            $kernel, $client, $cube_count,
+            $mini_batch_len, $head_dim, $threads;
+            [$($($rest)+)?];
+        ))
+    };
+}
+
+macro_rules! tile_dispatch_inner {
+    (
+        $kernel:ident, $client:expr, $cube_count:expr,
+        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
+        $rest:tt;
+        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
+    ) => {
+        match ($mini_batch_len, $head_dim, $threads) {
+            $(($s, $h, $t) => tile_dispatch_arm!($kernel, $client, $cube_count, $t, $CS, $F, $CSR, $FR, $rest),)*
+            _ => panic!("Unsupported tile config: {}×{}@{}", $mini_batch_len, $head_dim, $threads)
+        }
+    };
+}
+
+macro_rules! tile_dispatch_arm {
+    ($kernel:ident, $client:expr, $cube_count:expr, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty, [$($rest:tt)*]) => {{
+        type P<E> = Params<E, $CS, $F, $CSR, $FR>;
+        $kernel::launch::<P<_>, _>(
+            $client, $cube_count, CubeDim::new($client, $t), $($rest)*
+        ).unwrap()
+    }};
+}
+
 /// Global mutex for streaming kernel tests.
 ///
 /// Streaming tests cannot run concurrently because `get_resource()` triggers

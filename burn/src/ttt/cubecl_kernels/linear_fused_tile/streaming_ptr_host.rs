@@ -15,63 +15,6 @@ use super::{
     },
 };
 
-/// Dispatch macro for streaming ptr kernel.
-/// Matches on (mini_batch_len, head_dim, threads) to select tile config.
-macro_rules! impl_streaming_ptr_dispatch {
-    (
-        $client:expr, $cube_count:expr, $cube_dim_client:expr,
-        $ptr_table_arg:expr, $control_arg:expr,
-        $xq_arg:expr, $xk_arg:expr, $xv_arg:expr, $eta_arg:expr,
-        $inputs:expr, $outputs:expr, $fwd_intermediates:expr,
-        $config:expr, $debug:expr,
-        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
-        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
-    ) => {
-        match ($mini_batch_len, $head_dim, $threads) {
-            $(
-                ($s, $h, $t) => {
-                    type P<E> = Params<E, $CS, $F, $CSR, $FR>;
-                    let cube_dim = CubeDim::new($cube_dim_client, $t);
-                    fused_ttt_streaming_ptr_kernel::launch::<P<_>, _>(
-                        $client, $cube_count, cube_dim,
-                        $ptr_table_arg, $control_arg,
-                        $xq_arg, $xk_arg, $xv_arg, $eta_arg,
-                        $inputs, $outputs, $fwd_intermediates,
-                        $config, $debug,
-                    ).unwrap()
-                }
-            )*
-            _ => {
-                let supported = [$((stringify!($s), stringify!($h), stringify!($t))),*];
-                let supported_str: Vec<_> = supported.iter()
-                    .map(|(s, h, t)| format!("{}×{}@{}", s, h, t))
-                    .collect();
-                panic!(
-                    "Unsupported streaming config: mini_batch_len={}, head_dim={}, threads={}. Supported: {}",
-                    $mini_batch_len, $head_dim, $threads, supported_str.join(", ")
-                )
-            }
-        }
-    };
-}
-
-macro_rules! dispatch_streaming_ptr_kernel {
-    ($client:expr, $cube_count:expr, $cube_dim_client:expr,
-     $ptr_table_arg:expr, $control_arg:expr,
-     $xq_arg:expr, $xk_arg:expr, $xv_arg:expr, $eta_arg:expr,
-     $inputs:expr, $outputs:expr, $fwd_intermediates:expr,
-     $config:expr, $debug:expr,
-     $mini_batch_len:expr, $head_dim:expr, $threads:expr) => {
-        supported_tile_configs!(impl_streaming_ptr_dispatch!(
-            $client, $cube_count, $cube_dim_client,
-            $ptr_table_arg, $control_arg,
-            $xq_arg, $xk_arg, $xv_arg, $eta_arg,
-            $inputs, $outputs, $fwd_intermediates,
-            $config, $debug,
-            $mini_batch_len, $head_dim, $threads;
-        ))
-    };
-}
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 use burn::tensor::Shape;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
@@ -602,13 +545,14 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
 
         // Dispatch based on tile configuration
         // Use kernel_client which has a separate stream for the persistent kernel
-        dispatch_streaming_ptr_kernel!(
-            &self.kernel_client, cube_count, &self.kernel_client,
+        tile_dispatch!(
+            fused_ttt_streaming_ptr_kernel,
+            &self.kernel_client, cube_count,
+            mini_batch_len, head_dim, threads,
             ptr_table_ref.as_tensor_arg(1), control_ref.as_tensor_arg(1),
             xq_arg, xk_arg, xv_arg, eta_arg,
             inputs, outputs, fwd_intermediates,
-            fused_config, debug,
-            mini_batch_len, head_dim, threads
+            fused_config, debug
         );
     }
 
