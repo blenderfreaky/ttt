@@ -259,25 +259,28 @@ mod tests {
     fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
         assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match");
 
-        let mut max_diff = 0.0f32;
-        let mut max_idx = 0;
-        let mut max_av = 0.0f32;
-        let mut max_bv = 0.0f32;
+        let mut worst_idx = 0;
+        let mut worst_av = 0.0f32;
+        let mut worst_bv = 0.0f32;
+        let mut worst_excess = 0.0f32; // How much diff exceeds tolerance
 
         for (i, (&av, &bv)) in a.iter().zip(b.iter()).enumerate() {
             let diff = (av - bv).abs();
-            if diff > max_diff {
-                max_diff = diff;
-                max_idx = i;
-                max_av = av;
-                max_bv = bv;
+            let tolerance = atol + rtol * bv.abs();
+            let excess = diff - tolerance;
+            if excess > worst_excess {
+                worst_excess = excess;
+                worst_idx = i;
+                worst_av = av;
+                worst_bv = bv;
             }
         }
 
-        let tolerance = atol + rtol * max_bv.abs();
         assert!(
-            max_diff <= tolerance,
-            "{name}: Max mismatch at index {max_idx}: {max_av} vs {max_bv} (diff: {max_diff}, tolerance: {tolerance})",
+            worst_excess <= 0.0,
+            "{name}: Mismatch at index {worst_idx}: got {worst_av}, expected {worst_bv} (diff: {}, tolerance: {})",
+            (worst_av - worst_bv).abs(),
+            atol + rtol * worst_bv.abs(),
         );
     }
 
@@ -711,7 +714,17 @@ mod tests {
         // Create CPU reference with autodiff
         let ttt_linear_cpu: TTTLinear<Autodiff<CpuBackend>> =
             TTTLinear::new(&config, &linear_config, &cpu_device);
-        let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
+
+        // Init state, detach from weight_init graph, then require_grad to get batched gradients
+        let state_cpu_init = ttt_linear_cpu.init_state(batch_size);
+        let state_weight_cpu: Tensor<Autodiff<CpuBackend>, 4> =
+            Tensor::from_inner(state_cpu_init.weight.inner()).require_grad();
+        let state_bias_cpu: Tensor<Autodiff<CpuBackend>, 3> =
+            Tensor::from_inner(state_cpu_init.bias.inner()).require_grad();
+        let mut state_cpu = crate::ttt::linear::TTTLinearState {
+            weight: state_weight_cpu.clone(),
+            bias: state_bias_cpu.clone(),
+        };
 
         let weight_init_data: Vec<f32> =
             ttt_linear_cpu.weight_init.val().to_data().to_vec().unwrap();
@@ -795,6 +808,36 @@ mod tests {
             .to_vec()
             .unwrap();
 
+        // Get batched state gradients from CPU (not weight_init which would be summed)
+        let grad_weight_cpu: Vec<f32> = state_weight_cpu
+            .grad(&grads_cpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let grad_bias_cpu: Vec<f32> = state_bias_cpu
+            .grad(&grads_cpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let grad_ln_weight_cpu: Vec<f32> = ttt_linear_cpu
+            .layer_norm
+            .weight
+            .grad(&grads_cpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let grad_ln_bias_cpu: Vec<f32> = ttt_linear_cpu
+            .layer_norm
+            .bias
+            .grad(&grads_cpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+
         // Create GPU tensors for tiled kernel with autodiff
         let gpu_device: <GpuAutodiffBackend as Backend>::Device = Default::default();
 
@@ -829,7 +872,16 @@ mod tests {
             Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>>,
         > = inner_fused.into();
 
-        let mut fused_state = fused_tile.init_state(batch_size);
+        // Init state, detach from weight_init graph, then require_grad to get batched gradients
+        let fused_state_init = fused_tile.init_state(batch_size);
+        let state_weight_gpu: Tensor<GpuAutodiffBackend, 4> =
+            Tensor::from_inner(fused_state_init.weight.inner()).require_grad();
+        let state_bias_gpu: Tensor<GpuAutodiffBackend, 3> =
+            Tensor::from_inner(fused_state_init.bias.inner()).require_grad();
+        let mut fused_state = crate::ttt::linear::TTTLinearState {
+            weight: state_weight_gpu.clone(),
+            bias: state_bias_gpu.clone(),
+        };
 
         // Create GPU input tensors with gradients
         let xq_gpu: Tensor<GpuAutodiffBackend, 4> = Tensor::from_data(
@@ -875,6 +927,40 @@ mod tests {
         let grad_xk_gpu: Vec<f32> = xk_gpu.grad(&grads_gpu).unwrap().to_data().to_vec().unwrap();
         let grad_xv_gpu: Vec<f32> = xv_gpu.grad(&grads_gpu).unwrap().to_data().to_vec().unwrap();
         let grad_ttt_lr_eta_gpu: Vec<f32> = ttt_lr_eta_gpu
+            .grad(&grads_gpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+
+        // Get batched state gradients from GPU (not weight_init which would be summed)
+        let grad_weight_gpu: Vec<f32> = state_weight_gpu
+            .grad(&grads_gpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let grad_bias_gpu: Vec<f32> = state_bias_gpu
+            .grad(&grads_gpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let grad_ln_weight_gpu: Vec<f32> = fused_tile
+            .inner
+            .inner
+            .layer_norm
+            .weight
+            .grad(&grads_gpu)
+            .unwrap()
+            .to_data()
+            .to_vec()
+            .unwrap();
+        let grad_ln_bias_gpu: Vec<f32> = fused_tile
+            .inner
+            .inner
+            .layer_norm
+            .bias
             .grad(&grads_gpu)
             .unwrap()
             .to_data()
@@ -949,7 +1035,22 @@ mod tests {
             &grad_ttt_lr_eta_gpu[0..5.min(grad_ttt_lr_eta_gpu.len())]
         );
 
-        println!("=== End Analysis ===\n");
+        // Assert parameter gradient shapes match between CPU and GPU
+        // Verify batched shapes: [batch_size, num_heads, head_dim, head_dim] and [batch_size, num_heads, head_dim]
+        let expected_weight_len = batch_size * num_heads * head_dim * head_dim;
+        let expected_bias_len = batch_size * num_heads * head_dim;
+        assert_eq!(grad_weight_cpu.len(), expected_weight_len,
+            "grad_weight_cpu should be batched: expected {}, got {}", expected_weight_len, grad_weight_cpu.len());
+        assert_eq!(grad_weight_gpu.len(), expected_weight_len,
+            "grad_weight_gpu should be batched: expected {}, got {}", expected_weight_len, grad_weight_gpu.len());
+        assert_eq!(grad_bias_cpu.len(), expected_bias_len,
+            "grad_bias_cpu should be batched: expected {}, got {}", expected_bias_len, grad_bias_cpu.len());
+        assert_eq!(grad_bias_gpu.len(), expected_bias_len,
+            "grad_bias_gpu should be batched: expected {}, got {}", expected_bias_len, grad_bias_gpu.len());
+        assert_eq!(grad_ln_weight_cpu.len(), grad_ln_weight_gpu.len(),
+            "grad_ln_weight shape mismatch: cpu={}, gpu={}", grad_ln_weight_cpu.len(), grad_ln_weight_gpu.len());
+        assert_eq!(grad_ln_bias_cpu.len(), grad_ln_bias_gpu.len(),
+            "grad_ln_bias shape mismatch: cpu={}, gpu={}", grad_ln_bias_cpu.len(), grad_ln_bias_gpu.len());
 
         for tol_mult in [1.0, 2.0, 5.0, 10.0] {
             let rtol = 2e-2 * tol_mult;
@@ -997,6 +1098,36 @@ mod tests {
             2e-2,
             1e-3,
             "grad_ttt_lr_eta: tiled fused vs reference",
+        );
+
+        // Validate parameter gradients
+        assert_data_close(
+            &grad_weight_gpu,
+            &grad_weight_cpu,
+            2e-2,
+            1e-3,
+            "grad_weight: tiled fused vs reference",
+        );
+        assert_data_close(
+            &grad_bias_gpu,
+            &grad_bias_cpu,
+            2e-2,
+            1e-3,
+            "grad_bias: tiled fused vs reference",
+        );
+        assert_data_close(
+            &grad_ln_weight_gpu,
+            &grad_ln_weight_cpu,
+            2e-2,
+            1e-3,
+            "grad_ln_weight: tiled fused vs reference",
+        );
+        assert_data_close(
+            &grad_ln_bias_gpu,
+            &grad_ln_bias_cpu,
+            2e-2,
+            1e-3,
+            "grad_ln_bias: tiled fused vs reference",
         );
     }
 }

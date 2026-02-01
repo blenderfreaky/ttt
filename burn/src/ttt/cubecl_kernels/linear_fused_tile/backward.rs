@@ -65,8 +65,34 @@ pub struct GradOutputs<F: Float> {
     pub grad_weight: Tensor<Line<F>>,
     pub grad_bias: Tensor<Line<F>>,
     pub grad_ttt_lr_eta: Tensor<Line<F>>,
-    pub grad_ln_weight: Tensor<Line<F>>,
-    pub grad_ln_bias: Tensor<Line<F>>,
+    /// Atomic tensor for accumulating ln_weight gradients across batches.
+    /// Shape: [num_heads, head_dim] (unbatched, shared across batch dimension)
+    pub grad_ln_weight: Tensor<Atomic<F>>,
+    /// Atomic tensor for accumulating ln_bias gradients across batches.
+    /// Shape: [num_heads, head_dim] (unbatched, shared across batch dimension)
+    pub grad_ln_bias: Tensor<Atomic<F>>,
+}
+
+/// Atomically add a register value to an atomic tensor.
+/// Each element in the register is added to the corresponding position in the tensor.
+#[cube]
+fn atomic_add_rv<F: Float, L: Dim>(
+    rv: &Rv<F, L>,
+    tensor: &mut Tensor<Atomic<F>>,
+    base_offset: usize,
+) {
+    // Only one thread per cube does the atomic add (all threads have same data)
+    if UNIT_POS == 0 {
+        #[unroll]
+        for line_idx in 0..L::LINES {
+            let line = rv.data[line_idx];
+            #[unroll]
+            for elem_idx in 0..LINE_SIZE {
+                let idx = base_offset + line_idx * LINE_SIZE + elem_idx;
+                tensor[idx].fetch_add(line[elem_idx]);
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -1076,9 +1102,17 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
 
     sync_cube();
 
-    let base_ln = index_2d(&grads.grad_ln_weight, batch_idx, head_idx);
-    cube::broadcast::store_rv_direct(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
-    cube::broadcast::store_rv_direct(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
+    // Store accumulated weight/bias gradients
+    let grad_weight_base = index_2d(&grads.grad_weight, batch_idx, head_idx);
+    let grad_bias_base = index_2d(&grads.grad_bias, batch_idx, head_idx);
+    cube::store_st_direct(&grad_L_W_last, &mut grads.grad_weight, grad_weight_base, 0, 0);
+    cube::broadcast::store_rv_direct(&grad_L_b_last, &mut grads.grad_bias, grad_bias_base);
+
+    // Atomically add LN gradients (unbatched tensors shared across batch dimension)
+    // LN tensors have shape [num_heads, head_dim], indexed by head_idx only
+    let base_ln = head_idx * P::F::VALUE;
+    atomic_add_rv::<P::E, P::F>(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
+    atomic_add_rv::<P::E, P::F>(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
 }
 
 /// Fused TTT-Linear backward pass kernel (multi-stage).
@@ -1138,7 +1172,15 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
         sync_cube();
     }
 
-    let base_ln = index_2d(&grads.grad_ln_weight, batch_idx, head_idx);
-    cube::broadcast::store_rv_direct(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
-    cube::broadcast::store_rv_direct(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
+    // Store accumulated weight/bias gradients
+    let grad_weight_base = index_2d(&grads.grad_weight, batch_idx, head_idx);
+    let grad_bias_base = index_2d(&grads.grad_bias, batch_idx, head_idx);
+    cube::store_st_direct(&grad_L_W_last, &mut grads.grad_weight, grad_weight_base, 0, 0);
+    cube::broadcast::store_rv_direct(&grad_L_b_last, &mut grads.grad_bias, grad_bias_base);
+
+    // Atomically add LN gradients (unbatched tensors shared across batch dimension)
+    // LN tensors have shape [num_heads, head_dim], indexed by head_idx only
+    let base_ln = head_idx * P::F::VALUE;
+    atomic_add_rv::<P::E, P::F>(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
+    atomic_add_rv::<P::E, P::F>(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
 }

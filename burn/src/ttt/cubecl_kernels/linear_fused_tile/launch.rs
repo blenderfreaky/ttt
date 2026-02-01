@@ -4,7 +4,8 @@ use std::fmt::Debug;
 
 use burn_backend::Shape;
 use burn_cubecl::{
-    CubeRuntime, FloatElement, kernel::into_contiguous, ops::numeric::empty_device,
+    CubeRuntime, FloatElement, kernel::into_contiguous,
+    ops::numeric::{empty_device, zeros_client},
     tensor::CubeTensor,
 };
 use cubecl::prelude::*;
@@ -464,8 +465,9 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
         grad_weight.as_tensor_arg(vectorization),
         grad_bias.as_tensor_arg(vectorization),
         grad_ttt_lr_eta.as_tensor_arg(vectorization),
-        grad_ln_weight.as_tensor_arg(vectorization),
-        grad_ln_bias.as_tensor_arg(vectorization),
+        // Atomic tensors use scalar (vectorization=1), not Line<F>
+        grad_ln_weight.as_tensor_arg(1),
+        grad_ln_bias.as_tensor_arg(1),
     );
 
     dispatch_tile_kernel_backward!(
@@ -593,17 +595,38 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
     threads: usize,
 ) -> TttGradInputs<CubeTensor<R>> {
     let shape = saved.xq.shape.clone();
-    let [_batch_size, _num_heads, seq_len, head_dim] = shape.dims();
+    let [batch_size, num_heads, seq_len, head_dim] = shape.dims();
 
     // Allocate output gradient tensors
     let grad_xq = empty_like::<R, F>(&saved.xq, shape.clone());
     let grad_xk = empty_like::<R, F>(&saved.xk, shape.clone());
     let grad_xv = empty_like::<R, F>(&saved.xv, shape.clone());
-    let grad_weight = empty_like::<R, F>(&saved.weight_init, saved.weight_init.shape.clone());
-    let grad_bias = empty_like::<R, F>(&saved.bias_init, saved.bias_init.shape.clone());
     let grad_ttt_lr_eta = empty_like::<R, F>(&saved.ttt_lr_eta, saved.ttt_lr_eta.shape.clone());
-    let grad_ln_weight = empty_like::<R, F>(&saved.ln_weight, saved.ln_weight.shape.clone());
-    let grad_ln_bias = empty_like::<R, F>(&saved.ln_bias, saved.ln_bias.shape.clone());
+
+    // Parameter gradients for weight/bias need batch dimension (separate per cube)
+    let grad_weight_batched = empty_like::<R, F>(
+        &saved.weight_init,
+        [batch_size, num_heads, head_dim, head_dim],
+    );
+    let grad_bias_batched = empty_like::<R, F>(
+        &saved.bias_init,
+        [batch_size, num_heads, head_dim],
+    );
+
+    // LN gradients are unbatched (atomic accumulation across batches)
+    // Must be zero-initialized since kernel uses atomic adds
+    let grad_ln_weight = zeros_client::<R>(
+        saved.ln_weight.client.clone(),
+        saved.ln_weight.device.clone(),
+        [num_heads, head_dim].into(),
+        F::dtype(),
+    );
+    let grad_ln_bias = zeros_client::<R>(
+        saved.ln_bias.client.clone(),
+        saved.ln_bias.device.clone(),
+        [num_heads, head_dim].into(),
+        F::dtype(),
+    );
 
     let config = FusedTttConfig::new(seq_len, head_dim, epsilon, threads);
 
@@ -630,8 +653,8 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         grad_xq.as_handle_ref(),
         grad_xk.as_handle_ref(),
         grad_xv.as_handle_ref(),
-        grad_weight.as_handle_ref(),
-        grad_bias.as_handle_ref(),
+        grad_weight_batched.as_handle_ref(),
+        grad_bias_batched.as_handle_ref(),
         grad_ttt_lr_eta.as_handle_ref(),
         grad_ln_weight.as_handle_ref(),
         grad_ln_bias.as_handle_ref(),
@@ -642,8 +665,8 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         grad_xq,
         grad_xk,
         grad_xv,
-        grad_weight,
-        grad_bias,
+        grad_weight: grad_weight_batched,
+        grad_bias: grad_bias_batched,
         grad_ttt_lr_eta,
         grad_ln_weight,
         grad_ln_bias,
@@ -732,8 +755,9 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
         grad_weight.as_tensor_arg(vectorization),
         grad_bias.as_tensor_arg(vectorization),
         grad_ttt_lr_eta.as_tensor_arg(vectorization),
-        grad_ln_weight.as_tensor_arg(vectorization),
-        grad_ln_bias.as_tensor_arg(vectorization),
+        // Atomic tensors use scalar (vectorization=1), not Line<F>
+        grad_ln_weight.as_tensor_arg(1),
+        grad_ln_bias.as_tensor_arg(1),
     );
 
     dispatch_tile_kernel_backward_multi!(
@@ -764,7 +788,7 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
     threads: usize,
 ) -> TttGradInputs<CubeTensor<R>> {
     let shape = saved.xq.shape.clone();
-    let [_batch_size, _num_heads, seq_len, head_dim] = shape.dims();
+    let [batch_size, num_heads, seq_len, head_dim] = shape.dims();
 
     assert_eq!(
         seq_len % mini_batch_len,
@@ -779,11 +803,32 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
     let grad_xq = empty_like::<R, F>(&saved.xq, shape.clone());
     let grad_xk = empty_like::<R, F>(&saved.xk, shape.clone());
     let grad_xv = empty_like::<R, F>(&saved.xv, shape.clone());
-    let grad_weight = empty_like::<R, F>(&saved.weight_init, saved.weight_init.shape.clone());
-    let grad_bias = empty_like::<R, F>(&saved.bias_init, saved.bias_init.shape.clone());
     let grad_ttt_lr_eta = empty_like::<R, F>(&saved.ttt_lr_eta, saved.ttt_lr_eta.shape.clone());
-    let grad_ln_weight = empty_like::<R, F>(&saved.ln_weight, saved.ln_weight.shape.clone());
-    let grad_ln_bias = empty_like::<R, F>(&saved.ln_bias, saved.ln_bias.shape.clone());
+
+    // Parameter gradients for weight/bias need batch dimension (separate per cube)
+    let grad_weight_batched = empty_like::<R, F>(
+        &saved.weight_init,
+        [batch_size, num_heads, head_dim, head_dim],
+    );
+    let grad_bias_batched = empty_like::<R, F>(
+        &saved.bias_init,
+        [batch_size, num_heads, head_dim],
+    );
+
+    // LN gradients are unbatched (atomic accumulation across batches)
+    // Must be zero-initialized since kernel uses atomic adds
+    let grad_ln_weight = zeros_client::<R>(
+        saved.ln_weight.client.clone(),
+        saved.ln_weight.device.clone(),
+        [num_heads, head_dim].into(),
+        F::dtype(),
+    );
+    let grad_ln_bias = zeros_client::<R>(
+        saved.ln_bias.client.clone(),
+        saved.ln_bias.device.clone(),
+        [num_heads, head_dim].into(),
+        F::dtype(),
+    );
 
     let config = FusedTttConfig::new(mini_batch_len, head_dim, epsilon, threads);
 
@@ -810,8 +855,8 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         grad_xq.as_handle_ref(),
         grad_xk.as_handle_ref(),
         grad_xv.as_handle_ref(),
-        grad_weight.as_handle_ref(),
-        grad_bias.as_handle_ref(),
+        grad_weight_batched.as_handle_ref(),
+        grad_bias_batched.as_handle_ref(),
         grad_ttt_lr_eta.as_handle_ref(),
         grad_ln_weight.as_handle_ref(),
         grad_ln_bias.as_handle_ref(),
@@ -823,8 +868,8 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         grad_xq,
         grad_xk,
         grad_xv,
-        grad_weight,
-        grad_bias,
+        grad_weight: grad_weight_batched,
+        grad_bias: grad_bias_batched,
         grad_ttt_lr_eta,
         grad_ln_weight,
         grad_ln_bias,
