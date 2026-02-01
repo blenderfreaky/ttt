@@ -167,63 +167,7 @@ pub fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str)
     );
 }
 
-/// Model parameters extracted as raw data for cross-backend transfer.
-#[derive(Debug, Clone)]
-pub struct ModelParamsData {
-    pub weight_init: Vec<f32>,
-    pub bias_init: Vec<f32>,
-    pub ln_weight: Vec<f32>,
-    pub ln_bias: Vec<f32>,
-    pub epsilon: f64,
-}
-
-/// Extract model parameters as raw data from a TTTLinear.
-pub fn extract_model_params<B: Backend>(model: &TTTLinear<B>) -> ModelParamsData {
-    ModelParamsData {
-        weight_init: model.weight_init.val().to_data().to_vec().unwrap(),
-        bias_init: model.bias_init.val().to_data().to_vec().unwrap(),
-        ln_weight: model.layer_norm.weight.val().to_data().to_vec().unwrap(),
-        ln_bias: model.layer_norm.bias.val().to_data().to_vec().unwrap(),
-        epsilon: model.layer_norm.epsilon,
-    }
-}
-
-/// Create a TTTLinear from extracted params on a different backend.
-pub fn create_model_from_params<B: Backend>(
-    params: &ModelParamsData,
-    config: &Arc<TTTConfig>,
-    dims: TestDims,
-    device: &B::Device,
-) -> TTTLinear<B> {
-    use burn::module::{Ignored, Param};
-    use burn::tensor::TensorData;
-    use crate::ttt::util::MultiHeadLayerNorm;
-
-    TTTLinear {
-        weight_init: Param::from_tensor(Tensor::from_data(
-            TensorData::new(params.weight_init.clone(), [dims.num_heads, dims.head_dim, dims.head_dim]),
-            device,
-        )),
-        bias_init: Param::from_tensor(Tensor::from_data(
-            TensorData::new(params.bias_init.clone(), [dims.num_heads, dims.head_dim]),
-            device,
-        )),
-        layer_norm: MultiHeadLayerNorm {
-            weight: Param::from_tensor(Tensor::from_data(
-                TensorData::new(params.ln_weight.clone(), [dims.num_heads, dims.head_dim]),
-                device,
-            )),
-            bias: Param::from_tensor(Tensor::from_data(
-                TensorData::new(params.ln_bias.clone(), [dims.num_heads, dims.head_dim]),
-                device,
-            )),
-            epsilon: params.epsilon,
-        },
-        config: Ignored(config.clone()),
-    }
-}
-
-/// Input data for cross-backend transfer.
+/// Input data for cloning inputs (since forward consumes them).
 #[derive(Debug, Clone)]
 pub struct InputsData {
     pub xq: Vec<f32>,
@@ -270,4 +214,269 @@ pub fn inputs_from_data<B: Backend>(
         ),
         start_idx: 0,
     }
+}
+
+use crate::ttt::linear::TTTLinearState;
+use burn::tensor::backend::AutodiffBackend;
+use burn::tensor::TensorData;
+
+/// Test backward using `forward_mini_batch` for both.
+pub fn test_backward_fmb<B, T, Transform>(
+    dims: TestDims,
+    transform: Transform,
+    rtol: f32,
+    atol: f32,
+    name: &str,
+)
+where
+    B: AutodiffBackend<Device: Default>,
+    T: TTTInnerModel<B, State = TTTLinearState<B>>,
+    Transform: FnOnce(TTTLinear<B>) -> T,
+{
+    test_backward(
+        dims,
+        transform,
+        |m, s, i| m.forward_mini_batch(s, &i, 0..dims.seq_len),
+        |m, s, i| m.forward_mini_batch(s, &i, 0..dims.seq_len),
+        rtol, atol, name,
+    )
+}
+
+/// Test backward using `forward` for both.
+pub fn test_backward_fwd<B, T, Transform>(
+    dims: TestDims,
+    transform: Transform,
+    rtol: f32,
+    atol: f32,
+    name: &str,
+)
+where
+    B: AutodiffBackend<Device: Default>,
+    T: TTTInnerModel<B, State = TTTLinearState<B>>,
+    Transform: FnOnce(TTTLinear<B>) -> T,
+{
+    test_backward(
+        dims,
+        transform,
+        |m, s, i| m.forward(s, i),
+        |m, s, i| m.forward(s, i),
+        rtol, atol, name,
+    )
+}
+
+/// Test backward gradients with custom run functions.
+/// Compares all gradients: xq, xk, xv, ttt_lr_eta, state weight, state bias.
+pub fn test_backward<B, T, Transform, RunRef, RunTested>(
+    dims: TestDims,
+    transform: Transform,
+    run_ref: RunRef,
+    run_tested: RunTested,
+    rtol: f32,
+    atol: f32,
+    name: &str,
+)
+where
+    B: AutodiffBackend<Device: Default>,
+    T: TTTInnerModel<B, State = TTTLinearState<B>>,
+    Transform: FnOnce(TTTLinear<B>) -> T,
+    RunRef: FnOnce(&TTTLinear<B>, &mut TTTLinearState<B>, TTTInputsInner<B>) -> Tensor<B, 4>,
+    RunTested: FnOnce(&T, &mut TTTLinearState<B>, TTTInputsInner<B>) -> Tensor<B, 4>,
+{
+    let config = default_test_config(dims);
+    let device: B::Device = Default::default();
+
+    // Create ref model and clone for tested
+    let ref_model: TTTLinear<B> = create_test_model(&config, &device);
+    let tested_model = transform(ref_model.clone());
+
+    // Generate input data
+    let inputs: TTTInputsInner<B> = generate_test_inputs(dims, &device);
+    let input_data = inputs_to_data(&inputs);
+
+    let shape = [dims.batch_size, dims.num_heads, dims.seq_len, dims.head_dim];
+
+    // Create ref inputs with require_grad
+    let xq_ref: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xq.clone(), shape), &device).require_grad();
+    let xk_ref: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xk.clone(), shape), &device).require_grad();
+    let xv_ref: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xv.clone(), shape), &device).require_grad();
+    let ttt_lr_eta_ref: Tensor<B, 3> = Tensor::from_data(
+        TensorData::new(input_data.ttt_lr_eta.clone(), [dims.batch_size, dims.num_heads, dims.seq_len]), &device,
+    ).require_grad();
+    let token_eta: Tensor<B, 1> = Tensor::from_data(TensorData::new(input_data.token_eta.clone(), [dims.seq_len]), &device);
+
+    // Init ref state with require_grad (detach from weight_init graph first)
+    let state_ref_init = ref_model.init_state(dims.batch_size);
+    let weight_ref: Tensor<B, 4> = Tensor::from_inner(state_ref_init.weight.inner()).require_grad();
+    let bias_ref: Tensor<B, 3> = Tensor::from_inner(state_ref_init.bias.inner()).require_grad();
+    let mut state_ref = TTTLinearState { weight: weight_ref.clone(), bias: bias_ref.clone() };
+
+    let inputs_ref = TTTInputsInner {
+        qkv: Qkv { xq: xq_ref.clone(), xk: xk_ref.clone(), xv: xv_ref.clone() },
+        token_eta: token_eta.clone(),
+        ttt_lr_eta: ttt_lr_eta_ref.clone(),
+        start_idx: 0,
+    };
+
+    // Run ref forward + backward
+    let output_ref = run_ref(&ref_model, &mut state_ref, inputs_ref);
+    let grads_ref = output_ref.sum().backward();
+
+    // Create tested inputs with require_grad
+    let xq_tested: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xq.clone(), shape), &device).require_grad();
+    let xk_tested: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xk.clone(), shape), &device).require_grad();
+    let xv_tested: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xv.clone(), shape), &device).require_grad();
+    let ttt_lr_eta_tested: Tensor<B, 3> = Tensor::from_data(
+        TensorData::new(input_data.ttt_lr_eta.clone(), [dims.batch_size, dims.num_heads, dims.seq_len]), &device,
+    ).require_grad();
+
+    // Init tested state with require_grad
+    let state_tested_init = tested_model.init_state(dims.batch_size);
+    let weight_tested: Tensor<B, 4> = Tensor::from_inner(state_tested_init.weight.inner()).require_grad();
+    let bias_tested: Tensor<B, 3> = Tensor::from_inner(state_tested_init.bias.inner()).require_grad();
+    let mut state_tested = TTTLinearState { weight: weight_tested.clone(), bias: bias_tested.clone() };
+
+    let inputs_tested = TTTInputsInner {
+        qkv: Qkv { xq: xq_tested.clone(), xk: xk_tested.clone(), xv: xv_tested.clone() },
+        token_eta,
+        ttt_lr_eta: ttt_lr_eta_tested.clone(),
+        start_idx: 0,
+    };
+
+    // Run tested forward + backward
+    let output_tested = run_tested(&tested_model, &mut state_tested, inputs_tested);
+    let grads_tested = output_tested.sum().backward();
+
+    // Compare input gradients
+    assert_data_close(
+        &xq_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+        &xq_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} grad_xq"),
+    );
+    assert_data_close(
+        &xk_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+        &xk_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} grad_xk"),
+    );
+    assert_data_close(
+        &xv_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+        &xv_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} grad_xv"),
+    );
+    assert_data_close(
+        &ttt_lr_eta_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+        &ttt_lr_eta_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} grad_ttt_lr_eta"),
+    );
+
+    // Compare state gradients
+    assert_data_close(
+        &weight_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+        &weight_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} grad_weight"),
+    );
+    assert_data_close(
+        &bias_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+        &bias_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} grad_bias"),
+    );
+}
+
+/// Test using `forward_mini_batch` for both ref and tested.
+pub fn test_fmb<B, T, Transform>(
+    dims: TestDims,
+    transform: Transform,
+    rtol: f32,
+    atol: f32,
+    name: &str,
+)
+where
+    B: Backend<Device: Default>,
+    T: TTTInnerModel<B, State = TTTLinearState<B>>,
+    Transform: FnOnce(TTTLinear<B>) -> T,
+{
+    test_vs_ttt_linear(
+        dims,
+        transform,
+        |m, s, i| m.forward_mini_batch(s, &i, 0..dims.seq_len),
+        |m, s, i| m.forward_mini_batch(s, &i, 0..dims.seq_len),
+        rtol, atol, name,
+    )
+}
+
+/// Test using `forward` for both ref and tested.
+pub fn test_fwd<B, T, Transform>(
+    dims: TestDims,
+    transform: Transform,
+    rtol: f32,
+    atol: f32,
+    name: &str,
+)
+where
+    B: Backend<Device: Default>,
+    T: TTTInnerModel<B, State = TTTLinearState<B>>,
+    Transform: FnOnce(TTTLinear<B>) -> T,
+{
+    test_vs_ttt_linear(
+        dims,
+        transform,
+        |m, s, i| m.forward(s, i),
+        |m, s, i| m.forward(s, i),
+        rtol, atol, name,
+    )
+}
+
+/// Test a TTTInnerModel implementation against TTTLinear reference.
+///
+/// Both models run on the same backend. The `transform` converts TTTLinear to the tested model.
+/// `run_ref` and `run_tested` control how to execute the forward pass for each.
+pub fn test_vs_ttt_linear<B, T, Transform, RunRef, RunTested>(
+    dims: TestDims,
+    transform: Transform,
+    run_ref: RunRef,
+    run_tested: RunTested,
+    rtol: f32,
+    atol: f32,
+    name: &str,
+)
+where
+    B: Backend<Device: Default>,
+    T: TTTInnerModel<B, State = TTTLinearState<B>>,
+    Transform: FnOnce(TTTLinear<B>) -> T,
+    RunRef: FnOnce(&TTTLinear<B>, &mut TTTLinearState<B>, TTTInputsInner<B>) -> Tensor<B, 4>,
+    RunTested: FnOnce(&T, &mut TTTLinearState<B>, TTTInputsInner<B>) -> Tensor<B, 4>,
+{
+    let config = default_test_config(dims);
+    let device: B::Device = Default::default();
+
+    let ref_model: TTTLinear<B> = create_test_model(&config, &device);
+    let tested_model = transform(ref_model.clone());
+
+    let inputs1 = generate_test_inputs(dims, &device);
+    let input_data = inputs_to_data(&inputs1);
+    let inputs_tested = inputs_from_data(&input_data, dims, &device);
+
+    // Run reference
+    let mut state_ref = ref_model.init_state(dims.batch_size);
+    let output_ref = run_ref(&ref_model, &mut state_ref, inputs1);
+
+    // Run tested
+    let mut state_tested = tested_model.init_state(dims.batch_size);
+    let output_tested = run_tested(&tested_model, &mut state_tested, inputs_tested);
+
+    // Compare
+    assert_data_close(
+        &output_tested.to_data().to_vec().unwrap(),
+        &output_ref.to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} output"),
+    );
+    assert_data_close(
+        &state_tested.weight.to_data().to_vec().unwrap(),
+        &state_ref.weight.to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} weight"),
+    );
+    assert_data_close(
+        &state_tested.bias.to_data().to_vec().unwrap(),
+        &state_ref.bias.to_data().to_vec().unwrap(),
+        rtol, atol, &format!("{name} bias"),
+    );
 }
