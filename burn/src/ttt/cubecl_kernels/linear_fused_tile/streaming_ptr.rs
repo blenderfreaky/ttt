@@ -29,11 +29,13 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
 use cubecl::prelude::*;
-use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp};
-use thundercube::util::{transpose_4, index_2d};
+use thundercube::{
+    prelude::*,
+    util::{index_2d, transpose_4},
+};
 
+use super::forward::{ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_stage};
 use super::helpers::ParamsTrait;
-use super::forward::{Inputs, Outputs, ForwardIntermediates, fused_ttt_forward_stage};
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
 /// Pointer table slot indices
@@ -123,10 +125,7 @@ const uint32 eta_off = cube_idx * {eta}u;
 /// Inject HIP code to store from buffer_9 (xq_buf) to output pointer.
 #[cube]
 #[allow(unused_variables)]
-fn store_to_output<P: ParamsTrait>(
-    xq_buf: &Array<Line<P::E>>,
-    #[comptime] count: usize,
-) {
+fn store_to_output<P: ParamsTrait>(xq_buf: &Array<Line<P::E>>, #[comptime] count: usize) {
     use cubecl::intrinsic;
     intrinsic!(|scope| {
         scope.register(cubecl::ir::NonSemantic::Comment {
@@ -218,7 +217,6 @@ pub fn load_st_from_slice_transpose<F: Float, R: Dim, C: Dim>(
     dst: &mut St<F, R, C>,
     #[comptime] src_cols: usize, // Number of columns in source (head_dim)
 ) {
-
     let s_stride = C::LINES;
     let patches_h = R::LINES;
     let patches_w = C::LINES;
@@ -332,7 +330,10 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
 
     if comptime!(debug) {
         if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
-            debug_print!("PTR_STREAM: init done, entering main loop ctrl=%u\n", ctrl_idx);
+            debug_print!(
+                "PTR_STREAM: init done, entering main loop ctrl=%u\n",
+                ctrl_idx
+            );
         }
     }
 
@@ -391,14 +392,7 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
         }
 
         // Load input data from pointers via injected HIP code
-        load_from_pointers::<P>(
-            xq_buf,
-            xk_buf,
-            xv_buf,
-            eta_buf,
-            qkv_lines,
-            eta_lines,
-        );
+        load_from_pointers::<P>(xq_buf, xk_buf, xv_buf, eta_buf, qkv_lines, eta_lines);
 
         sync_cube();
 
@@ -419,17 +413,46 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
 
         if comptime!(debug) {
             if UNIT_POS == 0 {
-                debug_print!("PTR_STREAM: cube b=%u h=%u qkv=%u eta=%u\n",
-                    batch_idx as u32, head_idx as u32, base_qkv as u32, base_eta as u32);
+                debug_print!(
+                    "PTR_STREAM: cube b=%u h=%u qkv=%u eta=%u\n",
+                    batch_idx as u32,
+                    head_idx as u32,
+                    base_qkv as u32,
+                    base_eta as u32
+                );
             }
         }
 
         // Copy from Arrays to scratch Tensors in Inputs struct.
         // Array and direct Tensor indexing use Line offsets
-        copy_array_to_tensor(xq_buf, qkv_offset_lines, &mut inputs.xq, qkv_offset_lines, qkv_lines);
-        copy_array_to_tensor(xk_buf, qkv_offset_lines, &mut inputs.xk, qkv_offset_lines, qkv_lines);
-        copy_array_to_tensor(xv_buf, qkv_offset_lines, &mut inputs.xv, qkv_offset_lines, qkv_lines);
-        copy_array_to_tensor(eta_buf, eta_offset_lines, &mut inputs.ttt_lr_eta, eta_offset_lines, eta_lines);
+        copy_array_to_tensor(
+            xq_buf,
+            qkv_offset_lines,
+            &mut inputs.xq,
+            qkv_offset_lines,
+            qkv_lines,
+        );
+        copy_array_to_tensor(
+            xk_buf,
+            qkv_offset_lines,
+            &mut inputs.xk,
+            qkv_offset_lines,
+            qkv_lines,
+        );
+        copy_array_to_tensor(
+            xv_buf,
+            qkv_offset_lines,
+            &mut inputs.xv,
+            qkv_offset_lines,
+            qkv_lines,
+        );
+        copy_array_to_tensor(
+            eta_buf,
+            eta_offset_lines,
+            &mut inputs.ttt_lr_eta,
+            eta_offset_lines,
+            eta_lines,
+        );
 
         sync_cube();
 
@@ -449,8 +472,8 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             &mut bias_rv,
             &ln_weight_rv,
             &ln_bias_rv,
-            base_qkv,   // stage_offset - scalar offset for load_st_transpose
-            base_eta,   // ttt_lr_eta_idx - scalar offset for ttt_lr_eta
+            base_qkv, // stage_offset - scalar offset for load_st_transpose
+            base_eta, // ttt_lr_eta_idx - scalar offset for ttt_lr_eta
             epsilon,
         );
 
@@ -463,7 +486,13 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
         }
 
         // Copy output back to pointer destination using Line offset
-        copy_tensor_to_array(&outputs.output, qkv_offset_lines, xq_buf, qkv_offset_lines, qkv_lines);
+        copy_tensor_to_array(
+            &outputs.output,
+            qkv_offset_lines,
+            xq_buf,
+            qkv_offset_lines,
+            qkv_lines,
+        );
         store_to_output::<P>(xq_buf, qkv_lines);
 
         sync_cube();
@@ -492,7 +521,13 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     let weight_out_offset = (batch_idx * num_heads + head_idx) * head_dim * head_dim / LINE_SIZE;
     let bias_out_offset = (batch_idx * num_heads + head_idx) * head_dim / LINE_SIZE;
 
-    cube::store_st_direct(&weight_smem, &mut outputs.weight_out, weight_out_offset, 0, 0);
+    cube::store_st_direct(
+        &weight_smem,
+        &mut outputs.weight_out,
+        weight_out_offset,
+        0,
+        0,
+    );
     cube::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, bias_out_offset);
 
     // Ensure all stores are complete before kernel exits

@@ -24,7 +24,7 @@ use super::{
     forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
     helpers::Params,
     streaming::{
-        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN,
+        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY,
         StreamingKernelConfig, fused_ttt_streaming_kernel,
     },
 };

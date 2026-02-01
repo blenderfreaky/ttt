@@ -5,7 +5,7 @@ use burn::{
     module::{Ignored, Module, Param},
     nn::Initializer,
     prelude::Backend,
-    tensor::{Bool, Tensor, s},
+    tensor::{Tensor, s},
 };
 
 use super::{
