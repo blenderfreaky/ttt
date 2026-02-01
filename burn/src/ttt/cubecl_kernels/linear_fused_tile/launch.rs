@@ -8,7 +8,7 @@ use burn_cubecl::{
     tensor::CubeTensor,
 };
 use cubecl::prelude::*;
-use thundercube::prelude::{D4, D8, D16, D32, D64, D128, LINE_SIZE};
+use thundercube::prelude::{D4, D8, D16, D32, D64, LINE_SIZE};
 
 use super::{
     backward::{
