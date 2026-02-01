@@ -3,8 +3,7 @@
 use std::fmt::Debug;
 
 use burn_cubecl::{
-    CubeRuntime, FloatElement, kernel::into_contiguous,
-    ops::numeric::zeros_client,
+    CubeRuntime, FloatElement, kernel::into_contiguous, ops::numeric::zeros_client,
     tensor::CubeTensor,
 };
 use cubecl::prelude::*;
@@ -485,7 +484,7 @@ pub fn forward<R: CubeRuntime, F: FloatElement>(
     let inputs = inputs.map(into_contiguous);
 
     let shape = inputs.xq.shape.clone();
-    let [batch_size, num_heads, seq_len, head_dim] = shape.dims();
+    let [batch_size, num_heads, seq_len, _head_dim] = shape.dims();
 
     // Allocate output tensors
     let output = empty_like::<R, F>(&inputs.xq, shape.clone());
@@ -596,10 +595,7 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         &saved.weight_init,
         [batch_size, num_heads, head_dim, head_dim],
     );
-    let grad_bias_batched = empty_like::<R, F>(
-        &saved.bias_init,
-        [batch_size, num_heads, head_dim],
-    );
+    let grad_bias_batched = empty_like::<R, F>(&saved.bias_init, [batch_size, num_heads, head_dim]);
 
     // LN gradients are unbatched (atomic accumulation across batches)
     // Must be zero-initialized since kernel uses atomic adds
@@ -798,10 +794,7 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         &saved.weight_init,
         [batch_size, num_heads, head_dim, head_dim],
     );
-    let grad_bias_batched = empty_like::<R, F>(
-        &saved.bias_init,
-        [batch_size, num_heads, head_dim],
-    );
+    let grad_bias_batched = empty_like::<R, F>(&saved.bias_init, [batch_size, num_heads, head_dim]);
 
     // LN gradients are unbatched (atomic accumulation across batches)
     // Must be zero-initialized since kernel uses atomic adds
@@ -964,7 +957,7 @@ pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
     let inputs = inputs.map(into_contiguous);
 
     let shape = inputs.xq.shape.clone();
-    let [batch_size, num_heads, seq_len, head_dim] = shape.dims();
+    let [batch_size, num_heads, seq_len, _head_dim] = shape.dims();
     let mini_batch_len = config.mini_batch_len;
 
     assert_eq!(

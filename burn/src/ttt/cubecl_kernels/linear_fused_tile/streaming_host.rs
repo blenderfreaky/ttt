@@ -239,10 +239,6 @@ impl AnyStreamingState {
         Self(Box::new(state))
     }
 
-    fn downcast_ref<R: CubeRuntime + 'static>(&self) -> Option<&TttStreamingState<R>> {
-        self.0.downcast_ref()
-    }
-
     fn downcast_mut<R: CubeRuntime + 'static>(&mut self) -> Option<&mut TttStreamingState<R>> {
         self.0.downcast_mut()
     }

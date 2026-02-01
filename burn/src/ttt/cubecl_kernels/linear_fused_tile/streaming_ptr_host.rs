@@ -432,7 +432,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             kernel_client.set_stream(kernel_stream_id);
         }
 
-        let mut state = Self {
+        let state = Self {
             config,
             stream,
             tensors,
@@ -810,7 +810,10 @@ mod tests {
     use super::super::streaming_ptr_wrapper::FusedTilePtrStreamingState;
     use crate::ttt::{
         GpuBackend,
-        cubecl_kernels::{FusedPtrStreaming, test_utils::{TestDims, test_fwd}},
+        cubecl_kernels::{
+            FusedPtrStreaming,
+            test_utils::{TestDims, test_fwd},
+        },
     };
 
     // TODO: ptr streaming kernel has issues, needs investigation
@@ -822,12 +825,11 @@ mod tests {
             .unwrap();
 
         let dims = TestDims::multi_stage(2, 2, 32, 8, 2).with_iterations(2);
-        test_fwd::<GpuBackend, FusedPtrStreaming<GpuBackend>, FusedTilePtrStreamingState<GpuBackend>, _>(
-            dims,
-            |m| m.into(),
-            0.5,
-            0.4,
-            "PtrStreaming",
-        );
+        test_fwd::<
+            GpuBackend,
+            FusedPtrStreaming<GpuBackend>,
+            FusedTilePtrStreamingState<GpuBackend>,
+            _,
+        >(dims, |m| m.into(), 0.5, 0.4, "PtrStreaming");
     }
 }

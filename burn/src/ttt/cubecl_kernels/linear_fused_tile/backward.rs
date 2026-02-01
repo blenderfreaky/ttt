@@ -100,10 +100,11 @@ fn atomic_add_rv<F: Float, L: Dim>(
 // =============================================================================
 
 /// Outputs from stage 4 (stored in tile pool).
+/// Note: grad_W_z1bar is accumulated directly into grad_L_W_last to save an F×F tile.
 #[derive(CubeType)]
 struct Stage4Outputs<P: ParamsTrait> {
     // grad_z1_bar stored in dedicated tile passed by caller
-    grad_W_z1bar: St<P::E, P::F, P::F>,
+    // grad_W_z1bar accumulated into grad_L_W_last via temp_f_f tile
     grad_b_z1bar: Rv<P::E, P::F>,
     grad_ln_weight: Rv<P::E, P::F>,
     grad_ln_bias: Rv<P::E, P::F>,
@@ -111,6 +112,7 @@ struct Stage4Outputs<P: ParamsTrait> {
 
 /// Stage 4: Compute gradients through output layer norm.
 /// grad_z1_bar is written to the output tile passed by caller.
+/// grad_W_z1bar is computed and stored in temp_f_f (accumulated later, after stage 3 reads grad_W_last).
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage4_ln<P: ParamsTrait>(
@@ -123,6 +125,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
     scratch1: &mut St<P::E, P::CS, P::F>,
     scratch2: &mut St<P::E, P::CS, P::F>,
     grad_z1_bar_out: &mut St<P::E, P::CS, P::F>,
+    temp_f_f: &mut St<P::E, P::F, P::F>,
 ) -> Stage4Outputs<P> {
     let f_f = P::E::cast_from(P::F::VALUE as f32);
     let f_inv = P::E::cast_from(1.0f32 / (P::F::VALUE as f32));
@@ -178,14 +181,14 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     // grad_W_z1bar = XQ^T @ grad_z1_bar
+    // Store into temp_f_f (accumulated into grad_W_last after stage 3, which reads it)
     let mut dW_reg = P::f_f_reg();
     dW_reg.zero();
     cube::mma_AB(&mut dW_reg, q_smem, grad_z1_bar_out);
 
     sync_cube();
 
-    let mut grad_W_z1bar = P::f_f_tile();
-    cube::store_rt_to_st(&dW_reg, &mut grad_W_z1bar);
+    cube::store_rt_to_st(&dW_reg, temp_f_f);
 
     sync_cube();
 
@@ -194,7 +197,6 @@ fn backward_stage4_ln<P: ParamsTrait>(
     cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(grad_z1_bar_out, &mut grad_b_z1bar, buf);
 
     Stage4Outputs::<P> {
-        grad_W_z1bar,
         grad_b_z1bar,
         grad_ln_weight,
         grad_ln_bias,
@@ -690,13 +692,13 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 // =============================================================================
 
 /// Stage 1: Final gradient assembly and output storage.
+/// Note: grad_W_z1bar is already accumulated into grad_W_last in stage 4.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage1_assemble<P: ParamsTrait>(
     grad_output: &St<P::E, P::CS, P::F>,
-    // Stage 4 outputs
+    // Stage 4 outputs (grad_W_z1bar accumulated earlier via temp_f_f)
     _grad_z1_bar: &St<P::E, P::CS, P::F>,
-    grad_W_z1bar: &St<P::E, P::F, P::F>,
     grad_b_z1bar: &Rv<P::E, P::F>,
     grad_ln_weight_s4: &Rv<P::E, P::F>,
     grad_ln_bias_s4: &Rv<P::E, P::F>,
@@ -713,6 +715,8 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     // Inputs
     k_smem: &St<P::E, P::F, P::CS>,
     weight_init: &St<P::E, P::F, P::F>,
+    // Temp F×F tile (reused from stage 4)
+    temp_f_f: &mut St<P::E, P::F, P::F>,
     // Accumulated gradients (in/out)
     grad_W_last: &mut St<P::E, P::F, P::F>,
     grad_b_last: &mut Rv<P::E, P::F>,
@@ -757,20 +761,20 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     cube::store_st_direct(scratch1, &mut grads.grad_xk, stage_offset, 0, 0);
 
     // Accumulate weight gradients
-    // grad_W = grad_W_z1bar + XK^T @ grad_Z1
+    // grad_W = grad_W_z1bar (already accumulated in stage 4) + XK^T @ grad_Z1
     let mut dW_reg = P::f_f_reg();
     dW_reg.zero();
     cube::mma_AB(&mut dW_reg, k_smem, grad_Z1);
 
     sync_cube();
 
-    let mut dW_tile = P::f_f_tile();
-    cube::store_rt_to_st(&dW_reg, &mut dW_tile);
+    // Reuse temp_f_f tile (was used for grad_W_z1bar in stage 4)
+    cube::store_rt_to_st(&dW_reg, temp_f_f);
 
     sync_cube();
 
-    grad_W_last.add(&dW_tile);
-    grad_W_last.add(grad_W_z1bar);
+    grad_W_last.add(temp_f_f);
+    // Note: grad_W_z1bar already accumulated into grad_W_last in stage 4
 
     sync_cube();
 
@@ -801,7 +805,9 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 /// - CS×CS pool: cs_cs_a, cs_cs_b (2 CS×CS = 8KB)
 /// - CS×F pool: 10 tiles for stage outputs (10 CS×F = 40KB)
 /// - grad_l_smem (CS×F = 4KB) - included in pool as pool_cs_f_a
-/// Total: 64KB (exactly at LDS limit)
+/// - temp_f_f: shared F×F tile for grad_W_z1bar (stage 4) and dW_tile (stage 1)
+/// - weight_init_smem: F×F tile (persistent)
+/// Total with F×F optimization: saves one F×F tile by reusing temp_f_f
 #[cube]
 #[allow(clippy::too_many_arguments)]
 pub fn fused_ttt_backward_stage<P: ParamsTrait>(
@@ -842,6 +848,9 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut tile_h = P::cs_f_tile();
     let mut tile_grad_Z1 = P::cs_f_tile();
     let mut tile_grad_target = P::cs_f_tile();
+
+    // Shared F×F tile: used for grad_W_z1bar in stage 4, then reused for dW_tile in stage 1
+    let mut temp_f_f = P::f_f_tile();
 
     // =========================================================================
     // Load persistent data
@@ -908,6 +917,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &mut scratch1,
         &mut scratch2,
         &mut tile_grad_z1_bar,
+        &mut temp_f_f,
     );
 
     // =========================================================================
@@ -952,6 +962,11 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let grad_grad_l = tile_e;
     let mut grad_xq_mini = xq_smem;  // Repurpose xq_smem tile
     grad_xq_mini.copy_from(&tile_f);
+
+    sync_cube();
+
+    // Now that stage 3 is done reading grad_L_W_last, accumulate grad_W_z1bar from temp_f_f
+    grad_L_W_last.add(&temp_f_f);
 
     sync_cube();
 
@@ -1019,9 +1034,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     backward_stage1_assemble::<P>(
         &grad_output_s1,
-        // Stage 4 outputs
+        // Stage 4 outputs (grad_W_z1bar already accumulated via temp_f_f)
         &tile_grad_z1_bar,
-        &stage4_out.grad_W_z1bar,
         &stage4_out.grad_b_z1bar,
         &stage4_out.grad_ln_weight,
         &stage4_out.grad_ln_bias,
@@ -1038,6 +1052,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         // Inputs
         &k_smem,
         &weight_init_smem,
+        // Temp F×F tile (reused from stage 4)
+        &mut temp_f_f,
         // Accumulators
         grad_L_W_last,
         grad_L_b_last,

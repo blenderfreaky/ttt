@@ -270,9 +270,12 @@ pub fn load_st_from_slice_transpose<F: Float, R: Dim, C: Dim>(
 /// addresses from ptr_table. After sync, we copy Array -> scratch Tensor
 /// so the standard forward stage can operate on Tensors.
 #[cube(launch)]
+#[allow(unused_assignments, reason = "False positive on `status`")]
 pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     // Pointer table: addresses of input tensors [PTR_TABLE_SIZE]
-    ptr_table: &Tensor<u64>,
+    // not read by CubeCL, but our injected HIP code reads it.
+    // rustc can't see that we're using it, so we give it the underscore prefix.
+    _ptr_table: &Tensor<u64>,
     // Control array [batch * heads] - mutable for atomic ops
     control: &mut Tensor<Atomic<u32>>,
     // Array buffers for pointer-based loading (get predictable buffer_N names)
