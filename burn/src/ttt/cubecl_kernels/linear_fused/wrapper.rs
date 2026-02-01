@@ -269,7 +269,7 @@ mod tests {
         let params = extract_model_params(&ref_model);
 
         // Generate inputs and extract data
-        let inputs = generate_test_inputs(dims, dims.seq_len, &cpu_device);
+        let inputs = generate_test_inputs(dims, &cpu_device);
         let input_data = inputs_to_data(&inputs);
 
         // Run reference

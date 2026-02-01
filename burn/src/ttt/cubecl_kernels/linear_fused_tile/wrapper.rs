@@ -276,7 +276,7 @@ mod tests {
         let params = extract_model_params(&ref_model);
 
         // Generate inputs and extract data
-        let inputs = generate_test_inputs(dims, dims.seq_len, &cpu_device);
+        let inputs = generate_test_inputs(dims, &cpu_device);
         let input_data = inputs_to_data(&inputs);
 
         // Run reference
@@ -331,22 +331,8 @@ mod tests {
     #[test]
     fn test_fused_tile_multi_vs_ttt_linear() {
         // Test multi-stage kernel: 4 mini-batches of 8 tokens each = 32 total
-        let mini_batch_size = 8usize;
-        let num_stages = 4usize;
-        let seq_len = mini_batch_size * num_stages;
-        let dims = TestDims::new(2, 2, 32, seq_len);
-
-        // Config uses mini_batch_size, not full seq_len
-        let config = Arc::new(crate::ttt::TTTConfig {
-            num_heads: dims.num_heads,
-            hidden_size: dims.hidden_size(),
-            token_size: dims.hidden_size(),
-            mini_batch_size,
-            base_lr: 1.0,
-            epsilon: 1e-6,
-            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
-        });
-
+        let dims = TestDims::multi_stage(2, 2, 32, 8, 4);
+        let config = default_test_config(dims);
         let cpu_device: <CpuBackend as Backend>::Device = Default::default();
 
         // Create CPU reference model and extract params
@@ -358,7 +344,7 @@ mod tests {
         let params = extract_model_params(&ref_model);
 
         // Generate inputs with repeating token_eta pattern for multi-stage
-        let inputs = generate_test_inputs(dims, mini_batch_size, &cpu_device);
+        let inputs = generate_test_inputs(dims, &cpu_device);
         let input_data = inputs_to_data(&inputs);
 
         // Run CPU reference using forward() which processes all mini-batches

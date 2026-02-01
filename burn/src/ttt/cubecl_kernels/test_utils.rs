@@ -18,15 +18,29 @@ pub struct TestDims {
     pub num_heads: usize,
     pub head_dim: usize,
     pub seq_len: usize,
+    pub mini_batch_size: usize,
 }
 
 impl TestDims {
+    /// Create test dimensions where seq_len == mini_batch_size (single mini-batch).
     pub fn new(batch_size: usize, num_heads: usize, head_dim: usize, seq_len: usize) -> Self {
         Self {
             batch_size,
             num_heads,
             head_dim,
             seq_len,
+            mini_batch_size: seq_len,
+        }
+    }
+
+    /// Create test dimensions with explicit mini_batch_size (for multi-stage tests).
+    pub fn multi_stage(batch_size: usize, num_heads: usize, head_dim: usize, mini_batch_size: usize, num_stages: usize) -> Self {
+        Self {
+            batch_size,
+            num_heads,
+            head_dim,
+            seq_len: mini_batch_size * num_stages,
+            mini_batch_size,
         }
     }
 
@@ -51,7 +65,7 @@ pub fn default_test_config(dims: TestDims) -> Arc<TTTConfig> {
         num_heads: dims.num_heads,
         hidden_size: dims.hidden_size(),
         token_size: dims.hidden_size(),
-        mini_batch_size: dims.seq_len,
+        mini_batch_size: dims.mini_batch_size,
         base_lr: 1.0,
         epsilon: 1e-6,
         ..TTTConfig::new(TEST_VOCAB_SIZE)
@@ -69,12 +83,11 @@ pub fn create_test_model<B: Backend>(
 
 /// Generate random input tensors for TTT tests.
 ///
-/// `mini_batch_size` determines the token_eta pattern: generates `[1/1, 1/2, ..., 1/mini_batch_size]`
+/// Uses `dims.mini_batch_size` to generate token_eta as `[1/1, 1/2, ..., 1/mini_batch_size]`
 /// repeated to fill `seq_len`. This ensures consistent behavior between single-stage and
 /// multi-stage kernels.
 pub fn generate_test_inputs<B: Backend>(
     dims: TestDims,
-    mini_batch_size: usize,
     device: &B::Device,
 ) -> TTTInputsInner<B> {
     let shape = [dims.batch_size, dims.num_heads, dims.seq_len, dims.head_dim];
@@ -84,10 +97,10 @@ pub fn generate_test_inputs<B: Backend>(
     let xv = Tensor::random(shape, burn::tensor::Distribution::Normal(0.0, 0.1), device);
 
     // Generate token_eta as repeating pattern of [1/1, 1/2, ..., 1/mini_batch_size]
-    let token_eta_base = Tensor::arange(1..(mini_batch_size as i64 + 1), device)
+    let token_eta_base = Tensor::arange(1..(dims.mini_batch_size as i64 + 1), device)
         .float()
         .recip();
-    let num_repeats = dims.seq_len / mini_batch_size;
+    let num_repeats = dims.seq_len / dims.mini_batch_size;
     let token_eta = if num_repeats > 1 {
         token_eta_base.repeat_dim(0, num_repeats)
     } else {
