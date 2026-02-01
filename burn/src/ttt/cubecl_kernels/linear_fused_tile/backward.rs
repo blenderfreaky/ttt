@@ -732,7 +732,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 fn backward_stage1_assemble<P: ParamsTrait>(
     grad_output: &St<P::E, P::CS, P::F>,
     // Stage 4 outputs (grad_W_z1bar accumulated earlier via temp_f_f)
-    _grad_z1_bar: &St<P::E, P::CS, P::F>,
+    // Note: grad_z1_bar tile reused for grad_output_fused in stage 2
     grad_b_z1bar: &Rv<P::E, P::F>,
     grad_ln_weight_s4: &Rv<P::E, P::F>,
     grad_ln_bias_s4: &Rv<P::E, P::F>,
@@ -884,7 +884,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut tile_e = P::cs_f_tile();
     let mut tile_f = P::cs_f_tile();
     let mut tile_grad_xk_attn = P::cs_f_tile();
-    let mut tile_h = P::cs_f_tile();
+    // tile_h eliminated: grad_output_fused reuses tile_grad_z1_bar after stage 3 part 2
     let mut tile_grad_Z1 = P::cs_f_tile();
     let mut tile_grad_target = P::cs_f_tile();
 
@@ -1063,8 +1063,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut sum_gxh_xh = P::cs_reg_big();
     cube::sum_rows(&scratch1, &mut sum_gxh_xh, &mut buf);
 
-    // Load grad_output_fused
-    let mut grad_output_fused = tile_h;
+    // Load grad_output_fused - reuse tile_grad_z1_bar (no longer needed after stage 3)
+    let mut grad_output_fused = tile_grad_z1_bar;
     cube::load_st_direct(&fwd.grad_output_fused, &mut grad_output_fused, stage_offset, 0, 0);
 
     sync_cube();
@@ -1101,7 +1101,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     backward_stage1_assemble::<P>(
         &grad_output_s1,
         // Stage 4 outputs (grad_W_z1bar already accumulated via temp_f_f)
-        &tile_grad_z1_bar,
+        // Note: tile_grad_z1_bar reused for grad_output_fused in stage 2
         &stage4_out.grad_b_z1bar,
         &stage4_out.grad_ln_weight,
         &stage4_out.grad_ln_bias,
