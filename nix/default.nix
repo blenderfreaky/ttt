@@ -21,7 +21,7 @@
     pname = "ttt";
     version = "0.1.0";
     nativeBuildInputs = with pkgs; [pkg-config cmake];
-    buildInputs = [pkgs.openssl];
+    buildInputs = [pkgs.openssl pkgs.sqlite];
   };
 
   mkCargoArtifacts = {
@@ -214,11 +214,7 @@
       ];
       nvtop = pkgs.nvtopPackages.amd;
     };
-in rec {
-  kokkos = pkgs.callPackage ./kokkos.nix {};
-  kokkos-kernels = pkgs.callPackage ./kokkos-kernels.nix {inherit kokkos;};
-  kokkos-tools = pkgs.callPackage ./kokkos-tools.nix {inherit kokkos;};
-
+in {
   rocm6 = mkRocmPkgs {
     name = "ttt-rocm6";
     rocmPkgs = rocmPackages6;
