@@ -116,9 +116,20 @@
         #         --add-flags "--rocm-device-lib-path=$out/amdgcn/bitcode"
         #     '';
         #   };
+        embeddingPython = pkgs.python3.withPackages (ps: with ps; [
+          tokenizers
+          datasets
+        ]);
       in {
         # legacyPackages for nested structure: .#rocm6.f32.ttt, .#cuda.bf16.ttt-bench, etc.
         legacyPackages = own-pkgs // {inherit (pkgs.rocmPackages) rocprofiler;};
+
+        apps.embedding = {
+          type = "app";
+          program = "${pkgs.writeShellScript "run-embedding" ''
+            ${embeddingPython}/bin/python ${./ttt-embedding/emb.py}
+          ''}";
+        };
 
         devShells.default = pkgs.mkShell {
           shellHook = ''
@@ -199,6 +210,10 @@
           ROCM_PATH = "${pkgs.rocmPackages.clr}/bin";
           ROCM_DEVICE_LIB_PATH = "${pkgs.rocmPackages.rocm-device-libs}/amdgcn/bitcode";
           # INTEL_LLVM_DIR = "${pkgs.intel-llvm}";
+        };
+
+        devShells.embedding = pkgs.mkShell {
+          packages = [embeddingPython];
         };
       }
     );

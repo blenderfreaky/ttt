@@ -122,7 +122,7 @@
           bottom
           htop
           btop
-          (python313.withPackages (ps: with ps; [huggingface-hub]))
+          (python313.withPackages (ps: with ps; [huggingface-hub tokenizers datasets]))
         ]
         ++ runtimeDeps;
       fakeRootCommands = ''

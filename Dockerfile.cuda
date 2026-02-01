@@ -93,6 +93,9 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Install useful cargo tools
 RUN cargo install --locked cargo-nextest cargo-watch
 
+# Install Python packages for embedding
+RUN pip3 install --break-system-packages tokenizers datasets
+
 # Set up CUDA environment
 ENV CUDA_PATH=/usr/local/cuda
 ENV PATH="${CUDA_PATH}/bin:${PATH}"
