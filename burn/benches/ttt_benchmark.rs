@@ -30,7 +30,7 @@ use ttt::{
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
     ttt::{
         TTTConfig,
-        cubecl_kernels::{Fused, FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend},
+        cubecl_kernels::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend},
         layer::{Qkv, TTTInnerModel, TTTInputsInner},
         linear::TTTLinear,
         linear_adam::TTTLinearAdam,

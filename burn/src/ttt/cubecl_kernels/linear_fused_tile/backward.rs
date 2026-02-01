@@ -34,7 +34,10 @@ use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index
 use super::forward::ForwardIntermediates;
 use crate::ttt::cubecl_kernels::{
     FusedTttConfig,
-    linear_fused_tile::helpers::{ParamsTrait, build_attn_matrix, build_eta_matrix},
+    linear_fused_tile::helpers::{
+        CsCsTile, CsFTile, CsRegBig, FCsTile, FFTile, FRegBig, ParamsTrait, build_attn_matrix,
+        build_eta_matrix,
+    },
 };
 
 // =============================================================================
@@ -105,9 +108,9 @@ fn atomic_add_rv<F: Float, L: Dim>(
 struct Stage4Outputs<P: ParamsTrait> {
     // grad_z1_bar stored in dedicated tile passed by caller
     // grad_W_z1bar accumulated into grad_L_W_last via temp_f_f tile
-    grad_b_z1bar: Rv<P::E, P::F>,
-    grad_ln_weight: Rv<P::E, P::F>,
-    grad_ln_bias: Rv<P::E, P::F>,
+    grad_b_z1bar: FRegBig<P>,
+    grad_ln_weight: FRegBig<P>,
+    grad_ln_bias: FRegBig<P>,
 }
 
 /// Stage 4: Compute gradients through output layer norm.
@@ -116,16 +119,16 @@ struct Stage4Outputs<P: ParamsTrait> {
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage4_ln<P: ParamsTrait>(
-    grad_output: &St<P::E, P::CS, P::F>,
-    x_hat_ln: &St<P::E, P::CS, P::F>,
-    std_ln: &Rv<P::E, P::CS>,
-    q_smem: &St<P::E, P::F, P::CS>,
-    ln_weight: &Rv<P::E, P::F>,
+    grad_output: &CsFTile<P>,
+    x_hat_ln: &CsFTile<P>,
+    std_ln: &CsRegBig<P>,
+    q_smem: &FCsTile<P>,
+    ln_weight: &FRegBig<P>,
     buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut St<P::E, P::CS, P::F>,
-    scratch2: &mut St<P::E, P::CS, P::F>,
-    grad_z1_bar_out: &mut St<P::E, P::CS, P::F>,
-    temp_f_f: &mut St<P::E, P::F, P::F>,
+    scratch1: &mut CsFTile<P>,
+    scratch2: &mut CsFTile<P>,
+    grad_z1_bar_out: &mut CsFTile<P>,
+    temp_f_f: &mut FFTile<P>,
 ) -> Stage4Outputs<P> {
     let f_f = P::E::cast_from(P::F::VALUE as f32);
     let f_inv = P::E::cast_from(1.0f32 / (P::F::VALUE as f32));
@@ -212,13 +215,13 @@ fn backward_stage4_ln<P: ParamsTrait>(
 #[derive(CubeType)]
 struct Stage3Part1Outputs<P: ParamsTrait> {
     /// Intermediate for grad_ttt_lr_eta computation (from weight/bias update term)
-    grad_eta_term1: Rv<P::E, P::CS>,
+    grad_eta_term1: CsRegBig<P>,
 }
 
 /// Outputs from stage 3 (final).
 #[derive(CubeType)]
 struct Stage3Outputs<P: ParamsTrait> {
-    grad_ttt_lr_eta: Rv<P::E, P::CS>,
+    grad_ttt_lr_eta: CsRegBig<P>,
 }
 
 /// Stage 3 Part 1: Compute gradients that depend on grad_W_last.
@@ -227,27 +230,27 @@ struct Stage3Outputs<P: ParamsTrait> {
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage3_part1<P: ParamsTrait>(
-    grad_z1_bar: &St<P::E, P::CS, P::F>,
-    grad_l: &St<P::E, P::CS, P::F>,
-    grad_W_last: &St<P::E, P::F, P::F>,
-    grad_b_last: &Rv<P::E, P::F>,
-    q_smem: &St<P::E, P::F, P::CS>,
-    k_smem: &St<P::E, P::F, P::CS>,
-    xk_smem: &St<P::E, P::CS, P::F>,
-    xq_smem: &St<P::E, P::CS, P::F>,
+    grad_z1_bar: &CsFTile<P>,
+    grad_l: &CsFTile<P>,
+    grad_W_last: &FFTile<P>,
+    grad_b_last: &FRegBig<P>,
+    q_smem: &FCsTile<P>,
+    k_smem: &FCsTile<P>,
+    xk_smem: &CsFTile<P>,
+    xq_smem: &CsFTile<P>,
     token_eta: &Tensor<Line<P::E>>,
     ttt_lr_eta: &Tensor<Line<P::E>>,
-    last_eta: &Rv<P::E, P::CS>,
+    last_eta: &CsRegBig<P>,
     last_token_eta: P::E,
     ttt_lr_eta_idx: usize,
     buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut St<P::E, P::CS, P::F>,
-    scratch2: &mut St<P::E, P::CS, P::F>,
-    cs_cs_a: &mut St<P::E, P::CS, P::CS>,
-    cs_cs_b: &mut St<P::E, P::CS, P::CS>,
-    grad_grad_l_out: &mut St<P::E, P::CS, P::F>,
-    grad_xk_mini_out: &mut St<P::E, P::CS, P::F>,
-    grad_xk_attn_out: &mut St<P::E, P::CS, P::F>,
+    scratch1: &mut CsFTile<P>,
+    scratch2: &mut CsFTile<P>,
+    cs_cs_a: &mut CsCsTile<P>,
+    cs_cs_b: &mut CsCsTile<P>,
+    grad_grad_l_out: &mut CsFTile<P>,
+    grad_xk_mini_out: &mut CsFTile<P>,
+    grad_xk_attn_out: &mut CsFTile<P>,
 ) -> Stage3Part1Outputs<P> {
     // --- Compute grad_grad_l from three sources ---
 
@@ -400,21 +403,21 @@ fn backward_stage3_part1<P: ParamsTrait>(
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage3_part2<P: ParamsTrait>(
-    grad_z1_bar: &St<P::E, P::CS, P::F>,
-    grad_l: &St<P::E, P::CS, P::F>,
-    q_smem: &St<P::E, P::F, P::CS>,
-    k_smem: &St<P::E, P::F, P::CS>,
-    xk_smem: &St<P::E, P::CS, P::F>,
-    weight_init: &St<P::E, P::F, P::F>,
+    grad_z1_bar: &CsFTile<P>,
+    grad_l: &CsFTile<P>,
+    q_smem: &FCsTile<P>,
+    k_smem: &FCsTile<P>,
+    xk_smem: &CsFTile<P>,
+    weight_init: &FFTile<P>,
     token_eta: &Tensor<Line<P::E>>,
     ttt_lr_eta: &Tensor<Line<P::E>>,
     ttt_lr_eta_idx: usize,
-    grad_eta_term1: &Rv<P::E, P::CS>,
+    grad_eta_term1: &CsRegBig<P>,
     buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut St<P::E, P::CS, P::F>,
-    cs_cs_a: &mut St<P::E, P::CS, P::CS>,
-    cs_cs_b: &mut St<P::E, P::CS, P::CS>,
-    grad_xq_mini_out: &mut St<P::E, P::CS, P::F>,
+    scratch1: &mut CsFTile<P>,
+    cs_cs_a: &mut CsCsTile<P>,
+    cs_cs_b: &mut CsCsTile<P>,
+    grad_xq_mini_out: &mut CsFTile<P>,
 ) -> Stage3Outputs<P> {
     // --- grad_xq_mini = grad_z1_bar @ W_init^T ---
     let mut grad_xq_reg = P::cs_f_reg();
@@ -522,27 +525,27 @@ fn backward_stage3_part2<P: ParamsTrait>(
 /// Outputs from stage 2.
 #[derive(CubeType)]
 struct Stage2Outputs<P: ParamsTrait> {
-    grad_ln_weight: Rv<P::E, P::F>,
-    grad_ln_bias: Rv<P::E, P::F>,
+    grad_ln_weight: FRegBig<P>,
+    grad_ln_bias: FRegBig<P>,
 }
 
 /// Stage 2: Compute second derivative through fused LN+L2 gradient.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage2_ln_l2<P: ParamsTrait>(
-    grad_grad_l: &St<P::E, P::CS, P::F>,
-    x_hat_fused: &St<P::E, P::CS, P::F>,
-    std_fused: &Rv<P::E, P::CS>,
-    grad_output_fused: &St<P::E, P::CS, P::F>,
-    grad_x_hat_fused: &St<P::E, P::CS, P::F>,
-    grad_l: &St<P::E, P::CS, P::F>,
-    ln_weight: &Rv<P::E, P::F>,
-    sum_gxh_xh_precomputed: &Rv<P::E, P::CS>,
+    grad_grad_l: &CsFTile<P>,
+    x_hat_fused: &CsFTile<P>,
+    std_fused: &CsRegBig<P>,
+    grad_output_fused: &CsFTile<P>,
+    grad_x_hat_fused: &CsFTile<P>,
+    grad_l: &CsFTile<P>,
+    ln_weight: &FRegBig<P>,
+    sum_gxh_xh_precomputed: &CsRegBig<P>,
     buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut St<P::E, P::CS, P::F>,
-    scratch2: &mut St<P::E, P::CS, P::F>,
-    grad_Z1_out: &mut St<P::E, P::CS, P::F>,
-    grad_target_out: &mut St<P::E, P::CS, P::F>,
+    scratch1: &mut CsFTile<P>,
+    scratch2: &mut CsFTile<P>,
+    grad_Z1_out: &mut CsFTile<P>,
+    grad_target_out: &mut CsFTile<P>,
 ) -> Stage2Outputs<P> {
     let f_inv = P::E::cast_from(1.0f32 / (P::F::VALUE as f32));
 
@@ -730,37 +733,37 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage1_assemble<P: ParamsTrait>(
-    grad_output: &St<P::E, P::CS, P::F>,
+    grad_output: &CsFTile<P>,
     // Stage 4 outputs (grad_W_z1bar accumulated earlier via temp_f_f)
     // Note: grad_z1_bar tile reused for grad_output_fused in stage 2
-    grad_b_z1bar: &Rv<P::E, P::F>,
-    grad_ln_weight_s4: &Rv<P::E, P::F>,
-    grad_ln_bias_s4: &Rv<P::E, P::F>,
+    grad_b_z1bar: &FRegBig<P>,
+    grad_ln_weight_s4: &FRegBig<P>,
+    grad_ln_bias_s4: &FRegBig<P>,
     // Stage 3 outputs
-    grad_xq_mini: &St<P::E, P::CS, P::F>,
-    grad_xk_mini: &St<P::E, P::CS, P::F>,
-    grad_xk_attn: &St<P::E, P::CS, P::F>,
-    grad_ttt_lr_eta: &Rv<P::E, P::CS>,
+    grad_xq_mini: &CsFTile<P>,
+    grad_xk_mini: &CsFTile<P>,
+    grad_xk_attn: &CsFTile<P>,
+    grad_ttt_lr_eta: &CsRegBig<P>,
     // Stage 2 outputs
-    grad_Z1: &St<P::E, P::CS, P::F>,
-    grad_target: &St<P::E, P::CS, P::F>,
-    grad_ln_weight_s2: &Rv<P::E, P::F>,
-    grad_ln_bias_s2: &Rv<P::E, P::F>,
+    grad_Z1: &CsFTile<P>,
+    grad_target: &CsFTile<P>,
+    grad_ln_weight_s2: &FRegBig<P>,
+    grad_ln_bias_s2: &FRegBig<P>,
     // Inputs
-    k_smem: &St<P::E, P::F, P::CS>,
+    k_smem: &FCsTile<P>,
     // Temp F×F tile: contains weight_init on entry, overwritten with dW_tile
-    temp_f_f: &mut St<P::E, P::F, P::F>,
+    temp_f_f: &mut FFTile<P>,
     // Accumulated gradients (in/out)
-    grad_W_last: &mut St<P::E, P::F, P::F>,
-    grad_b_last: &mut Rv<P::E, P::F>,
-    grad_ln_weight_acc: &mut Rv<P::E, P::F>,
-    grad_ln_bias_acc: &mut Rv<P::E, P::F>,
+    grad_W_last: &mut FFTile<P>,
+    grad_b_last: &mut FRegBig<P>,
+    grad_ln_weight_acc: &mut FRegBig<P>,
+    grad_ln_bias_acc: &mut FRegBig<P>,
     // Output storage
     grads: &mut GradOutputs<P::E>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
     buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut St<P::E, P::CS, P::F>,
+    scratch1: &mut CsFTile<P>,
 ) {
     // grad_XQ = grad_output + grad_xq_mini
     scratch1.copy_from(grad_output);
@@ -853,10 +856,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     saved: &SavedTensors<P::E>,
     fwd: &ForwardIntermediates<P::E>,
     grad_L_XQW: &Tensor<Line<P::E>>,
-    grad_L_W_last: &mut St<P::E, P::F, P::F>,
-    grad_L_b_last: &mut Rv<P::E, P::F>,
-    grad_L_ln_weight_acc: &mut Rv<P::E, P::F>,
-    grad_L_ln_bias_acc: &mut Rv<P::E, P::F>,
+    grad_L_W_last: &mut FFTile<P>,
+    grad_L_b_last: &mut FRegBig<P>,
+    grad_L_ln_weight_acc: &mut FRegBig<P>,
+    grad_L_ln_bias_acc: &mut FRegBig<P>,
     grads: &mut GradOutputs<P::E>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
@@ -935,8 +938,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     cube::load_st_direct(grad_L_XQW, &mut tile_c, stage_offset, 0, 0);
 
     // Rename tiles to reflect their content
-    let mut x_hat_ln = tile_b;
-    let mut grad_output_s4 = tile_c;
+    let x_hat_ln = tile_b;
+    let grad_output_s4 = tile_c;
 
     // Load std_ln
     let mut std_ln = P::cs_reg_big();

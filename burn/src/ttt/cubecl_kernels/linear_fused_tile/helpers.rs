@@ -1,5 +1,28 @@
+#![allow(type_alias_bounds)]
+
 use cubecl::prelude::*;
 use thundercube::prelude::*;
+
+// Shared memory tiles (St)
+pub type CsFTile<P: ParamsTrait> = St<P::E, P::CS, P::F>;
+pub type FCsTile<P: ParamsTrait> = St<P::E, P::F, P::CS>;
+pub type CsCsTile<P: ParamsTrait> = St<P::E, P::CS, P::CS>;
+pub type FFTile<P: ParamsTrait> = St<P::E, P::F, P::F>;
+
+// Shared memory vectors (Sv)
+pub type CsVec<P: ParamsTrait> = Sv<P::E, P::CS>;
+pub type FVec<P: ParamsTrait> = Sv<P::E, P::F>;
+
+// Register tiles (Rt)
+pub type CsCsReg<P: ParamsTrait> = Rt<P::E, P::CS_Reg, P::CS_Reg>;
+pub type CsFReg<P: ParamsTrait> = Rt<P::E, P::CS_Reg, P::F_Reg>;
+pub type FFReg<P: ParamsTrait> = Rt<P::E, P::F_Reg, P::F_Reg>;
+
+// Register vectors (Rv)
+pub type CsRegVec<P: ParamsTrait> = Rv<P::E, P::CS_Reg>;
+pub type FRegVec<P: ParamsTrait> = Rv<P::E, P::F_Reg>;
+pub type CsRegBig<P: ParamsTrait> = Rv<P::E, P::CS>;
+pub type FRegBig<P: ParamsTrait> = Rv<P::E, P::F>;
 
 #[cube]
 pub trait ParamsTrait: Send + Sync + 'static {
@@ -11,29 +34,22 @@ pub trait ParamsTrait: Send + Sync + 'static {
     type F_Reg: Dim;
 
     // CubeCL won't let us do default impls
-    fn cs_f_tile() -> St<Self::E, Self::CS, Self::F>;
-    fn f_cs_tile() -> St<Self::E, Self::F, Self::CS>;
-    fn cs_cs_tile() -> St<Self::E, Self::CS, Self::CS>;
-    fn cs_vec() -> Sv<Self::E, Self::CS>;
-    fn f_f_tile() -> St<Self::E, Self::F, Self::F>;
-    fn f_vec() -> Sv<Self::E, Self::F>;
+    fn cs_f_tile() -> CsFTile<Self>;
+    fn f_cs_tile() -> FCsTile<Self>;
+    fn cs_cs_tile() -> CsCsTile<Self>;
+    fn cs_vec() -> CsVec<Self>;
+    fn f_f_tile() -> FFTile<Self>;
+    fn f_vec() -> FVec<Self>;
 
-    fn cs_cs_reg() -> Rt<Self::E, Self::CS_Reg, Self::CS_Reg>;
-    fn cs_f_reg() -> Rt<Self::E, Self::CS_Reg, Self::F_Reg>;
-    fn f_f_reg() -> Rt<Self::E, Self::F_Reg, Self::F_Reg>;
-    fn cs_reg() -> Rv<Self::E, Self::CS_Reg>;
-    fn f_reg() -> Rv<Self::E, Self::F_Reg>;
+    fn cs_cs_reg() -> CsCsReg<Self>;
+    fn cs_f_reg() -> CsFReg<Self>;
+    fn f_f_reg() -> FFReg<Self>;
+    fn cs_reg() -> CsRegVec<Self>;
+    fn f_reg() -> FRegVec<Self>;
 
-    fn cs_reg_big() -> Rv<Self::E, Self::CS>;
-    fn f_reg_big() -> Rv<Self::E, Self::F>;
+    fn cs_reg_big() -> CsRegBig<Self>;
+    fn f_reg_big() -> FRegBig<Self>;
 }
-
-// pub type CS_F_Tile<P: ParamsTrait> = St<P::E, P::CS, P::F>;
-// pub type F_CS_Tile<P: ParamsTrait> = St<P::E, P::F, P::CS>;
-// pub type CS_CS_Tile<P: ParamsTrait> = St<P::E, P::CS, P::CS>;
-// pub type CS_F_Reg<P: ParamsTrait> = Rt<P::E, P::CS_Reg, P::F_Reg>;
-// pub type F_CS_Reg<P: ParamsTrait> = Rt<P::E, P::F_Reg, P::CS_Reg>;
-// pub type CS_CS_Reg<P: ParamsTrait> = CS_CS_Tile<P>;
 
 pub struct Params<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> {
     _phantom: std::marker::PhantomData<(E, CS, F, CS_Reg, F_Reg)>,
@@ -49,46 +65,46 @@ impl<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> ParamsTrait
     type CS_Reg = CS_Reg;
     type F_Reg = F_Reg;
 
-    fn cs_f_tile() -> St<Self::E, Self::CS, Self::F> {
+    fn cs_f_tile() -> CsFTile<Self> {
         St::new()
     }
-    fn f_cs_tile() -> St<Self::E, Self::F, Self::CS> {
+    fn f_cs_tile() -> FCsTile<Self> {
         St::new()
     }
-    fn cs_cs_tile() -> St<Self::E, Self::CS, Self::CS> {
+    fn cs_cs_tile() -> CsCsTile<Self> {
         St::new()
     }
-    fn cs_vec() -> Sv<Self::E, Self::CS> {
+    fn cs_vec() -> CsVec<Self> {
         Sv::new()
     }
-    fn f_f_tile() -> St<Self::E, Self::F, Self::F> {
+    fn f_f_tile() -> FFTile<Self> {
         St::new()
     }
-    fn f_vec() -> Sv<Self::E, Self::F> {
+    fn f_vec() -> FVec<Self> {
         Sv::new()
     }
 
-    fn cs_cs_reg() -> Rt<Self::E, Self::CS_Reg, Self::CS_Reg> {
+    fn cs_cs_reg() -> CsCsReg<Self> {
         Rt::new()
     }
-    fn cs_f_reg() -> Rt<Self::E, Self::CS_Reg, Self::F_Reg> {
+    fn cs_f_reg() -> CsFReg<Self> {
         Rt::new()
     }
-    fn f_f_reg() -> Rt<Self::E, Self::F_Reg, Self::F_Reg> {
+    fn f_f_reg() -> FFReg<Self> {
         Rt::new()
     }
 
-    fn cs_reg() -> Rv<Self::E, Self::CS_Reg> {
+    fn cs_reg() -> CsRegVec<Self> {
         Rv::new()
     }
-    fn f_reg() -> Rv<Self::E, Self::F_Reg> {
+    fn f_reg() -> FRegVec<Self> {
         Rv::new()
     }
 
-    fn cs_reg_big() -> Rv<Self::E, Self::CS> {
+    fn cs_reg_big() -> CsRegBig<Self> {
         Rv::new()
     }
-    fn f_reg_big() -> Rv<Self::E, Self::F> {
+    fn f_reg_big() -> FRegBig<Self> {
         Rv::new()
     }
 }
@@ -101,7 +117,7 @@ impl<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> ParamsTrait
 pub fn build_eta_matrix<P: ParamsTrait>(
     token_eta: &Tensor<Line<P::E>>,
     ttt_lr_eta: &Tensor<Line<P::E>>,
-    output: &mut St<P::E, P::CS, P::CS>,
+    output: &mut CsCsTile<P>,
     ttt_lr_eta_idx: usize,
     #[comptime] transposed: bool,
 ) {
@@ -154,9 +170,9 @@ pub fn build_eta_matrix<P: ParamsTrait>(
 /// When `transposed` is true: builds upper triangular attn^T (triu)
 #[cube]
 pub fn build_attn_matrix<P: ParamsTrait>(
-    q_smem: &St<P::E, P::F, P::CS>,
-    k_smem: &St<P::E, P::F, P::CS>,
-    output: &mut St<P::E, P::CS, P::CS>,
+    q_smem: &FCsTile<P>,
+    k_smem: &FCsTile<P>,
+    output: &mut CsCsTile<P>,
     #[comptime] transposed: bool,
 ) {
     let mut attn_reg = P::cs_cs_reg();
@@ -193,11 +209,11 @@ pub fn build_attn_matrix<P: ParamsTrait>(
 /// product in registers before storing to shared memory. Saves one CS×CS tile.
 #[cube]
 pub fn build_eta_attn_fused<P: ParamsTrait>(
-    q_smem: &St<P::E, P::F, P::CS>,
-    k_smem: &St<P::E, P::F, P::CS>,
+    q_smem: &FCsTile<P>,
+    k_smem: &FCsTile<P>,
     token_eta: &Tensor<Line<P::E>>,
     ttt_lr_eta: &Tensor<Line<P::E>>,
-    output: &mut St<P::E, P::CS, P::CS>,
+    output: &mut CsCsTile<P>,
     ttt_lr_eta_idx: usize,
 ) {
     // Compute attn = q^T @ k in registers

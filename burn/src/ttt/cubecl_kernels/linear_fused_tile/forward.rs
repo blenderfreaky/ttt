@@ -4,7 +4,7 @@ use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
 use super::{
-    helpers::{ParamsTrait, build_eta_attn_fused, build_eta_matrix},
+    helpers::{FFTile, FRegBig, ParamsTrait, build_eta_attn_fused, build_eta_matrix},
     layer_norm::{layer_norm_forward_stream_intermediates, layer_norm_l2_grad_stream_intermediates},
 };
 use crate::ttt::cubecl_kernels::FusedTttConfig;
@@ -70,10 +70,10 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     inputs: &Inputs<P::E>,
     outputs: &mut Outputs<P::E>,
     fwd_intermediates: &mut ForwardIntermediates<P::E>,
-    weight_smem: &mut St<P::E, P::F, P::F>,
-    bias_rv: &mut Rv<P::E, P::F>,
-    ln_weight_rv: &Rv<P::E, P::F>,
-    ln_bias_rv: &Rv<P::E, P::F>,
+    weight_smem: &mut FFTile<P>,
+    bias_rv: &mut FRegBig<P>,
+    ln_weight_rv: &FRegBig<P>,
+    ln_bias_rv: &FRegBig<P>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
     #[comptime] epsilon: f32,
