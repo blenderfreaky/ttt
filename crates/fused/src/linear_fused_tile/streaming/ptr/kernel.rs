@@ -34,7 +34,7 @@ use thundercube::{
     util::{index_2d, transpose_4},
 };
 
-use super::{
+use super::super::super::{
     forward::{ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_stage},
     helpers::ParamsTrait,
 };

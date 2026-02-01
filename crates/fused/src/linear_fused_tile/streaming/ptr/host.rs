@@ -18,13 +18,13 @@ use thundercube::{
 };
 use tracing::trace;
 
-use super::{
+use super::super::super::{
     forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
     helpers::Params,
-    streaming_ptr::{
-        CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
-        STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
-    },
+};
+use super::kernel::{
+    CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
+    STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
 };
 use crate::FusedTttConfig;
 
@@ -125,7 +125,7 @@ pub struct PtrStreamingTensors<R: CubeRuntime> {
     pub std_ln: CubeTensor<R>,
 }
 
-use super::next_persistent_kernel_stream_id;
+use super::super::super::next_persistent_kernel_stream_id;
 
 /// Get or create a pointer-based streaming state from the global registry.
 #[allow(clippy::too_many_arguments)]
@@ -759,7 +759,7 @@ unsafe impl<R: CubeRuntime> Send for TttPtrStreamingState<R> {}
 
 #[cfg(all(test, feature = "rocm"))]
 mod tests {
-    use super::super::streaming_ptr_wrapper::FusedTilePtrStreamingState;
+    use super::super::FusedTilePtrStreamingState;
     use crate::FusedPtrStreaming;
     use ttt_core::{GpuBackend, test_utils::{TestDims, test_fwd}};
 

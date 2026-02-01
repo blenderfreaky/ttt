@@ -20,12 +20,12 @@ use thundercube::{
 };
 use tracing::trace;
 
-use super::{
+use super::super::super::{
     forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
     helpers::Params,
-    streaming::{
-        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, StreamingKernelConfig, fused_ttt_streaming_kernel,
-    },
+};
+use super::kernel::{
+    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, StreamingKernelConfig, fused_ttt_streaming_kernel,
 };
 use crate::FusedTttConfig;
 
@@ -198,7 +198,7 @@ pub struct StreamingBufferTensors<R: CubeRuntime> {
     pub std_ln: CubeTensor<R>,
 }
 
-use super::next_persistent_kernel_stream_id;
+use super::super::super::next_persistent_kernel_stream_id;
 
 /// State for a running streaming TTT kernel.
 ///

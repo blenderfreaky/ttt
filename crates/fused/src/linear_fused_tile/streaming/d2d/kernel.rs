@@ -16,7 +16,7 @@
 use cubecl::prelude::*;
 use thundercube::{prelude::*, util::index_2d};
 
-use super::{
+use super::super::super::{
     forward::{ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_stage},
     helpers::ParamsTrait,
 };

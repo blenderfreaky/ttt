@@ -21,11 +21,9 @@ use tracing::trace;
 use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
 use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
 
-use super::{
-    launch::TttTileOutputs,
-    streaming_ptr_host::{
-        PtrStreamingConfig, get_or_create_ptr_streaming_state, remove_ptr_streaming_state_by_id,
-    },
+use super::super::super::launch::TttTileOutputs;
+use super::host::{
+    PtrStreamingConfig, get_or_create_ptr_streaming_state, remove_ptr_streaming_state_by_id,
 };
 use crate::{Fused, FusedTttBackend, PtrStreamingKernel, ttt::TttInputs};
 
@@ -337,7 +335,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, PtrStreamin
         let inner_config = inner.get_config();
         let threads = inner_config
             .threads
-            .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
+            .unwrap_or_else(|| super::super::super::api::default_threads(seq_len, head_dim));
 
         let (output, weight_updated, bias_updated) = fused_ttt_ptr_streaming_forward(
             qkv.xq,
