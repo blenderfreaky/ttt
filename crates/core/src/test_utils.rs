@@ -6,8 +6,8 @@ use burn::tensor::Tensor;
 use burn_backend::Backend;
 
 use crate::{
-    Qkv, TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearConfig, TTTLinearState,
-    TEST_VOCAB_SIZE,
+    Qkv, TEST_VOCAB_SIZE, TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearConfig,
+    TTTLinearState,
 };
 
 /// Dimensions for TTT tests.
@@ -228,7 +228,7 @@ pub fn inputs_from_data<B: Backend>(
     }
 }
 
-use burn::tensor::{backend::AutodiffBackend, TensorData};
+use burn::tensor::{TensorData, backend::AutodiffBackend};
 
 impl<B: Backend> AsRef<TTTLinearState<B>> for TTTLinearState<B> {
     fn as_ref(&self) -> &TTTLinearState<B> {

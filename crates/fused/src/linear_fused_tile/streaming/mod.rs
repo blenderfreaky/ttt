@@ -14,8 +14,8 @@ pub use d2d::{
     fused_ttt_streaming_kernel, get_or_create_streaming_state,
 };
 pub use ptr::{
-    CTRL_ARRAY_SIZE as PTR_CTRL_ARRAY_SIZE, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE,
-    STATUS_READY, STATUS_SHUTDOWN, FusedTilePtrStreamingState, PtrStreamingConfig,
-    PtrStreamingKernelConfig, PtrStreamingTensors, TttPtrStreamingKernel, TttPtrStreamingState,
+    CTRL_ARRAY_SIZE as PTR_CTRL_ARRAY_SIZE, FusedTilePtrStreamingState, PTR_TABLE_SIZE,
+    PtrStreamingConfig, PtrStreamingKernelConfig, PtrStreamingTensors, STATUS_DONE, STATUS_IDLE,
+    STATUS_READY, STATUS_SHUTDOWN, TttPtrStreamingKernel, TttPtrStreamingState,
     fused_ttt_streaming_ptr_kernel,
 };

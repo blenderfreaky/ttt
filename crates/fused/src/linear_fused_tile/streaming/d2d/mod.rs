@@ -7,7 +7,7 @@ mod kernel;
 mod wrapper;
 
 pub use host::{
-    StreamingConfig, StreamingBufferTensors, TttStreamingState, get_or_create_streaming_state,
+    StreamingBufferTensors, StreamingConfig, TttStreamingState, get_or_create_streaming_state,
     remove_streaming_state, remove_streaming_state_by_id, shutdown_streaming_state,
 };
 pub use kernel::{

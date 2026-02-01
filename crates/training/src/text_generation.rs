@@ -225,9 +225,10 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ttt_core::{GpuAutodiffBackend, TEST_VOCAB_SIZE};
     use ttt_fused::FusedLinear;
+
+    use super::*;
 
     type Inner = FusedLinear<GpuAutodiffBackend>;
 

@@ -20,12 +20,14 @@ use thundercube::{
 };
 use tracing::trace;
 
-use super::super::super::{
-    forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
-    helpers::Params,
-};
-use super::kernel::{
-    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, StreamingKernelConfig, fused_ttt_streaming_kernel,
+use super::{
+    super::super::{
+        forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
+        helpers::Params,
+    },
+    kernel::{
+        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, StreamingKernelConfig, fused_ttt_streaming_kernel,
+    },
 };
 use crate::FusedTttConfig;
 

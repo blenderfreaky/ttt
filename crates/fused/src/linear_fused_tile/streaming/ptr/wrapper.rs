@@ -21,9 +21,11 @@ use tracing::trace;
 use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
 use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
 
-use super::super::super::launch::TttTileOutputs;
-use super::host::{
-    PtrStreamingConfig, get_or_create_ptr_streaming_state, remove_ptr_streaming_state_by_id,
+use super::{
+    super::super::launch::TttTileOutputs,
+    host::{
+        PtrStreamingConfig, get_or_create_ptr_streaming_state, remove_ptr_streaming_state_by_id,
+    },
 };
 use crate::{Fused, FusedTttBackend, PtrStreamingKernel, ttt::TttInputs};
 

@@ -21,9 +21,9 @@ use tracing::trace;
 use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
 use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
 
-use super::super::super::launch::TttTileOutputs;
-use super::host::{
-    StreamingConfig, get_or_create_streaming_state, remove_streaming_state_by_id,
+use super::{
+    super::super::launch::TttTileOutputs,
+    host::{StreamingConfig, get_or_create_streaming_state, remove_streaming_state_by_id},
 };
 use crate::{Fused, FusedTttBackend, StreamingKernel, ttt::TttInputs};
 
@@ -356,15 +356,21 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, StreamingKe
 
 #[cfg(all(test, feature = "rocm"))]
 mod tests {
+    use ttt_core::{
+        GpuBackend,
+        test_utils::{TestDims, test_fwd},
+    };
+
     use super::*;
     use crate::FusedTileStreaming;
-    use ttt_core::{GpuBackend, test_utils::{TestDims, test_fwd}};
 
     // TODO: streaming kernel has issues, needs investigation
     #[test]
     #[ignore]
     fn test_streaming_vs_ttt_linear() {
-        let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX.lock().unwrap();
+        let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX
+            .lock()
+            .unwrap();
 
         let dims = TestDims::new(2, 2, 32, 8).with_iterations(2);
         test_fwd::<

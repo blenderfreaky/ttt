@@ -18,13 +18,15 @@ use thundercube::{
 };
 use tracing::trace;
 
-use super::super::super::{
-    forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
-    helpers::Params,
-};
-use super::kernel::{
-    CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
-    STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
+use super::{
+    super::super::{
+        forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
+        helpers::Params,
+    },
+    kernel::{
+        CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
+        STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
+    },
 };
 use crate::FusedTttConfig;
 
@@ -759,15 +761,21 @@ unsafe impl<R: CubeRuntime> Send for TttPtrStreamingState<R> {}
 
 #[cfg(all(test, feature = "rocm"))]
 mod tests {
+    use ttt_core::{
+        GpuBackend,
+        test_utils::{TestDims, test_fwd},
+    };
+
     use super::super::FusedTilePtrStreamingState;
     use crate::FusedPtrStreaming;
-    use ttt_core::{GpuBackend, test_utils::{TestDims, test_fwd}};
 
     // TODO: ptr streaming kernel has issues, needs investigation
     #[test]
     #[ignore]
     fn test_ptr_streaming_vs_ttt_linear() {
-        let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX.lock().unwrap();
+        let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX
+            .lock()
+            .unwrap();
 
         let dims = TestDims::multi_stage(2, 2, 32, 8, 2).with_iterations(2);
         test_fwd::<

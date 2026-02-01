@@ -215,8 +215,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
 
 #[cfg(test)]
 mod tests {
-    use ttt_core::{GpuAutodiffBackend, GpuBackend, TTTLinearState};
-    use ttt_core::test_utils::{TestDims, test_backward_fmb, test_fmb, test_fwd};
+    use ttt_core::{
+        GpuAutodiffBackend, GpuBackend, TTTLinearState,
+        test_utils::{TestDims, test_backward_fmb, test_fmb, test_fwd},
+    };
 
     use crate::{FusedTile, FusedTileMulti};
 
