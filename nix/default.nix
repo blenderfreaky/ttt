@@ -8,20 +8,20 @@
   rocmPackages7 = pkgs.rocmPackages;
   cudaPackages = pkgs.cudaPackages_12_8;
 
-  # Common source for crane - include burn and thundercube directories
+  # Common source for crane - include crates directory (workspace)
   fullSrc = pkgs.lib.cleanSourceWith {
     src = ../.;
     filter = path: type: let
       baseName = baseNameOf path;
       relPath = pkgs.lib.removePrefix (toString ../. + "/") (toString path);
-      isRelevant = (pkgs.lib.hasPrefix "burn" relPath) || (pkgs.lib.hasPrefix "thundercube" relPath);
+      isRelevant = pkgs.lib.hasPrefix "crates" relPath;
       isExcluded = baseName == ".git" || baseName == "target" || baseName == "result" || baseName == ".worktree";
     in
       isRelevant && !isExcluded;
   };
 
-  cargoLock = ../burn/Cargo.lock;
-  cargoToml = ../burn/Cargo.toml;
+  cargoLock = ../crates/Cargo.lock;
+  cargoToml = ../crates/Cargo.toml;
   cargoVendorDir = craneLib.vendorCargoDeps {inherit cargoLock cargoToml;};
 
   commonArgs = {
@@ -32,7 +32,7 @@
     version = "0.1.0";
     nativeBuildInputs = with pkgs; [pkg-config cmake];
     buildInputs = [pkgs.openssl];
-    postUnpack = ''sourceRoot="$sourceRoot/burn"'';
+    postUnpack = ''sourceRoot="$sourceRoot/crates"'';
   };
 
   mkCargoArtifacts = {

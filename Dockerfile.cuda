@@ -25,10 +25,9 @@ WORKDIR /app
 # =============================================================================
 FROM chef AS planner
 
-COPY thundercube /app/thundercube
-COPY burn /app/burn
+COPY crates /app/crates
 
-WORKDIR /app/burn
+WORKDIR /app/crates
 RUN cargo chef prepare --recipe-path recipe.json
 
 # =============================================================================
@@ -41,16 +40,16 @@ ENV PATH="${CUDA_PATH}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_PATH}/lib64:${LD_LIBRARY_PATH}"
 
 # Copy recipe and build dependencies only (this layer is cached)
-COPY --from=planner /app/burn/recipe.json /app/burn/recipe.json
+COPY --from=planner /app/crates/recipe.json /app/crates/recipe.json
 
-# Need thundercube for the workspace
-COPY thundercube /app/thundercube
+# Copy workspace manifest for dependency resolution
+COPY crates/Cargo.toml crates/Cargo.lock /app/crates/
 
-WORKDIR /app/burn
+WORKDIR /app/crates
 RUN cargo chef cook --release --no-default-features --features cuda --recipe-path recipe.json
 
 # Now copy actual source and build (only this rebuilds on code changes)
-COPY burn /app/burn
+COPY crates /app/crates
 RUN cargo build --release --no-default-features --features cuda
 
 # =============================================================================
@@ -105,14 +104,13 @@ ENV TTT_PRETOKENIZED_PATH=/workspace/dataset
 WORKDIR /app
 
 # Copy source code for on-server development
-COPY thundercube /app/thundercube
-COPY burn /app/burn
+COPY crates /app/crates
 
 # Copy pre-built binary and target directory (includes deps for incremental builds)
-COPY --from=builder /app/burn/target /app/burn/target
+COPY --from=builder /app/crates/target /app/crates/target
 
 # Create symlink to binary for easy access
-RUN ln -s /app/burn/target/release/ttt /usr/local/bin/ttt
+RUN ln -s /app/crates/target/release/ttt /usr/local/bin/ttt
 
 # Generate shell completions
 RUN mkdir -p /root/.config/fish/completions && \
