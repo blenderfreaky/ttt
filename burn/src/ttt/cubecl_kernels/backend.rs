@@ -18,7 +18,7 @@ use crate::ttt::cubecl_kernels::{
 };
 
 #[cfg(feature = "rocm")]
-use crate::ttt::cubecl_kernels::linear_fused_tile::{TttStreamingKernel, TttPtrStreamingKernel};
+use crate::ttt::cubecl_kernels::linear_fused_tile::{TttPtrStreamingKernel, TttStreamingKernel};
 
 /// Unified backend trait for fused TTT kernels.
 ///

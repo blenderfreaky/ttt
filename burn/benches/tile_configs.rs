@@ -10,8 +10,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use ttt::{
     GpuAutodiffBackend, GpuBackend,
     ttt::cubecl_kernels::{
-        FusedTttBackend, FusedTttConfig,
-        linear_fused_tile::fused_ttt_tile_forward,
+        FusedTttBackend, FusedTttConfig, linear_fused_tile::fused_ttt_tile_forward,
     },
 };
 
@@ -87,10 +86,15 @@ fn bench_forward<B: FusedTttBackend>(
     // Warmup
     for _ in 0..3 {
         let (output, _, _) = fused_ttt_tile_forward::<B>(
-            xq.clone(), xk.clone(), xv.clone(),
-            weight.clone(), bias.clone(),
-            token_eta.clone(), ttt_lr_eta.clone(),
-            ln_weight.clone(), ln_bias.clone(),
+            xq.clone(),
+            xk.clone(),
+            xv.clone(),
+            weight.clone(),
+            bias.clone(),
+            token_eta.clone(),
+            ttt_lr_eta.clone(),
+            ln_weight.clone(),
+            ln_bias.clone(),
             config,
         );
         sync::<B, 4>(output);
@@ -98,15 +102,22 @@ fn bench_forward<B: FusedTttBackend>(
 
     let group_name = format!("fwd_{}x{}", mini_batch_len, head_dim);
     let mut group = c.benchmark_group(&group_name);
-    group.throughput(Throughput::Elements((batch_size * num_heads * mini_batch_len * head_dim) as u64));
+    group.throughput(Throughput::Elements(
+        (batch_size * num_heads * mini_batch_len * head_dim) as u64,
+    ));
 
     group.bench_function(BenchmarkId::new("threads", threads), |b| {
         b.iter(|| {
             let (output, _, _) = fused_ttt_tile_forward::<B>(
-                xq.clone(), xk.clone(), xv.clone(),
-                weight.clone(), bias.clone(),
-                token_eta.clone(), ttt_lr_eta.clone(),
-                ln_weight.clone(), ln_bias.clone(),
+                xq.clone(),
+                xk.clone(),
+                xv.clone(),
+                weight.clone(),
+                bias.clone(),
+                token_eta.clone(),
+                ttt_lr_eta.clone(),
+                ln_weight.clone(),
+                ln_bias.clone(),
                 config,
             );
             sync::<B, 4>(output);
@@ -132,27 +143,32 @@ fn bench_backward(
         [batch_size, num_heads, mini_batch_len, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
     let xk = Tensor::<GpuAutodiffBackend, 4>::random(
         [batch_size, num_heads, mini_batch_len, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
     let xv = Tensor::<GpuAutodiffBackend, 4>::random(
         [batch_size, num_heads, mini_batch_len, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
     let weight = Tensor::<GpuAutodiffBackend, 4>::random(
         [batch_size, num_heads, head_dim, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
     let bias = Tensor::<GpuAutodiffBackend, 3>::random(
         [batch_size, num_heads, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
     let token_eta = Tensor::<GpuAutodiffBackend, 1>::random(
         [mini_batch_len],
         burn::tensor::Distribution::Normal(0.0, 1.0),
@@ -162,17 +178,20 @@ fn bench_backward(
         [batch_size, num_heads, mini_batch_len],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
     let ln_weight = Tensor::<GpuAutodiffBackend, 2>::random(
         [head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
     let ln_bias = Tensor::<GpuAutodiffBackend, 2>::random(
         [head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
-    ).require_grad();
+    )
+    .require_grad();
 
     let epsilon = 1e-6f32;
     let config = FusedTttConfig::new(mini_batch_len, head_dim, epsilon, threads);
@@ -180,10 +199,15 @@ fn bench_backward(
     // Warmup
     for _ in 0..3 {
         let (output, _, _) = fused_ttt_tile_forward::<GpuAutodiffBackend>(
-            xq.clone(), xk.clone(), xv.clone(),
-            weight.clone(), bias.clone(),
-            token_eta.clone(), ttt_lr_eta.clone(),
-            ln_weight.clone(), ln_bias.clone(),
+            xq.clone(),
+            xk.clone(),
+            xv.clone(),
+            weight.clone(),
+            bias.clone(),
+            token_eta.clone(),
+            ttt_lr_eta.clone(),
+            ln_weight.clone(),
+            ln_bias.clone(),
             config,
         );
         let loss = output.sum();
@@ -194,15 +218,22 @@ fn bench_backward(
 
     let group_name = format!("bwd_{}x{}", mini_batch_len, head_dim);
     let mut group = c.benchmark_group(&group_name);
-    group.throughput(Throughput::Elements((batch_size * num_heads * mini_batch_len * head_dim) as u64));
+    group.throughput(Throughput::Elements(
+        (batch_size * num_heads * mini_batch_len * head_dim) as u64,
+    ));
 
     group.bench_function(BenchmarkId::new("threads", threads), |b| {
         b.iter(|| {
             let (output, _, _) = fused_ttt_tile_forward::<GpuAutodiffBackend>(
-                xq.clone(), xk.clone(), xv.clone(),
-                weight.clone(), bias.clone(),
-                token_eta.clone(), ttt_lr_eta.clone(),
-                ln_weight.clone(), ln_bias.clone(),
+                xq.clone(),
+                xk.clone(),
+                xv.clone(),
+                weight.clone(),
+                bias.clone(),
+                token_eta.clone(),
+                ttt_lr_eta.clone(),
+                ln_weight.clone(),
+                ln_bias.clone(),
                 config,
             );
             let loss = output.sum();

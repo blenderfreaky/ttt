@@ -398,9 +398,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
     // Scale by last_token_eta
     grad_eta_term1.mul_scalar(last_token_eta);
 
-    Stage3Part1Outputs::<P> {
-        grad_eta_term1,
-    }
+    Stage3Part1Outputs::<P> { grad_eta_term1 }
 }
 
 /// Stage 3 Part 2: Compute gradients that depend on weight_init.
@@ -518,9 +516,7 @@ fn backward_stage3_part2<P: ParamsTrait>(
 
     grad_ttt_lr_eta.add(grad_eta_term1);
 
-    Stage3Outputs::<P> {
-        grad_ttt_lr_eta,
-    }
+    Stage3Outputs::<P> { grad_ttt_lr_eta }
 }
 
 // =============================================================================
@@ -591,7 +587,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 
     sync_cube();
 
-    scratch2.add(scratch1);  // scratch2 = grad_L_grad_x_hat
+    scratch2.add(scratch1); // scratch2 = grad_L_grad_x_hat
 
     sync_cube();
 
@@ -648,7 +644,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 
     sync_cube();
 
-    grad_Z1_out.add(scratch1);  // grad_Z1_out now = grad_L_x_hat
+    grad_Z1_out.add(scratch1); // grad_Z1_out now = grad_L_x_hat
 
     sync_cube();
 
@@ -1003,7 +999,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &mut scratch2,
         &mut cs_cs_a,
         &mut cs_cs_b,
-        &mut tile_e,              // grad_grad_l output
+        &mut tile_e,                // grad_grad_l output
         &mut tile_grad_xk_combined, // grad_xk_mini + grad_xk_attn combined
     );
 
@@ -1032,7 +1028,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &q_smem,
         &k_smem,
         &xk_smem,
-        &temp_f_f,  // weight_init loaded into temp_f_f
+        &temp_f_f, // weight_init loaded into temp_f_f
         &saved.token_eta,
         &saved.ttt_lr_eta,
         ttt_lr_eta_idx,
@@ -1041,11 +1037,11 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &mut scratch1,
         &mut cs_cs_a,
         &mut cs_cs_b,
-        &mut tile_f,           // grad_xq_mini output
+        &mut tile_f, // grad_xq_mini output
     );
 
     // Rename outputs from stage 3
-    let mut grad_xq_mini = xq_smem;  // Repurpose xq_smem tile
+    let mut grad_xq_mini = xq_smem; // Repurpose xq_smem tile
     grad_xq_mini.copy_from(&tile_f);
 
     sync_cube();
@@ -1055,8 +1051,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // =========================================================================
 
     // Repurpose tiles for stage 2 inputs
-    let mut x_hat_fused = xk_smem;  // Repurpose xk_smem
-    let mut grad_x_hat_fused = tile_f;  // Repurpose tile_f
+    let mut x_hat_fused = xk_smem; // Repurpose xk_smem
+    let mut grad_x_hat_fused = tile_f; // Repurpose tile_f
 
     // Load std_fused
     let mut std_fused = P::cs_reg_big();
@@ -1064,7 +1060,13 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // Load x_hat_fused and grad_x_hat_fused
     cube::load_st_direct(&fwd.x_hat_fused, &mut x_hat_fused, stage_offset, 0, 0);
-    cube::load_st_direct(&fwd.grad_x_hat_fused, &mut grad_x_hat_fused, stage_offset, 0, 0);
+    cube::load_st_direct(
+        &fwd.grad_x_hat_fused,
+        &mut grad_x_hat_fused,
+        stage_offset,
+        0,
+        0,
+    );
 
     sync_cube();
 
@@ -1079,7 +1081,13 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // Load grad_output_fused - reuse tile_grad_z1_bar (no longer needed after stage 3)
     let mut grad_output_fused = tile_grad_z1_bar;
-    cube::load_st_direct(&fwd.grad_output_fused, &mut grad_output_fused, stage_offset, 0, 0);
+    cube::load_st_direct(
+        &fwd.grad_output_fused,
+        &mut grad_output_fused,
+        stage_offset,
+        0,
+        0,
+    );
 
     sync_cube();
 
@@ -1199,7 +1207,13 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
     // Store accumulated weight/bias gradients
     let grad_weight_base = index_2d(&grads.grad_weight, batch_idx, head_idx);
     let grad_bias_base = index_2d(&grads.grad_bias, batch_idx, head_idx);
-    cube::store_st_direct(&grad_L_W_last, &mut grads.grad_weight, grad_weight_base, 0, 0);
+    cube::store_st_direct(
+        &grad_L_W_last,
+        &mut grads.grad_weight,
+        grad_weight_base,
+        0,
+        0,
+    );
     cube::broadcast::store_rv_direct(&grad_L_b_last, &mut grads.grad_bias, grad_bias_base);
 
     // Atomically add LN gradients (unbatched tensors shared across batch dimension)
@@ -1269,7 +1283,13 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     // Store accumulated weight/bias gradients
     let grad_weight_base = index_2d(&grads.grad_weight, batch_idx, head_idx);
     let grad_bias_base = index_2d(&grads.grad_bias, batch_idx, head_idx);
-    cube::store_st_direct(&grad_L_W_last, &mut grads.grad_weight, grad_weight_base, 0, 0);
+    cube::store_st_direct(
+        &grad_L_W_last,
+        &mut grads.grad_weight,
+        grad_weight_base,
+        0,
+        0,
+    );
     cube::broadcast::store_rv_direct(&grad_L_b_last, &mut grads.grad_bias, grad_bias_base);
 
     // Atomically add LN gradients (unbatched tensors shared across batch dimension)

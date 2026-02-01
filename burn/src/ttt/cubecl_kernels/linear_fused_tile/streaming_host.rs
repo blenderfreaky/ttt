@@ -24,8 +24,7 @@ use super::{
     forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
     helpers::Params,
     streaming::{
-        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY,
-        StreamingKernelConfig, fused_ttt_streaming_kernel,
+        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, StreamingKernelConfig, fused_ttt_streaming_kernel,
     },
 };
 use crate::ttt::cubecl_kernels::FusedTttConfig;
@@ -148,7 +147,12 @@ impl StreamingConfig {
 
     /// Shape for weight: [batch, heads, head_dim, head_dim]
     pub fn weight_shape(&self) -> [usize; 4] {
-        [self.batch_size, self.num_heads, self.head_dim, self.head_dim]
+        [
+            self.batch_size,
+            self.num_heads,
+            self.head_dim,
+            self.head_dim,
+        ]
     }
 
     /// Shape for bias: [batch, heads, head_dim]
@@ -287,7 +291,9 @@ pub fn get_or_create_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
 }
 
 /// Remove a streaming state from the registry.
-pub fn remove_streaming_state<R: CubeRuntime + 'static>(stream_id: u64) -> Option<TttStreamingState<R>> {
+pub fn remove_streaming_state<R: CubeRuntime + 'static>(
+    stream_id: u64,
+) -> Option<TttStreamingState<R>> {
     let key = StreamKey::new(stream_id);
     let mut registry = STREAMING_REGISTRY.lock().unwrap();
     registry.remove(&key).and_then(|any| {
@@ -357,11 +363,8 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
         // Control array as a 1D tensor of u32 (we'll treat it as Atomic<u32> in kernel)
         let ctrl_len = config.ctrl_array_len();
-        let control = empty_device::<R, u32>(
-            client.clone(),
-            device.clone(),
-            Shape::from([ctrl_len]),
-        );
+        let control =
+            empty_device::<R, u32>(client.clone(), device.clone(), Shape::from([ctrl_len]));
 
         // Forward intermediates (single mini-batch)
         let fwd_shape = config.qkv_shape();
@@ -377,8 +380,7 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             empty_device::<R, F>(client.clone(), device.clone(), Shape::from(fwd_shape));
         let grad_l_wrt_Z1 =
             empty_device::<R, F>(client.clone(), device.clone(), Shape::from(fwd_shape));
-        let x_hat_ln =
-            empty_device::<R, F>(client.clone(), device.clone(), Shape::from(fwd_shape));
+        let x_hat_ln = empty_device::<R, F>(client.clone(), device.clone(), Shape::from(fwd_shape));
         let std_ln =
             empty_device::<R, F>(client.clone(), device.clone(), Shape::from(fwd_seq_shape));
 
@@ -461,8 +463,9 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.xk.handle)) };
         let cached_xv_ptr: GpuPtr<'static, f32> =
             unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.xv.handle)) };
-        let cached_eta_ptr: GpuPtr<'static, f32> =
-            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.ttt_lr_eta.handle)) };
+        let cached_eta_ptr: GpuPtr<'static, f32> = unsafe {
+            std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.ttt_lr_eta.handle))
+        };
         let cached_ctrl_ptr: GpuPtr<'static, u32> =
             unsafe { std::mem::transmute(stream.ptr::<u32, R>(&client, &tensors.control.handle)) };
         let cached_output_ptr: GpuPtr<'static, f32> =
@@ -471,12 +474,15 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.weight.handle)) };
         let cached_bias_ptr: GpuPtr<'static, f32> =
             unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.bias.handle)) };
-        let cached_result_output_ptr: GpuPtr<'static, f32> =
-            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_output.handle)) };
-        let cached_result_weight_ptr: GpuPtr<'static, f32> =
-            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_weight.handle)) };
-        let cached_result_bias_ptr: GpuPtr<'static, f32> =
-            unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_bias.handle)) };
+        let cached_result_output_ptr: GpuPtr<'static, f32> = unsafe {
+            std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_output.handle))
+        };
+        let cached_result_weight_ptr: GpuPtr<'static, f32> = unsafe {
+            std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_weight.handle))
+        };
+        let cached_result_bias_ptr: GpuPtr<'static, f32> = unsafe {
+            std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_bias.handle))
+        };
 
         let mut state = Self {
             config,
@@ -515,18 +521,38 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             // Source is [num_heads, head_dim, head_dim] - need to replicate for each batch
             for batch in 0..config.batch_size {
                 let batch_offset = batch * config.num_heads * per_head_weight_size;
-                state.stream.copy_d2d(dst_weight, batch_offset, src_weight, 0, config.num_heads * per_head_weight_size);
+                state.stream.copy_d2d(
+                    dst_weight,
+                    batch_offset,
+                    src_weight,
+                    0,
+                    config.num_heads * per_head_weight_size,
+                );
             }
             for batch in 0..config.batch_size {
                 let batch_offset = batch * config.num_heads * per_head_bias_size;
-                state.stream.copy_d2d(dst_bias, batch_offset, src_bias, 0, config.num_heads * per_head_bias_size);
+                state.stream.copy_d2d(
+                    dst_bias,
+                    batch_offset,
+                    src_bias,
+                    0,
+                    config.num_heads * per_head_bias_size,
+                );
             }
         } else {
             // Source already has batch dimension - just copy
             let full_weight_len = config.batch_size * config.num_heads * per_head_weight_size;
             let full_bias_len = config.batch_size * config.num_heads * per_head_bias_size;
-            state.stream.copy_d2d(dst_weight, 0, src_weight, 0, full_weight_len.min(src_weight.len()));
-            state.stream.copy_d2d(dst_bias, 0, src_bias, 0, full_bias_len.min(src_bias.len()));
+            state.stream.copy_d2d(
+                dst_weight,
+                0,
+                src_weight,
+                0,
+                full_weight_len.min(src_weight.len()),
+            );
+            state
+                .stream
+                .copy_d2d(dst_bias, 0, src_bias, 0, full_bias_len.min(src_bias.len()));
         }
         state.stream.sync();
 
@@ -602,7 +628,11 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
         // Control array as ArrayArg for Array<u32> kernel parameter
         let control_arg = unsafe {
-            ArrayArg::from_raw_parts::<u32>(&self.tensors.control.handle, self.config.ctrl_array_len(), 1)
+            ArrayArg::from_raw_parts::<u32>(
+                &self.tensors.control.handle,
+                self.config.ctrl_array_len(),
+                1,
+            )
         };
 
         let fwd_intermediates = ForwardIntermediatesLaunch::<F, R>::new(
@@ -619,9 +649,16 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         // Use kernel_client which has a separate stream for the persistent kernel
         tile_dispatch!(
             fused_ttt_streaming_kernel,
-            &self.kernel_client, cube_count,
-            mini_batch_len, head_dim, threads,
-            inputs, outputs, control_arg, fwd_intermediates, kernel_config
+            &self.kernel_client,
+            cube_count,
+            mini_batch_len,
+            head_dim,
+            threads,
+            inputs,
+            outputs,
+            control_arg,
+            fwd_intermediates,
+            kernel_config
         );
     }
 
@@ -652,14 +689,21 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
         trace!("[HOST] D2D copy...");
         // D2D copy input data to streaming buffers
-        self.stream.copy_d2d(dst_xq, 0, src_xq, 0, self.config.qkv_len());
-        self.stream.copy_d2d(dst_xk, 0, src_xk, 0, self.config.qkv_len());
-        self.stream.copy_d2d(dst_xv, 0, src_xv, 0, self.config.qkv_len());
-        self.stream.copy_d2d(dst_eta, 0, src_eta, 0, self.config.eta_len());
+        self.stream
+            .copy_d2d(dst_xq, 0, src_xq, 0, self.config.qkv_len());
+        self.stream
+            .copy_d2d(dst_xk, 0, src_xk, 0, self.config.qkv_len());
+        self.stream
+            .copy_d2d(dst_xv, 0, src_xv, 0, self.config.qkv_len());
+        self.stream
+            .copy_d2d(dst_eta, 0, src_eta, 0, self.config.eta_len());
 
         // Sync to ensure copies are complete before signaling kernel
         self.stream.sync();
-        trace!("[HOST] D2D done, setting READY for {} cubes", self.config.num_cubes());
+        trace!(
+            "[HOST] D2D done, setting READY for {} cubes",
+            self.config.num_cubes()
+        );
 
         // Set READY flag for all cubes (write full control block like working example)
         for cube in 0..self.config.num_cubes() {
@@ -699,16 +743,29 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         let bias_ptr = self.cached_bias_ptr;
         let result_bias_ptr = self.cached_result_bias_ptr;
 
-        trace!("[HOST] weight tensor shape: {:?}, ptr capacity: {}", &self.tensors.weight.shape, weight_ptr.len());
-        trace!("[HOST] result_weight ptr capacity: {}", result_weight_ptr.len());
+        trace!(
+            "[HOST] weight tensor shape: {:?}, ptr capacity: {}",
+            &self.tensors.weight.shape,
+            weight_ptr.len()
+        );
+        trace!(
+            "[HOST] result_weight ptr capacity: {}",
+            result_weight_ptr.len()
+        );
 
-        self.stream.copy_d2d(result_output_ptr, 0, output_ptr, 0, self.config.qkv_len());
+        self.stream
+            .copy_d2d(result_output_ptr, 0, output_ptr, 0, self.config.qkv_len());
         // Copy only what the source buffer actually has
         let weight_src_len = weight_ptr.len();
         let bias_src_len = bias_ptr.len();
-        trace!("[HOST] copying weight: {} elements, bias: {} elements", weight_src_len, bias_src_len);
-        self.stream.copy_d2d(result_weight_ptr, 0, weight_ptr, 0, weight_src_len);
-        self.stream.copy_d2d(result_bias_ptr, 0, bias_ptr, 0, bias_src_len);
+        trace!(
+            "[HOST] copying weight: {} elements, bias: {} elements",
+            weight_src_len, bias_src_len
+        );
+        self.stream
+            .copy_d2d(result_weight_ptr, 0, weight_ptr, 0, weight_src_len);
+        self.stream
+            .copy_d2d(result_bias_ptr, 0, bias_ptr, 0, bias_src_len);
         self.stream.sync();
 
         trace!("[HOST] forward_d2d complete, returning result_output");
@@ -765,7 +822,10 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
     /// Shutdown the kernel and return final weight/bias.
     pub fn shutdown(self) -> (Vec<f32>, Vec<f32>) {
-        trace!("[HOST] shutdown: signaling SHUTDOWN to {} cubes", self.config.num_cubes());
+        trace!(
+            "[HOST] shutdown: signaling SHUTDOWN to {} cubes",
+            self.config.num_cubes()
+        );
         // Use cached pointers to avoid get_resource() which would sync with kernel stream
         let ctrl_ptr = self.cached_ctrl_ptr;
         let weight_ptr = self.cached_weight_ptr;
@@ -801,7 +861,10 @@ impl<R: CubeRuntime> TttStreamingState<R> {
                 ctrl[base + CTRL_READY] == u32::MAX
             });
             if all_acknowledged {
-                trace!("[HOST] shutdown: all cubes acknowledged, control = {:?}", ctrl);
+                trace!(
+                    "[HOST] shutdown: all cubes acknowledged, control = {:?}",
+                    ctrl
+                );
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -809,12 +872,19 @@ impl<R: CubeRuntime> TttStreamingState<R> {
 
         if !all_acknowledged {
             let ctrl = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
-            trace!("[HOST] shutdown: TIMEOUT! kernel did not acknowledge. control = {:?}", ctrl);
+            trace!(
+                "[HOST] shutdown: TIMEOUT! kernel did not acknowledge. control = {:?}",
+                ctrl
+            );
             // Try reading with longer interval
             for i in 0..5 {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 let ctrl = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
-                trace!("[HOST] shutdown: after {}ms more, control = {:?}", (i+1)*100, ctrl);
+                trace!(
+                    "[HOST] shutdown: after {}ms more, control = {:?}",
+                    (i + 1) * 100,
+                    ctrl
+                );
             }
         }
 
@@ -843,7 +913,10 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             return;
         }
 
-        trace!("[HOST] signal_shutdown: signaling SHUTDOWN to {} cubes", self.config.num_cubes());
+        trace!(
+            "[HOST] signal_shutdown: signaling SHUTDOWN to {} cubes",
+            self.config.num_cubes()
+        );
         // Use cached pointer to avoid get_resource() which would sync with kernel stream
         let ctrl_ptr = self.cached_ctrl_ptr;
 
@@ -856,7 +929,10 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         // Wait for kernel to finish
         trace!("[HOST] signal_shutdown: waiting for kernel to finish");
         if let Err(e) = wait_for_sync(&self.kernel_client) {
-            trace!("[HOST] signal_shutdown: sync error (may be expected): {:?}", e);
+            trace!(
+                "[HOST] signal_shutdown: sync error (may be expected): {:?}",
+                e
+            );
         }
         trace!("[HOST] signal_shutdown: done");
     }

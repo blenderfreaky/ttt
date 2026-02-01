@@ -36,8 +36,8 @@ use bytemuck::Pod;
 use cubecl::prelude::*;
 use cubecl_hip_sys::{
     HIP_SUCCESS, hipDeviceptr_t, hipMemcpyAsync, hipMemcpyDtoDAsync,
-    hipMemcpyKind_hipMemcpyDeviceToHost, hipMemcpyKind_hipMemcpyHostToDevice,
-    hipStream_t, hipStreamCreate, hipStreamDestroy, hipStreamSynchronize,
+    hipMemcpyKind_hipMemcpyDeviceToHost, hipMemcpyKind_hipMemcpyHostToDevice, hipStream_t,
+    hipStreamCreate, hipStreamDestroy, hipStreamSynchronize,
 };
 
 /// Raw GPU pointer for direct memory access.
@@ -266,12 +266,7 @@ impl AsyncStream {
     ///
     /// This is used for pointer indirection: the kernel reads these addresses
     /// and uses them to access the actual tensor data.
-    pub fn write_pointer_table<T: Pod>(
-        &self,
-        table: GpuPtr<u64>,
-        slot: usize,
-        ptr: GpuPtr<T>,
-    ) {
+    pub fn write_pointer_table<T: Pod>(&self, table: GpuPtr<u64>, slot: usize, ptr: GpuPtr<T>) {
         let addr = ptr.address();
         self.write(table, slot, &[addr]);
     }
@@ -311,7 +306,13 @@ pub mod ptr_inject {
     /// * `dest_arr` - Local array index to load into (e.g., 0 for l_arr_0)
     /// * `count` - Number of float_4 elements to load
     /// * `offset` - Element offset from the pointer address
-    pub fn load_from_ptr(ptr_buffer: usize, slot: usize, dest_arr: usize, count: usize, offset: usize) -> String {
+    pub fn load_from_ptr(
+        ptr_buffer: usize,
+        slot: usize,
+        dest_arr: usize,
+        count: usize,
+        offset: usize,
+    ) -> String {
         format!(
             r#"*/
 const uint64 _ptr_addr_{dest_arr} = ((const uint64*)buffer_{ptr_buffer})[{slot}];
@@ -329,7 +330,13 @@ for (int _i = 0; _i < {count}; _i++) {{ l_arr_{dest_arr}[_i] = _ptr_src_{dest_ar
     /// * `src_arr` - Local array index to store from (e.g., 0 for l_arr_0)
     /// * `count` - Number of float_4 elements to store
     /// * `offset` - Element offset from the pointer address
-    pub fn store_to_ptr(ptr_buffer: usize, slot: usize, src_arr: usize, count: usize, offset: usize) -> String {
+    pub fn store_to_ptr(
+        ptr_buffer: usize,
+        slot: usize,
+        src_arr: usize,
+        count: usize,
+        offset: usize,
+    ) -> String {
         format!(
             r#"*/
 const uint64 _ptr_addr_st_{src_arr} = ((const uint64*)buffer_{ptr_buffer})[{slot}];

@@ -162,9 +162,9 @@ pub mod streaming_ptr;
 #[cfg(feature = "rocm")]
 pub mod streaming_ptr_host;
 #[cfg(feature = "rocm")]
-pub mod streaming_wrapper;
-#[cfg(feature = "rocm")]
 pub mod streaming_ptr_wrapper;
+#[cfg(feature = "rocm")]
+pub mod streaming_wrapper;
 mod wrapper;
 
 pub use api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
@@ -189,14 +189,13 @@ pub use streaming::{
 #[cfg(feature = "rocm")]
 pub use streaming_host::{StreamingConfig, TttStreamingState, get_or_create_streaming_state};
 #[cfg(feature = "rocm")]
-pub use streaming_wrapper::{StreamingKernelConfig, TttStreamingKernel};
-#[cfg(feature = "rocm")]
 pub use streaming_ptr::{
-    CTRL_ARRAY_SIZE as PTR_CTRL_ARRAY_SIZE, PTR_TABLE_SIZE,
-    STATUS_DONE, STATUS_IDLE, STATUS_READY, STATUS_SHUTDOWN,
-    fused_ttt_streaming_ptr_kernel,
+    CTRL_ARRAY_SIZE as PTR_CTRL_ARRAY_SIZE, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
+    STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
 };
 #[cfg(feature = "rocm")]
 pub use streaming_ptr_host::{PtrStreamingConfig, PtrStreamingTensors, TttPtrStreamingState};
 #[cfg(feature = "rocm")]
 pub use streaming_ptr_wrapper::{PtrStreamingKernelConfig, TttPtrStreamingKernel};
+#[cfg(feature = "rocm")]
+pub use streaming_wrapper::{StreamingKernelConfig, TttStreamingKernel};

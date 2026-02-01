@@ -132,9 +132,15 @@ pub fn launch_tile_forward<R: Runtime, F: Float + CubeElement>(
 
     tile_dispatch!(
         fused_ttt_forward_kernel,
-        client, cube_count,
-        seq_len, head_dim, config.threads,
-        inputs_launch, outputs_launch, fwd_intermediates_launch, config
+        client,
+        cube_count,
+        seq_len,
+        head_dim,
+        config.threads,
+        inputs_launch,
+        outputs_launch,
+        fwd_intermediates_launch,
+        config
     );
 }
 
@@ -226,9 +232,16 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
 
     tile_dispatch!(
         fused_ttt_backward_kernel,
-        client, cube_count,
-        seq_len, head_dim, config.threads,
-        saved_launch, fwd_launch, grad_output_arg, grads_launch, config
+        client,
+        cube_count,
+        seq_len,
+        head_dim,
+        config.threads,
+        saved_launch,
+        fwd_launch,
+        grad_output_arg,
+        grads_launch,
+        config
     );
 }
 
@@ -507,10 +520,17 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
 
     tile_dispatch!(
         fused_ttt_backward_kernel_multi,
-        client, cube_count,
-        mini_batch_len, head_dim, config.threads,
-        saved_launch, fwd_launch, grad_output_arg, grads_launch,
-        ScalarArg::new(num_stages as u32), config
+        client,
+        cube_count,
+        mini_batch_len,
+        head_dim,
+        config.threads,
+        saved_launch,
+        fwd_launch,
+        grad_output_arg,
+        grads_launch,
+        ScalarArg::new(num_stages as u32),
+        config
     );
 }
 
@@ -683,10 +703,16 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
 
     tile_dispatch!(
         fused_ttt_forward_kernel_multi,
-        client, cube_count,
-        mini_batch_len, head_dim, config.threads,
-        inputs_launch, outputs_launch, fwd_intermediates_launch,
-        ScalarArg::new(num_stages as u32), config
+        client,
+        cube_count,
+        mini_batch_len,
+        head_dim,
+        config.threads,
+        inputs_launch,
+        outputs_launch,
+        fwd_intermediates_launch,
+        ScalarArg::new(num_stages as u32),
+        config
     );
 }
 

@@ -40,7 +40,14 @@ fn test_mma_AtB_hetero<
 
 /// Test kernel that performs C = A * B using the mma_AtB function.
 #[cube(launch)]
-fn test_mma_AtB<F: Float, TileK: Dim, TileM: Dim, TileN: Dim, ThreadTileM: Dim, ThreadTileN: Dim>(
+fn test_mma_AtB<
+    F: Float,
+    TileK: Dim,
+    TileM: Dim,
+    TileN: Dim,
+    ThreadTileM: Dim,
+    ThreadTileN: Dim,
+>(
     in_a: &Tensor<Line<F>>,
     in_b: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
@@ -50,7 +57,15 @@ fn test_mma_AtB<F: Float, TileK: Dim, TileM: Dim, TileN: Dim, ThreadTileM: Dim, 
 
 /// Heterogeneous test kernel for mma_AB: FIn inputs, FAcc accumulator
 #[cube(launch)]
-fn test_mma_AB_hetero<FIn: Float, FAcc: Float, TileM: Dim, TileK: Dim, TileN: Dim, ThreadTileM: Dim, ThreadTileN: Dim>(
+fn test_mma_AB_hetero<
+    FIn: Float,
+    FAcc: Float,
+    TileM: Dim,
+    TileK: Dim,
+    TileN: Dim,
+    ThreadTileM: Dim,
+    ThreadTileN: Dim,
+>(
     in_a: &Tensor<Line<FIn>>,
     in_b: &Tensor<Line<FIn>>,
     output: &mut Tensor<Line<FAcc>>,

@@ -34,8 +34,10 @@ use thundercube::{
     util::{index_2d, transpose_4},
 };
 
-use super::forward::{ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_stage};
-use super::helpers::ParamsTrait;
+use super::{
+    forward::{ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_stage},
+    helpers::ParamsTrait,
+};
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
 /// Pointer table slot indices

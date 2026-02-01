@@ -5,7 +5,9 @@ use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index
 
 use super::{
     helpers::{FFTile, FRegBig, ParamsTrait, build_eta_attn_fused, build_eta_matrix},
-    layer_norm::{layer_norm_forward_stream_intermediates, layer_norm_l2_grad_stream_intermediates},
+    layer_norm::{
+        layer_norm_forward_stream_intermediates, layer_norm_l2_grad_stream_intermediates,
+    },
 };
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 
@@ -134,7 +136,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
         ln_weight_rv,
         ln_bias_rv,
         &mut temp_cs_f_smem,
-        &mut k_direct_smem,  // scratch (dead after line 131)
+        &mut k_direct_smem, // scratch (dead after line 131)
         &mut reduce_buf,
         // Global tensor outputs (stored directly, no smem intermediates)
         &mut fwd_intermediates.x_hat_fused,

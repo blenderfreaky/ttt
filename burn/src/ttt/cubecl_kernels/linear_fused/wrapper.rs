@@ -76,7 +76,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, LinearKerne
 mod tests {
     use crate::ttt::{
         GpuAutodiffBackend, GpuBackend,
-        cubecl_kernels::{FusedLinear, test_utils::{TestDims, test_backward_fmb, test_fmb}},
+        cubecl_kernels::{
+            FusedLinear,
+            test_utils::{TestDims, test_backward_fmb, test_fmb},
+        },
         linear::TTTLinearState,
     };
 

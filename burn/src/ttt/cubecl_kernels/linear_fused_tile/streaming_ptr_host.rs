@@ -3,8 +3,10 @@
 //! This provides true zero-copy input by writing tensor addresses to a pointer table
 //! that the kernel reads directly.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
+};
 
 use super::{
     forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
@@ -18,8 +20,7 @@ use super::{
 use crate::ttt::cubecl_kernels::FusedTttConfig;
 use burn::tensor::Shape;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
-use cubecl::frontend::ArrayArg;
-use cubecl::prelude::*;
+use cubecl::{frontend::ArrayArg, prelude::*};
 use thundercube::{
     prelude::{D4, D8, D16, D32, D64, LINE_SIZE},
     streaming::{AsyncStream, GpuPtr},
@@ -547,12 +548,22 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         // Use kernel_client which has a separate stream for the persistent kernel
         tile_dispatch!(
             fused_ttt_streaming_ptr_kernel,
-            &self.kernel_client, cube_count,
-            mini_batch_len, head_dim, threads,
-            ptr_table_ref.as_tensor_arg(1), control_ref.as_tensor_arg(1),
-            xq_arg, xk_arg, xv_arg, eta_arg,
-            inputs, outputs, fwd_intermediates,
-            fused_config, debug
+            &self.kernel_client,
+            cube_count,
+            mini_batch_len,
+            head_dim,
+            threads,
+            ptr_table_ref.as_tensor_arg(1),
+            control_ref.as_tensor_arg(1),
+            xq_arg,
+            xk_arg,
+            xv_arg,
+            eta_arg,
+            inputs,
+            outputs,
+            fwd_intermediates,
+            fused_config,
+            debug
         );
     }
 

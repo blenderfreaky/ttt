@@ -3,12 +3,19 @@
 //! This implements the FusedKernel trait for `TttPtrStreamingKernel`, which uses
 //! a persistent GPU kernel with true zero-copy input via pointer tables.
 
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::{
+    fmt::Debug,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
-use burn::module::Ignored;
-use burn::tensor::{Tensor, TensorPrimitive};
+use burn::{
+    module::Ignored,
+    tensor::{Tensor, TensorPrimitive},
+};
 use burn_cubecl::{CubeRuntime, FloatElement, kernel::into_contiguous, tensor::CubeTensor};
 use tracing::trace;
 
@@ -22,7 +29,7 @@ use crate::ttt::{
     TTTConfig,
     cubecl_kernels::{
         Fused, FusedTttBackend, PtrStreamingKernel,
-        kernel::{FusedKernel, CanBackwardNoOut},
+        kernel::{CanBackwardNoOut, FusedKernel},
         ttt::TttInputs,
     },
     layer::{TTTInnerModel, TTTInputsInner},
@@ -170,12 +177,7 @@ impl FusedKernel<9, 10> for TttPtrStreamingKernel {
         }
 
         // Use pointer-based forward
-        let output = state.forward_tensor(
-            &xq,
-            &xk,
-            &xv,
-            &ttt_lr_eta,
-        );
+        let output = state.forward_tensor(&xq, &xk, &xv, &ttt_lr_eta);
 
         trace!("ptr streaming forward complete");
         // Make a true copy of the output - the kernel reuses its buffer for each mini-batch
@@ -278,7 +280,8 @@ pub fn fused_ttt_ptr_streaming_forward<B: FusedTttBackend>(
         ln_bias: ln_bias.into_primitive().tensor(),
     };
 
-    let config = PtrStreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
+    let config =
+        PtrStreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
 
     let outputs = <B as FusedKernelBackend<TttPtrStreamingKernel, 9, 10>>::forward(inputs, config);
 
@@ -339,7 +342,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, PtrStreamin
         let epsilon = inner.layer_norm.epsilon as f32;
 
         let inner_config = inner.get_config();
-        let threads = inner_config.threads
+        let threads = inner_config
+            .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
 
         let (output, weight_updated, bias_updated) = fused_ttt_ptr_streaming_forward(

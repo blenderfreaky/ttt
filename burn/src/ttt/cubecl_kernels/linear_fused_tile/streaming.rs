@@ -96,7 +96,11 @@ pub fn fused_ttt_streaming_kernel<P: ParamsTrait>(
 
     if comptime!(debug) {
         if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
-            debug_print!("STREAM: kernel start batch=%u head=%u\n", batch_idx, head_idx);
+            debug_print!(
+                "STREAM: kernel start batch=%u head=%u\n",
+                batch_idx,
+                head_idx
+            );
         }
     }
 

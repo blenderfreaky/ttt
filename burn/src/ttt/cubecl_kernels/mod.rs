@@ -155,16 +155,19 @@ impl<B: Backend, Inner: burn::module::ModuleDisplay, Kernel> burn::module::Modul
     }
 }
 
-impl<B: Backend, Inner: burn::module::ModuleDisplayDefault, Kernel> burn::module::ModuleDisplayDefault
-    for Fused<B, Inner, Kernel>
+impl<B: Backend, Inner: burn::module::ModuleDisplayDefault, Kernel>
+    burn::module::ModuleDisplayDefault for Fused<B, Inner, Kernel>
 {
     fn content(&self, content: burn::module::Content) -> Option<burn::module::Content> {
         self.inner.content(content)
     }
 }
 
-impl<B: burn::tensor::backend::AutodiffBackend, Inner: burn::module::AutodiffModule<B>, Kernel: Send + Sync + std::fmt::Debug + Clone>
-    burn::module::AutodiffModule<B> for Fused<B, Inner, Kernel>
+impl<
+    B: burn::tensor::backend::AutodiffBackend,
+    Inner: burn::module::AutodiffModule<B>,
+    Kernel: Send + Sync + std::fmt::Debug + Clone,
+> burn::module::AutodiffModule<B> for Fused<B, Inner, Kernel>
 {
     type InnerModule = Fused<B::InnerBackend, Inner::InnerModule, Kernel>;
 

@@ -2,7 +2,12 @@
 
 use cubecl::prelude::*;
 
-use crate::{cube::swizzle, prelude::*, tiles::Dim, util::{cast_line, write_into_line}};
+use crate::{
+    cube::swizzle,
+    prelude::*,
+    tiles::Dim,
+    util::{cast_line, write_into_line},
+};
 
 /// Indexer for accessing matrices with optional swizzle and transpose.
 #[derive(CubeType, Clone, Copy)]
@@ -262,7 +267,15 @@ macro_rules! define_mma_rt {
      [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident], $accum:ident,
      [$c_d0:ident, $c_d1:ident]) => {
         #[cube]
-        pub fn $name<FIn: Float, FAcc: Float, CM: Dim, CN: Dim, TileM: Dim, TileK: Dim, TileN: Dim>(
+        pub fn $name<
+            FIn: Float,
+            FAcc: Float,
+            CM: Dim,
+            CN: Dim,
+            TileM: Dim,
+            TileK: Dim,
+            TileN: Dim,
+        >(
             c: &mut Rt<FAcc, $c_d0, $c_d1>,
             a: &St<FIn, $a_d0, $a_d1>,
             b: &St<FIn, $b_d0, $b_d1>,

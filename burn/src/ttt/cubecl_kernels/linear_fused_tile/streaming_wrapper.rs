@@ -3,15 +3,19 @@
 //! This implements the FusedKernel trait for `TttStreamingKernel`, which uses
 //! a persistent GPU kernel with a global registry for state management.
 
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    fmt::Debug,
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
-use burn::module::Ignored;
-use burn::tensor::{Tensor, TensorPrimitive};
+use burn::{
+    module::Ignored,
+    tensor::{Tensor, TensorPrimitive},
+};
 use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
 use tracing::trace;
 
@@ -364,7 +368,10 @@ mod tests {
     use super::*;
     use crate::ttt::{
         GpuBackend,
-        cubecl_kernels::{FusedTileStreaming, test_utils::{TestDims, test_fwd}},
+        cubecl_kernels::{
+            FusedTileStreaming,
+            test_utils::{TestDims, test_fwd},
+        },
     };
 
     // TODO: streaming kernel has issues, needs investigation
@@ -376,12 +383,11 @@ mod tests {
             .unwrap();
 
         let dims = TestDims::new(2, 2, 32, 8).with_iterations(2);
-        test_fwd::<GpuBackend, FusedTileStreaming<GpuBackend>, FusedTileStreamingState<GpuBackend>, _>(
-            dims,
-            |m| m.into(),
-            1e-3,
-            1e-3,
-            "Streaming",
-        );
+        test_fwd::<
+            GpuBackend,
+            FusedTileStreaming<GpuBackend>,
+            FusedTileStreamingState<GpuBackend>,
+            _,
+        >(dims, |m| m.into(), 1e-3, 1e-3, "Streaming");
     }
 }

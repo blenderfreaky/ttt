@@ -6,7 +6,7 @@ use burn::tensor::Tensor;
 use burn_backend::Backend;
 
 use crate::ttt::{
-    TTTConfig, TEST_VOCAB_SIZE,
+    TEST_VOCAB_SIZE, TTTConfig,
     layer::{Qkv, TTTInnerModel, TTTInputsInner},
     linear::{TTTLinear, TTTLinearConfig},
 };
@@ -37,7 +37,13 @@ impl TestDims {
     }
 
     /// Create test dimensions with explicit mini_batch_size (for multi-stage tests).
-    pub fn multi_stage(batch_size: usize, num_heads: usize, head_dim: usize, mini_batch_size: usize, num_stages: usize) -> Self {
+    pub fn multi_stage(
+        batch_size: usize,
+        num_heads: usize,
+        head_dim: usize,
+        mini_batch_size: usize,
+        num_stages: usize,
+    ) -> Self {
         Self {
             batch_size,
             num_heads,
@@ -83,10 +89,7 @@ pub fn default_test_config(dims: TestDims) -> Arc<TTTConfig> {
 }
 
 /// Create a TTTLinear model for testing.
-pub fn create_test_model<B: Backend>(
-    config: &Arc<TTTConfig>,
-    device: &B::Device,
-) -> TTTLinear<B> {
+pub fn create_test_model<B: Backend>(config: &Arc<TTTConfig>, device: &B::Device) -> TTTLinear<B> {
     let linear_config = Arc::new(TTTLinearConfig::new());
     TTTLinear::new(config, &linear_config, device)
 }
@@ -96,10 +99,7 @@ pub fn create_test_model<B: Backend>(
 /// Uses `dims.mini_batch_size` to generate token_eta as `[1/1, 1/2, ..., 1/mini_batch_size]`
 /// repeated to fill `seq_len`. This ensures consistent behavior between single-stage and
 /// multi-stage kernels.
-pub fn generate_test_inputs<B: Backend>(
-    dims: TestDims,
-    device: &B::Device,
-) -> TTTInputsInner<B> {
+pub fn generate_test_inputs<B: Backend>(dims: TestDims, device: &B::Device) -> TTTInputsInner<B> {
     let shape = [dims.batch_size, dims.num_heads, dims.seq_len, dims.head_dim];
 
     let xq = Tensor::random(shape, burn::tensor::Distribution::Normal(0.0, 0.1), device);
@@ -219,7 +219,10 @@ pub fn inputs_from_data<B: Backend>(
             device,
         ),
         ttt_lr_eta: Tensor::from_data(
-            TensorData::new(data.ttt_lr_eta.clone(), [dims.batch_size, dims.num_heads, dims.seq_len]),
+            TensorData::new(
+                data.ttt_lr_eta.clone(),
+                [dims.batch_size, dims.num_heads, dims.seq_len],
+            ),
             device,
         ),
         start_idx: 0,
@@ -227,8 +230,7 @@ pub fn inputs_from_data<B: Backend>(
 }
 
 use crate::ttt::linear::TTTLinearState;
-use burn::tensor::backend::AutodiffBackend;
-use burn::tensor::TensorData;
+use burn::tensor::{TensorData, backend::AutodiffBackend};
 
 impl<B: Backend> AsRef<TTTLinearState<B>> for TTTLinearState<B> {
     fn as_ref(&self) -> &TTTLinearState<B> {
@@ -243,8 +245,7 @@ pub fn test_backward_fmb<B, T, Transform>(
     rtol: f32,
     atol: f32,
     name: &str,
-)
-where
+) where
     B: AutodiffBackend<Device: Default>,
     T: TTTInnerModel<B, State = TTTLinearState<B>>,
     Transform: FnOnce(TTTLinear<B>) -> T,
@@ -255,7 +256,9 @@ where
         transform,
         move |m, s, i| m.forward_mini_batch(s, &i, 0..seq_len),
         move |m, s, i| m.forward_mini_batch(s, &i, 0..seq_len),
-        rtol, atol, name,
+        rtol,
+        atol,
+        name,
     )
 }
 
@@ -266,8 +269,7 @@ pub fn test_backward_fwd<B, T, Transform>(
     rtol: f32,
     atol: f32,
     name: &str,
-)
-where
+) where
     B: AutodiffBackend<Device: Default>,
     T: TTTInnerModel<B, State = TTTLinearState<B>>,
     Transform: FnOnce(TTTLinear<B>) -> T,
@@ -277,7 +279,9 @@ where
         transform,
         |m, s, i| m.forward(s, i),
         |m, s, i| m.forward(s, i),
-        rtol, atol, name,
+        rtol,
+        atol,
+        name,
     )
 }
 
@@ -292,8 +296,7 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
     rtol: f32,
     atol: f32,
     name: &str,
-)
-where
+) where
     B: AutodiffBackend<Device: Default>,
     T: TTTInnerModel<B, State = TTTLinearState<B>>,
     Transform: FnOnce(TTTLinear<B>) -> T,
@@ -315,22 +318,44 @@ where
         let input_data = inputs_to_data(&inputs);
 
         // Create ref inputs with require_grad
-        let xq_ref: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xq.clone(), shape), &device).require_grad();
-        let xk_ref: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xk.clone(), shape), &device).require_grad();
-        let xv_ref: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xv.clone(), shape), &device).require_grad();
+        let xq_ref: Tensor<B, 4> =
+            Tensor::from_data(TensorData::new(input_data.xq.clone(), shape), &device)
+                .require_grad();
+        let xk_ref: Tensor<B, 4> =
+            Tensor::from_data(TensorData::new(input_data.xk.clone(), shape), &device)
+                .require_grad();
+        let xv_ref: Tensor<B, 4> =
+            Tensor::from_data(TensorData::new(input_data.xv.clone(), shape), &device)
+                .require_grad();
         let ttt_lr_eta_ref: Tensor<B, 3> = Tensor::from_data(
-            TensorData::new(input_data.ttt_lr_eta.clone(), [dims.batch_size, dims.num_heads, dims.seq_len]), &device,
-        ).require_grad();
-        let token_eta: Tensor<B, 1> = Tensor::from_data(TensorData::new(input_data.token_eta.clone(), [dims.seq_len]), &device);
+            TensorData::new(
+                input_data.ttt_lr_eta.clone(),
+                [dims.batch_size, dims.num_heads, dims.seq_len],
+            ),
+            &device,
+        )
+        .require_grad();
+        let token_eta: Tensor<B, 1> = Tensor::from_data(
+            TensorData::new(input_data.token_eta.clone(), [dims.seq_len]),
+            &device,
+        );
 
         // Init ref state with require_grad (detach from weight_init graph first)
         let state_ref_init = ref_model.init_state(dims.batch_size);
-        let weight_ref: Tensor<B, 4> = Tensor::from_inner(state_ref_init.weight.inner()).require_grad();
+        let weight_ref: Tensor<B, 4> =
+            Tensor::from_inner(state_ref_init.weight.inner()).require_grad();
         let bias_ref: Tensor<B, 3> = Tensor::from_inner(state_ref_init.bias.inner()).require_grad();
-        let mut state_ref = TTTLinearState { weight: weight_ref.clone(), bias: bias_ref.clone() };
+        let mut state_ref = TTTLinearState {
+            weight: weight_ref.clone(),
+            bias: bias_ref.clone(),
+        };
 
         let inputs_ref = TTTInputsInner {
-            qkv: Qkv { xq: xq_ref.clone(), xk: xk_ref.clone(), xv: xv_ref.clone() },
+            qkv: Qkv {
+                xq: xq_ref.clone(),
+                xk: xk_ref.clone(),
+                xv: xv_ref.clone(),
+            },
             token_eta: token_eta.clone(),
             ttt_lr_eta: ttt_lr_eta_ref.clone(),
             start_idx: 0,
@@ -341,21 +366,41 @@ where
         let grads_ref = output_ref.sum().backward();
 
         // Create tested inputs with require_grad
-        let xq_tested: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xq.clone(), shape), &device).require_grad();
-        let xk_tested: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xk.clone(), shape), &device).require_grad();
-        let xv_tested: Tensor<B, 4> = Tensor::from_data(TensorData::new(input_data.xv.clone(), shape), &device).require_grad();
+        let xq_tested: Tensor<B, 4> =
+            Tensor::from_data(TensorData::new(input_data.xq.clone(), shape), &device)
+                .require_grad();
+        let xk_tested: Tensor<B, 4> =
+            Tensor::from_data(TensorData::new(input_data.xk.clone(), shape), &device)
+                .require_grad();
+        let xv_tested: Tensor<B, 4> =
+            Tensor::from_data(TensorData::new(input_data.xv.clone(), shape), &device)
+                .require_grad();
         let ttt_lr_eta_tested: Tensor<B, 3> = Tensor::from_data(
-            TensorData::new(input_data.ttt_lr_eta.clone(), [dims.batch_size, dims.num_heads, dims.seq_len]), &device,
-        ).require_grad();
+            TensorData::new(
+                input_data.ttt_lr_eta.clone(),
+                [dims.batch_size, dims.num_heads, dims.seq_len],
+            ),
+            &device,
+        )
+        .require_grad();
 
         // Init tested state with require_grad
         let state_tested_init = tested_model.init_state(dims.batch_size);
-        let weight_tested: Tensor<B, 4> = Tensor::from_inner(state_tested_init.weight.inner()).require_grad();
-        let bias_tested: Tensor<B, 3> = Tensor::from_inner(state_tested_init.bias.inner()).require_grad();
-        let mut state_tested = TTTLinearState { weight: weight_tested.clone(), bias: bias_tested.clone() };
+        let weight_tested: Tensor<B, 4> =
+            Tensor::from_inner(state_tested_init.weight.inner()).require_grad();
+        let bias_tested: Tensor<B, 3> =
+            Tensor::from_inner(state_tested_init.bias.inner()).require_grad();
+        let mut state_tested = TTTLinearState {
+            weight: weight_tested.clone(),
+            bias: bias_tested.clone(),
+        };
 
         let inputs_tested = TTTInputsInner {
-            qkv: Qkv { xq: xq_tested.clone(), xk: xk_tested.clone(), xv: xv_tested.clone() },
+            qkv: Qkv {
+                xq: xq_tested.clone(),
+                xk: xk_tested.clone(),
+                xv: xv_tested.clone(),
+            },
             token_eta,
             ttt_lr_eta: ttt_lr_eta_tested.clone(),
             start_idx: 0,
@@ -372,36 +417,93 @@ where
             name.to_string()
         };
         assert_data_close(
-            &xq_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+            &xq_tested
+                .grad(&grads_tested)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
             &xq_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} grad_xq"),
+            rtol,
+            atol,
+            &format!("{iter_name} grad_xq"),
         );
         assert_data_close(
-            &xk_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+            &xk_tested
+                .grad(&grads_tested)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
             &xk_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} grad_xk"),
+            rtol,
+            atol,
+            &format!("{iter_name} grad_xk"),
         );
         assert_data_close(
-            &xv_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
+            &xv_tested
+                .grad(&grads_tested)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
             &xv_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} grad_xv"),
+            rtol,
+            atol,
+            &format!("{iter_name} grad_xv"),
         );
         assert_data_close(
-            &ttt_lr_eta_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
-            &ttt_lr_eta_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} grad_ttt_lr_eta"),
+            &ttt_lr_eta_tested
+                .grad(&grads_tested)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
+            &ttt_lr_eta_ref
+                .grad(&grads_ref)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
+            rtol,
+            atol,
+            &format!("{iter_name} grad_ttt_lr_eta"),
         );
 
         // Compare state gradients
         assert_data_close(
-            &weight_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
-            &weight_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} grad_weight"),
+            &weight_tested
+                .grad(&grads_tested)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
+            &weight_ref
+                .grad(&grads_ref)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
+            rtol,
+            atol,
+            &format!("{iter_name} grad_weight"),
         );
         assert_data_close(
-            &bias_tested.grad(&grads_tested).unwrap().to_data().to_vec().unwrap(),
-            &bias_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} grad_bias"),
+            &bias_tested
+                .grad(&grads_tested)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
+            &bias_ref
+                .grad(&grads_ref)
+                .unwrap()
+                .to_data()
+                .to_vec()
+                .unwrap(),
+            rtol,
+            atol,
+            &format!("{iter_name} grad_bias"),
         );
     }
 }
@@ -414,8 +516,7 @@ pub fn test_fmb<B, T, S, Transform>(
     rtol: f32,
     atol: f32,
     name: &str,
-)
-where
+) where
     B: Backend<Device: Default>,
     S: AsRef<TTTLinearState<B>>,
     T: TTTInnerModel<B, State = S>,
@@ -427,7 +528,9 @@ where
         transform,
         move |m, s, i| m.forward_mini_batch(s, &i, 0..seq_len),
         move |m, s, i| m.forward_mini_batch(s, &i, 0..seq_len),
-        rtol, atol, name,
+        rtol,
+        atol,
+        name,
     )
 }
 
@@ -438,8 +541,7 @@ pub fn test_fwd<B, T, S, Transform>(
     rtol: f32,
     atol: f32,
     name: &str,
-)
-where
+) where
     B: Backend<Device: Default>,
     S: AsRef<TTTLinearState<B>>,
     T: TTTInnerModel<B, State = S>,
@@ -450,7 +552,9 @@ where
         transform,
         |m, s, i| m.forward(s, i),
         |m, s, i| m.forward(s, i),
-        rtol, atol, name,
+        rtol,
+        atol,
+        name,
     )
 }
 
@@ -467,8 +571,7 @@ pub fn test_vs_ttt_linear<B, T, S, Transform, RunRef, RunTested>(
     rtol: f32,
     atol: f32,
     name: &str,
-)
-where
+) where
     B: Backend<Device: Default>,
     S: AsRef<TTTLinearState<B>>,
     T: TTTInnerModel<B, State = S>,
@@ -505,18 +608,24 @@ where
         assert_data_close(
             &output_tested.to_data().to_vec().unwrap(),
             &output_ref.to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} output"),
+            rtol,
+            atol,
+            &format!("{iter_name} output"),
         );
         let tested_state = state_tested.as_ref();
         assert_data_close(
             &tested_state.weight.to_data().to_vec().unwrap(),
             &state_ref.weight.to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} weight"),
+            rtol,
+            atol,
+            &format!("{iter_name} weight"),
         );
         assert_data_close(
             &tested_state.bias.to_data().to_vec().unwrap(),
             &state_ref.bias.to_data().to_vec().unwrap(),
-            rtol, atol, &format!("{iter_name} bias"),
+            rtol,
+            atol,
+            &format!("{iter_name} bias"),
         );
     }
 }

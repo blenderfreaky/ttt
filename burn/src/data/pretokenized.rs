@@ -276,8 +276,7 @@ impl<B: Backend> Batcher<B, TokenizedItem, TrainingTextGenerationBatch<B>> for T
 /// Sanitize a tokenizer name for use in a filename.
 /// Replaces path separators and other problematic characters.
 fn sanitize_tokenizer_name(name: &str) -> String {
-    name.replace(['/', '\\', ':', ' '], "_")
-        .replace("..", "_")
+    name.replace(['/', '\\', ':', ' '], "_").replace("..", "_")
 }
 
 /// Get the default path for a pre-tokenized dataset
@@ -294,9 +293,9 @@ pub fn pretokenized_path(
             dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"))
         });
     let sanitized_tokenizer = sanitize_tokenizer_name(tokenizer_name);
-    cache_dir
-        .join("ttt-burn")
-        .join(format!("{dataset_name}_{split}_{max_seq_len}_{sanitized_tokenizer}.bin"))
+    cache_dir.join("ttt-burn").join(format!(
+        "{dataset_name}_{split}_{max_seq_len}_{sanitized_tokenizer}.bin"
+    ))
 }
 
 /// Load or create a pre-tokenized dataset.

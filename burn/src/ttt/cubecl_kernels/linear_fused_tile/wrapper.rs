@@ -55,14 +55,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileKernel>
         let epsilon = inner.layer_norm.epsilon as f32;
 
         let inner_config = self.inner.get_config();
-        let threads = inner_config.threads
+        let threads = inner_config
+            .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
-        let config = FusedTttConfig::new(
-            inner_config.mini_batch_size,
-            head_dim,
-            epsilon,
-            threads,
-        );
+        let config = FusedTttConfig::new(inner_config.mini_batch_size, head_dim, epsilon, threads);
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,
@@ -126,7 +122,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
-        let threads = config.threads
+        let threads = config
+            .threads
             .unwrap_or_else(|| super::api::default_threads(mini_batch_size, head_dim));
         let config = FusedTttConfig::new(mini_batch_size, head_dim, epsilon, threads);
 
@@ -194,14 +191,11 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
-        let threads = inner.config.threads
+        let threads = inner
+            .config
+            .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
-        let config = FusedTttConfig::new(
-            inner.config.mini_batch_size,
-            head_dim,
-            epsilon,
-            threads,
-        );
+        let config = FusedTttConfig::new(inner.config.mini_batch_size, head_dim, epsilon, threads);
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,
@@ -227,7 +221,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
 mod tests {
     use crate::ttt::{
         GpuAutodiffBackend, GpuBackend,
-        cubecl_kernels::{FusedTile, FusedTileMulti, test_utils::{TestDims, test_fmb, test_fwd, test_backward_fmb}},
+        cubecl_kernels::{
+            FusedTile, FusedTileMulti,
+            test_utils::{TestDims, test_backward_fmb, test_fmb, test_fwd},
+        },
         linear::TTTLinearState,
     };
 
