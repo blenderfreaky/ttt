@@ -2,6 +2,7 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use burn::{
@@ -11,6 +12,7 @@ use burn::{
 };
 use bytemuck::{Pod, Zeroable};
 use memmap2::Mmap;
+use rayon::prelude::*;
 
 use super::{
     batcher::{TextGenerationBatch, TrainingTextGenerationBatch},
@@ -37,6 +39,7 @@ const HEADER_SIZE: usize = std::mem::size_of::<FileHeader>();
 /// Pre-tokenize a dataset and save to a binary file.
 ///
 /// Sequences are truncated or padded to `max_seq_len`.
+/// Uses multi-threaded tokenization for improved performance.
 /// Returns the number of sequences written.
 pub fn pretokenize_dataset<D, T>(
     dataset: &D,
@@ -45,7 +48,7 @@ pub fn pretokenize_dataset<D, T>(
     max_seq_len: usize,
 ) -> std::io::Result<u64>
 where
-    D: Dataset<super::dataset::TextGenerationItem>,
+    D: Dataset<super::dataset::TextGenerationItem> + Sync,
     T: TokenizerTrait,
 {
     let num_sequences = dataset.len() as u64;
@@ -64,25 +67,42 @@ where
     };
     writer.write_all(bytemuck::bytes_of(&header))?;
 
-    let mut token_buf = vec![pad_token; max_seq_len];
+    // Process in chunks to balance parallelism with memory usage
+    const CHUNK_SIZE: usize = 10000;
+    let total_len = dataset.len();
+    let progress = AtomicUsize::new(0);
 
-    for idx in 0..dataset.len() {
-        if let Some(item) = dataset.get(idx) {
-            let tokens = tokenizer.encode(&item.text, true);
+    for chunk_start in (0..total_len).step_by(CHUNK_SIZE) {
+        let chunk_end = (chunk_start + CHUNK_SIZE).min(total_len);
+        let indices: Vec<usize> = (chunk_start..chunk_end).collect();
 
-            let copy_len = tokens.len().min(max_seq_len);
-            for (i, &tok) in tokens.iter().take(copy_len).enumerate() {
-                token_buf[i] = tok as u32;
-            }
+        // Tokenize chunk in parallel
+        let tokenized_chunk: Vec<Vec<u32>> = indices
+            .par_iter()
+            .filter_map(|&idx| {
+                let item = dataset.get(idx)?;
+                let tokens = tokenizer.encode(&item.text, true);
 
-            token_buf[copy_len..max_seq_len].fill(pad_token);
+                // Convert and pad/truncate to max_seq_len
+                let mut padded = vec![pad_token; max_seq_len];
+                let copy_len = tokens.len().min(max_seq_len);
+                for (i, &tok) in tokens.iter().take(copy_len).enumerate() {
+                    padded[i] = tok as u32;
+                }
 
-            writer.write_all(bytemuck::cast_slice(&token_buf))?;
-        }
+                // Update progress counter
+                let completed = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                if completed % 10000 == 0 {
+                    println!("Pre-tokenized {completed}/{total_len} sequences");
+                }
 
-        // Progress indicator
-        if idx % 10000 == 0 {
-            println!("Pre-tokenized {idx}/{} sequences", dataset.len());
+                Some(padded)
+            })
+            .collect();
+
+        // Write chunk sequentially (maintains order)
+        for tokens in &tokenized_chunk {
+            writer.write_all(bytemuck::cast_slice(tokens))?;
         }
     }
 
