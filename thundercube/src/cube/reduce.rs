@@ -24,6 +24,12 @@ impl<F: Float> ReduceBuf<F> {
     }
 }
 
+impl<F: Float> Default for ReduceBuf<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Cooperatively reduces St across rows, producing one value per column.
 /// All threads in the plane participate, each handling strided rows.
 /// Result is broadcast to all threads.

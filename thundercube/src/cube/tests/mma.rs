@@ -6,6 +6,7 @@ use crate::{
     cube::{load_st_direct, load_st_transpose, mma_AB, mma_AtB, store_rt_direct},
     prelude::*,
     test_kernel,
+    test_utils::TestFloat,
 };
 
 /// Heterogeneous test kernel for mma_AtB: FIn inputs, FAcc accumulator
@@ -141,8 +142,6 @@ test_kernel! {
         );
     }
 }
-
-use crate::test_utils::TestFloat;
 
 test_kernel! {
     #[test]
