@@ -9,7 +9,7 @@ FROM rocm/dev-ubuntu-24.04:6.3.3 AS chef
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    build-essential pkg-config cmake libssl-dev ca-certificates curl \
+    build-essential pkg-config cmake libssl-dev libsqlite3-dev ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust stable
