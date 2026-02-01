@@ -205,19 +205,28 @@ fn backward_stage4_ln<P: ParamsTrait>(
 
 // =============================================================================
 // Stage 3: Update backward (reuses CS×CS tiles)
+// Split into two parts to allow weight_init reload between them.
 // =============================================================================
 
-/// Outputs from stage 3.
+/// Outputs from stage 3 part 1.
+#[derive(CubeType)]
+struct Stage3Part1Outputs<P: ParamsTrait> {
+    /// Intermediate for grad_ttt_lr_eta computation (from weight/bias update term)
+    grad_eta_term1: Rv<P::E, P::CS>,
+}
+
+/// Outputs from stage 3 (final).
 #[derive(CubeType)]
 struct Stage3Outputs<P: ParamsTrait> {
     grad_ttt_lr_eta: Rv<P::E, P::CS>,
 }
 
-/// Stage 3: Compute gradients through the dual-form update equations.
-/// Uses only 2 CS×CS tiles (reused) instead of 9.
+/// Stage 3 Part 1: Compute gradients that depend on grad_W_last.
+/// This includes grad_grad_l, grad_xk_attn, grad_xk_mini, and part of grad_ttt_lr_eta.
+/// After this returns, it's safe to accumulate grad_W_z1bar into grad_L_W_last.
 #[cube]
 #[allow(clippy::too_many_arguments)]
-fn backward_stage3_update<P: ParamsTrait>(
+fn backward_stage3_part1<P: ParamsTrait>(
     grad_z1_bar: &St<P::E, P::CS, P::F>,
     grad_l: &St<P::E, P::CS, P::F>,
     grad_W_last: &St<P::E, P::F, P::F>,
@@ -226,7 +235,6 @@ fn backward_stage3_update<P: ParamsTrait>(
     k_smem: &St<P::E, P::F, P::CS>,
     xk_smem: &St<P::E, P::CS, P::F>,
     xq_smem: &St<P::E, P::CS, P::F>,
-    weight_init: &St<P::E, P::F, P::F>,
     token_eta: &Tensor<Line<P::E>>,
     ttt_lr_eta: &Tensor<Line<P::E>>,
     last_eta: &Rv<P::E, P::CS>,
@@ -238,10 +246,9 @@ fn backward_stage3_update<P: ParamsTrait>(
     cs_cs_a: &mut St<P::E, P::CS, P::CS>,
     cs_cs_b: &mut St<P::E, P::CS, P::CS>,
     grad_grad_l_out: &mut St<P::E, P::CS, P::F>,
-    grad_xq_mini_out: &mut St<P::E, P::CS, P::F>,
     grad_xk_mini_out: &mut St<P::E, P::CS, P::F>,
     grad_xk_attn_out: &mut St<P::E, P::CS, P::F>,
-) -> Stage3Outputs<P> {
+) -> Stage3Part1Outputs<P> {
     // --- Compute grad_grad_l from three sources ---
 
     // Build η^T (upper triangular) into cs_cs_a
@@ -309,56 +316,7 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     sync_cube();
 
-    // --- grad_xq_mini = grad_z1_bar @ W_init^T ---
-    let mut grad_xq_reg = P::cs_f_reg();
-    grad_xq_reg.zero();
-    cube::mma_ABt(&mut grad_xq_reg, grad_z1_bar, weight_init);
-
-    sync_cube();
-
-    cube::store_rt_to_st(&grad_xq_reg, grad_xq_mini_out);
-
-    sync_cube();
-
-    // --- Gradient through attn = XQ @ XK^T ---
-    // d_attn = -grad_z1_bar @ grad_l^T * η (element-wise, lower triangular)
-
-    // Build η (lower triangular) into cs_cs_a (reuse)
-    build_eta_matrix::<P>(token_eta, ttt_lr_eta, cs_cs_a, ttt_lr_eta_idx, false);
-
-    // d_attn_base = grad_z1_bar @ grad_l^T into cs_cs_b
-    let mut d_attn_reg = P::cs_cs_reg();
-    d_attn_reg.zero();
-    cube::mma_ABt(&mut d_attn_reg, grad_z1_bar, grad_l);
-
-    sync_cube();
-
-    cube::store_rt_to_st(&d_attn_reg, cs_cs_b);
-
-    sync_cube();
-
-    cs_cs_b.mul(cs_cs_a);
-    cs_cs_b.neg();
-    cs_cs_b.tril();
-
-    sync_cube();
-
-    // d_xq (from attn) = d_attn @ XK
-    let mut d_xq_attn_reg = P::cs_f_reg();
-    d_xq_attn_reg.zero();
-    cube::mma_AB(&mut d_xq_attn_reg, cs_cs_b, xk_smem);
-
-    sync_cube();
-
-    cube::store_rt_to_st(&d_xq_attn_reg, scratch1);
-
-    sync_cube();
-
-    grad_xq_mini_out.add(scratch1);
-
-    sync_cube();
-
-    // d_xk (from attn) = d_attn^T @ XQ
+    // --- d_xk (from attn) = d_attn^T @ XQ ---
     // Compute d_attn^T directly: grad_l @ grad_z1_bar^T * η^T
     let mut d_attn_t_reg = P::cs_cs_reg();
     d_attn_t_reg.zero();
@@ -408,7 +366,7 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     sync_cube();
 
-    // --- grad_ttt_lr_eta from weight/bias update ---
+    // --- grad_ttt_lr_eta from weight/bias update (first part) ---
     // grad_last_eta = sum(-(grad_l_last * XK) - (grad_b_last * grad_l))
     scratch2.copy_from(scratch1); // scratch1 = grad_l_last
     scratch2.mul(xk_smem);
@@ -431,6 +389,81 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     // Scale by last_token_eta
     grad_eta_term1.mul_scalar(last_token_eta);
+
+    Stage3Part1Outputs::<P> {
+        grad_eta_term1,
+    }
+}
+
+/// Stage 3 Part 2: Compute gradients that depend on weight_init.
+/// This includes grad_xq_mini (with d_xq_attn) and the remaining grad_ttt_lr_eta computation.
+#[cube]
+#[allow(clippy::too_many_arguments)]
+fn backward_stage3_part2<P: ParamsTrait>(
+    grad_z1_bar: &St<P::E, P::CS, P::F>,
+    grad_l: &St<P::E, P::CS, P::F>,
+    q_smem: &St<P::E, P::F, P::CS>,
+    k_smem: &St<P::E, P::F, P::CS>,
+    xk_smem: &St<P::E, P::CS, P::F>,
+    weight_init: &St<P::E, P::F, P::F>,
+    token_eta: &Tensor<Line<P::E>>,
+    ttt_lr_eta: &Tensor<Line<P::E>>,
+    ttt_lr_eta_idx: usize,
+    grad_eta_term1: &Rv<P::E, P::CS>,
+    buf: &mut ReduceBuf<P::E>,
+    scratch1: &mut St<P::E, P::CS, P::F>,
+    cs_cs_a: &mut St<P::E, P::CS, P::CS>,
+    cs_cs_b: &mut St<P::E, P::CS, P::CS>,
+    grad_xq_mini_out: &mut St<P::E, P::CS, P::F>,
+) -> Stage3Outputs<P> {
+    // --- grad_xq_mini = grad_z1_bar @ W_init^T ---
+    let mut grad_xq_reg = P::cs_f_reg();
+    grad_xq_reg.zero();
+    cube::mma_ABt(&mut grad_xq_reg, grad_z1_bar, weight_init);
+
+    sync_cube();
+
+    cube::store_rt_to_st(&grad_xq_reg, grad_xq_mini_out);
+
+    sync_cube();
+
+    // --- Gradient through attn = XQ @ XK^T ---
+    // d_attn = -grad_z1_bar @ grad_l^T * η (element-wise, lower triangular)
+
+    // Build η (lower triangular) into cs_cs_a
+    build_eta_matrix::<P>(token_eta, ttt_lr_eta, cs_cs_a, ttt_lr_eta_idx, false);
+
+    // d_attn_base = grad_z1_bar @ grad_l^T into cs_cs_b
+    let mut d_attn_reg = P::cs_cs_reg();
+    d_attn_reg.zero();
+    cube::mma_ABt(&mut d_attn_reg, grad_z1_bar, grad_l);
+
+    sync_cube();
+
+    cube::store_rt_to_st(&d_attn_reg, cs_cs_b);
+
+    sync_cube();
+
+    cs_cs_b.mul(cs_cs_a);
+    cs_cs_b.neg();
+    cs_cs_b.tril();
+
+    sync_cube();
+
+    // d_xq (from attn) = d_attn @ XK
+    let mut d_xq_attn_reg = P::cs_f_reg();
+    d_xq_attn_reg.zero();
+    cube::mma_AB(&mut d_xq_attn_reg, cs_cs_b, xk_smem);
+
+    sync_cube();
+
+    cube::store_rt_to_st(&d_xq_attn_reg, scratch1);
+
+    sync_cube();
+
+    grad_xq_mini_out.add(scratch1);
+
+    sync_cube();
 
     // --- grad_ttt_lr_eta from η terms in z1_bar ---
     // Reuse cs_cs_a/b for attn computation
@@ -475,7 +508,7 @@ fn backward_stage3_update<P: ParamsTrait>(
     let mut grad_ttt_lr_eta = P::cs_reg_big();
     cube::reduce_cols::<P::E, P::CS, P::CS, SumOp>(cs_cs_b, &mut grad_ttt_lr_eta, buf);
 
-    grad_ttt_lr_eta.add(&grad_eta_term1);
+    grad_ttt_lr_eta.add(grad_eta_term1);
 
     Stage3Outputs::<P> {
         grad_ttt_lr_eta,
@@ -692,7 +725,8 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 // =============================================================================
 
 /// Stage 1: Final gradient assembly and output storage.
-/// Note: grad_W_z1bar is already accumulated into grad_W_last in stage 4.
+/// Note: grad_W_z1bar is already accumulated into grad_W_last after stage 3 part 1.
+/// temp_f_f contains weight_init on entry, and is overwritten with dW_tile.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage1_assemble<P: ParamsTrait>(
@@ -714,8 +748,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     grad_ln_bias_s2: &Rv<P::E, P::F>,
     // Inputs
     k_smem: &St<P::E, P::F, P::CS>,
-    weight_init: &St<P::E, P::F, P::F>,
-    // Temp F×F tile (reused from stage 4)
+    // Temp F×F tile: contains weight_init on entry, overwritten with dW_tile
     temp_f_f: &mut St<P::E, P::F, P::F>,
     // Accumulated gradients (in/out)
     grad_W_last: &mut St<P::E, P::F, P::F>,
@@ -742,9 +775,10 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     cube::store_st_direct(grad_target, &mut grads.grad_xv, stage_offset, 0, 0);
 
     // grad_XK = -grad_target + grad_xk_mini + grad_xk_attn + grad_Z1 @ W_init^T
+    // Note: temp_f_f contains weight_init at this point
     let mut grad_xk_reg = P::cs_f_reg();
     grad_xk_reg.zero();
-    cube::mma_ABt(&mut grad_xk_reg, grad_Z1, weight_init);
+    cube::mma_ABt(&mut grad_xk_reg, grad_Z1, temp_f_f);
 
     sync_cube();
 
@@ -805,9 +839,14 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 /// - CS×CS pool: cs_cs_a, cs_cs_b (2 CS×CS = 8KB)
 /// - CS×F pool: 10 tiles for stage outputs (10 CS×F = 40KB)
 /// - grad_l_smem (CS×F = 4KB) - included in pool as pool_cs_f_a
-/// - temp_f_f: shared F×F tile for grad_W_z1bar (stage 4) and dW_tile (stage 1)
-/// - weight_init_smem: F×F tile (persistent)
-/// Total with F×F optimization: saves one F×F tile by reusing temp_f_f
+/// - temp_f_f: shared F×F tile for grad_W_z1bar (stage 4), weight_init (stage 3.2/1), dW_tile (stage 1)
+///
+/// F×F tile optimization: Instead of 3 separate F×F tiles (weight_init, grad_W_z1bar, dW_tile),
+/// we use a single temp_f_f tile that is repurposed across stages:
+/// 1. Stage 4: stores grad_W_z1bar
+/// 2. After stage 3.1: accumulate into grad_L_W_last, then load weight_init
+/// 3. Stage 3.2 and Stage 1: use as weight_init for matmuls
+/// 4. Stage 1: overwrite with dW_tile for final accumulation
 #[cube]
 #[allow(clippy::too_many_arguments)]
 pub fn fused_ttt_backward_stage<P: ParamsTrait>(
@@ -849,7 +888,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut tile_grad_Z1 = P::cs_f_tile();
     let mut tile_grad_target = P::cs_f_tile();
 
-    // Shared F×F tile: used for grad_W_z1bar in stage 4, then reused for dW_tile in stage 1
+    // Shared F×F tile: used for grad_W_z1bar (stage 4), weight_init (stage 3 part 2, stage 1), dW_tile (stage 1)
     let mut temp_f_f = P::f_f_tile();
 
     // =========================================================================
@@ -862,10 +901,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     cube::load_st_transpose(&saved.xq, &mut q_smem, stage_offset, 0, 0);
     cube::load_st_transpose(&saved.xk, &mut k_smem, stage_offset, 0, 0);
 
-    // Weight init (needed by stages 3, 1)
-    let mut weight_init_smem = P::f_f_tile();
+    // Weight init base offset (loaded on-demand into temp_f_f)
     let base_weight_init = index_2d(&saved.weight_init, CUBE_POS_X as usize, CUBE_POS_Y as usize);
-    cube::load_st_direct(&saved.weight_init, &mut weight_init_smem, base_weight_init, 0, 0);
 
     // LN weight
     let base_ln = index_2d(&saved.ln_weight, CUBE_POS_Y as usize, 0);
@@ -921,7 +958,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     );
 
     // =========================================================================
-    // Stage 3: Update backward
+    // Stage 3 Part 1: Update backward (grad_W_last-dependent parts)
     // =========================================================================
 
     // Repurpose tiles: x_hat_ln -> xk_smem, grad_output_s4 -> xq_smem
@@ -932,7 +969,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    let stage3_out = backward_stage3_update::<P>(
+    let stage3_part1_out = backward_stage3_part1::<P>(
         &tile_grad_z1_bar,
         &grad_l_smem,
         grad_L_W_last,
@@ -941,7 +978,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &k_smem,
         &xk_smem,
         &xq_smem,
-        &weight_init_smem,
         &saved.token_eta,
         &saved.ttt_lr_eta,
         &last_eta_rv,
@@ -953,20 +989,50 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &mut cs_cs_a,
         &mut cs_cs_b,
         &mut tile_e,           // grad_grad_l output
-        &mut tile_f,           // grad_xq_mini output (temporary)
         &mut tile_grad_xk_mini,
         &mut tile_grad_xk_attn,
     );
 
-    // Rename outputs from stage 3
+    // Rename output from stage 3 part 1
     let grad_grad_l = tile_e;
-    let mut grad_xq_mini = xq_smem;  // Repurpose xq_smem tile
-    grad_xq_mini.copy_from(&tile_f);
 
     sync_cube();
 
-    // Now that stage 3 is done reading grad_L_W_last, accumulate grad_W_z1bar from temp_f_f
+    // Now that stage 3 part 1 is done reading grad_L_W_last, accumulate grad_W_z1bar from temp_f_f
     grad_L_W_last.add(&temp_f_f);
+
+    sync_cube();
+
+    // Load weight_init into temp_f_f for stage 3 part 2 and stage 1
+    cube::load_st_direct(&saved.weight_init, &mut temp_f_f, base_weight_init, 0, 0);
+
+    sync_cube();
+
+    // =========================================================================
+    // Stage 3 Part 2: Update backward (weight_init-dependent parts)
+    // =========================================================================
+
+    let stage3_out = backward_stage3_part2::<P>(
+        &tile_grad_z1_bar,
+        &grad_l_smem,
+        &q_smem,
+        &k_smem,
+        &xk_smem,
+        &temp_f_f,  // weight_init loaded into temp_f_f
+        &saved.token_eta,
+        &saved.ttt_lr_eta,
+        ttt_lr_eta_idx,
+        &stage3_part1_out.grad_eta_term1,
+        &mut buf,
+        &mut scratch1,
+        &mut cs_cs_a,
+        &mut cs_cs_b,
+        &mut tile_f,           // grad_xq_mini output
+    );
+
+    // Rename outputs from stage 3
+    let mut grad_xq_mini = xq_smem;  // Repurpose xq_smem tile
+    grad_xq_mini.copy_from(&tile_f);
 
     sync_cube();
 
@@ -1051,8 +1117,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &stage2_out.grad_ln_bias,
         // Inputs
         &k_smem,
-        &weight_init_smem,
-        // Temp F×F tile (reused from stage 4)
+        // Temp F×F tile: contains weight_init, will be overwritten with dW_tile
         &mut temp_f_f,
         // Accumulators
         grad_L_W_last,
