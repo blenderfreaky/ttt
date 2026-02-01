@@ -10,14 +10,23 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, D64, Dim, DimOrOne, St},
 };
 
+/// Number of iterations per kernel launch to amortize launch overhead
+const BENCH_ITERS: u32 = 1024;
+
 /// Benchmark kernel for direct load (global -> shared -> global)
 #[cube(launch)]
 fn bench_load_direct<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
-    load_st_direct(input, &mut st, 0, 0, 0);
+
+    #[unroll]
+    for _ in 0..iters {
+        load_st_direct(input, &mut st, 0, 0, 0);
+    }
+
     store_st_direct(&st, output, 0, 0, 0);
 }
 
@@ -26,10 +35,32 @@ fn bench_load_direct<F: Float, R: Dim, C: Dim>(
 fn bench_load_transpose<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
-    load_st_transpose(input, &mut st, 0, 0, 0);
+
+    #[unroll]
+    for _ in 0..iters {
+        load_st_transpose(input, &mut st, 0, 0, 0);
+    }
+
     store_st_direct(&st, output, 0, 0, 0);
+}
+
+/// Benchmark kernel for direct store
+#[cube(launch)]
+fn bench_store_direct<F: Float, R: Dim, C: Dim>(
+    input: &Tensor<Line<F>>,
+    output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
+) {
+    let mut st = St::<F, R, C>::new();
+    load_st_direct(input, &mut st, 0, 0, 0);
+
+    #[unroll]
+    for _ in 0..iters {
+        store_st_direct(&st, output, 0, 0, 0);
+    }
 }
 
 /// Benchmark kernel for transpose store (global -> shared -> global transposed)
@@ -37,10 +68,15 @@ fn bench_load_transpose<F: Float, R: Dim, C: Dim>(
 fn bench_store_transpose<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
     load_st_direct(input, &mut st, 0, 0, 0);
-    store_st_transpose(&st, output, 0, 0, 0);
+
+    #[unroll]
+    for _ in 0..iters {
+        store_st_transpose(&st, output, 0, 0, 0);
+    }
 }
 
 /// Benchmark kernel for round-trip load-transpose-store-transpose (double transpose = identity)
@@ -48,10 +84,15 @@ fn bench_store_transpose<F: Float, R: Dim, C: Dim>(
 fn bench_round_trip_transpose<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
-    load_st_transpose(input, &mut st, 0, 0, 0);
-    store_st_transpose(&st, output, 0, 0, 0);
+
+    #[unroll]
+    for _ in 0..iters {
+        load_st_transpose(input, &mut st, 0, 0, 0);
+        store_st_transpose(&st, output, 0, 0, 0);
+    }
 }
 
 /// Macro to run load/store benchmarks with specific tile dimensions
@@ -69,7 +110,8 @@ macro_rules! bench_load_store_impl {
         let shape = vec![rows, cols];
         let strides = get_strides(&shape);
 
-        let bytes = rows * cols * std::mem::size_of::<f32>();
+        // Bytes per iteration * number of iterations
+        let bytes = rows * cols * std::mem::size_of::<f32>() * (BENCH_ITERS as usize);
         let param_str = format!("{}x{}_t{}", rows, cols, $num_threads);
 
         $c.throughput(Throughput::Bytes(bytes as u64));
@@ -88,6 +130,7 @@ macro_rules! bench_load_store_impl {
                     CubeDim::new_1d($num_threads),
                     input,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
@@ -130,11 +173,11 @@ fn bench_load_transpose_tile_sizes(c: &mut Criterion) {
 fn bench_store_direct_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("store_direct");
 
-    bench_load_store_impl!(group, "store_direct", bench_load_direct, D4, D4, 1);
-    bench_load_store_impl!(group, "store_direct", bench_load_direct, D8, D8, 4);
-    bench_load_store_impl!(group, "store_direct", bench_load_direct, D16, D16, 16);
-    bench_load_store_impl!(group, "store_direct", bench_load_direct, D32, D32, 64);
-    bench_load_store_impl!(group, "store_direct", bench_load_direct, D64, D64, 64);
+    bench_load_store_impl!(group, "store_direct", bench_store_direct, D4, D4, 1);
+    bench_load_store_impl!(group, "store_direct", bench_store_direct, D8, D8, 4);
+    bench_load_store_impl!(group, "store_direct", bench_store_direct, D16, D16, 16);
+    bench_load_store_impl!(group, "store_direct", bench_store_direct, D32, D32, 64);
+    bench_load_store_impl!(group, "store_direct", bench_store_direct, D64, D64, 64);
 
     group.finish();
 }
@@ -221,7 +264,7 @@ fn bench_thread_count_scaling(c: &mut Criterion) {
         let shape = vec![rows, cols];
         let strides = get_strides(&shape);
 
-        let bytes = rows * cols * std::mem::size_of::<f32>();
+        let bytes = rows * cols * std::mem::size_of::<f32>() * (BENCH_ITERS as usize);
         let param_str = format!("32x32_t{}", num_threads);
 
         group.throughput(Throughput::Bytes(bytes as u64));
@@ -240,6 +283,7 @@ fn bench_thread_count_scaling(c: &mut Criterion) {
                     CubeDim::new_1d(num_threads),
                     input,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");

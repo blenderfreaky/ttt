@@ -10,17 +10,26 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
 };
 
+/// Number of iterations per kernel launch to amortize launch overhead
+const BENCH_ITERS: u32 = 1024;
+
 // ==================== RT REDUCTION KERNELS ====================
 
 #[cube(launch)]
 fn bench_rt_sum_rows<F: Float, R: Dim, C: Dim>(
     input: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
     let mut result = Rv::<F, R>::new();
-    rt.sum_rows(&mut result);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.sum_rows(&mut result);
+    }
+
     result.copy_to_array(output);
 }
 
@@ -28,11 +37,17 @@ fn bench_rt_sum_rows<F: Float, R: Dim, C: Dim>(
 fn bench_rt_sum_cols<F: Float, R: Dim, C: Dim>(
     input: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
     let mut result = Rv::<F, C>::new();
-    rt.sum_cols(&mut result);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.sum_cols(&mut result);
+    }
+
     result.copy_to_array(output);
 }
 
@@ -42,13 +57,18 @@ fn bench_rt_sum_cols<F: Float, R: Dim, C: Dim>(
 fn bench_st_sum_rows<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
     load_st_direct(input, &mut st, 0, 0, 0);
     sync_cube();
 
     let mut result = Rv::<F, R>::new();
-    sum_rows_plane::<F, R, C>(&st, &mut result);
+
+    #[unroll]
+    for _ in 0..iters {
+        sum_rows_plane::<F, R, C>(&st, &mut result);
+    }
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);
@@ -59,13 +79,18 @@ fn bench_st_sum_rows<F: Float, R: Dim, C: Dim>(
 fn bench_st_sum_cols<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
     load_st_direct(input, &mut st, 0, 0, 0);
     sync_cube();
 
     let mut result = Rv::<F, C>::new();
-    sum_cols_plane::<F, R, C>(&st, &mut result);
+
+    #[unroll]
+    for _ in 0..iters {
+        sum_cols_plane::<F, R, C>(&st, &mut result);
+    }
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);
@@ -76,6 +101,7 @@ fn bench_st_sum_cols<F: Float, R: Dim, C: Dim>(
 fn bench_st_sum_rows_cube<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut buf = ReduceBuf::<F>::new();
     let mut st = St::<F, R, C>::new();
@@ -83,7 +109,11 @@ fn bench_st_sum_rows_cube<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut result = Rv::<F, R>::new();
-    sum_rows::<F, R, C>(&st, &mut result, &mut buf);
+
+    #[unroll]
+    for _ in 0..iters {
+        sum_rows::<F, R, C>(&st, &mut result, &mut buf);
+    }
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);
@@ -94,6 +124,7 @@ fn bench_st_sum_rows_cube<F: Float, R: Dim, C: Dim>(
 fn bench_st_sum_cols_cube<F: Float, R: Dim, C: Dim>(
     input: &Tensor<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut buf = ReduceBuf::<F>::new();
     let mut st = St::<F, R, C>::new();
@@ -101,7 +132,11 @@ fn bench_st_sum_cols_cube<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     let mut result = Rv::<F, C>::new();
-    sum_cols::<F, R, C>(&st, &mut result, &mut buf);
+
+    #[unroll]
+    for _ in 0..iters {
+        sum_cols::<F, R, C>(&st, &mut result, &mut buf);
+    }
 
     if UNIT_POS == 0 {
         result.copy_to_array(output);
@@ -124,7 +159,9 @@ macro_rules! bench_rt_reduce_impl {
 
         let param_str = format!("{}x{}", rows, cols);
 
-        $c.throughput(Throughput::Elements(size as u64));
+        // Elements per iteration * number of iterations
+        let elements = size * (BENCH_ITERS as usize);
+        $c.throughput(Throughput::Elements(elements as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let input =
@@ -139,6 +176,7 @@ macro_rules! bench_rt_reduce_impl {
                     CubeDim::new_1d(1),
                     input,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
@@ -166,7 +204,9 @@ macro_rules! bench_st_reduce_impl {
 
         let param_str = format!("{}x{}_t{}", rows, cols, $threads);
 
-        $c.throughput(Throughput::Elements(size as u64));
+        // Elements per iteration * number of iterations
+        let elements = size * (BENCH_ITERS as usize);
+        $c.throughput(Throughput::Elements(elements as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let input = unsafe {
@@ -182,6 +222,7 @@ macro_rules! bench_st_reduce_impl {
                     CubeDim::new_1d($threads),
                     input,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
@@ -229,27 +270,6 @@ fn bench_st_reductions(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_st_reductions_cube(c: &mut Criterion) {
-    let mut group = c.benchmark_group("st_reductions");
-
-    // Note: ST reductions use plane_reduce, which requires threads >= PLANE_DIM (32)
-    // sum_rows
-    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D8, D8, D8, 32);
-    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D8, D8, D8, 64);
-    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D16, D16, D16, 32);
-    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D16, D16, D16, 64);
-    bench_st_reduce_impl!(group, "sum_rows", bench_st_sum_rows_cube, D32, D32, D32, 64);
-
-    // sum_cols
-    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D8, D8, D8, 32);
-    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D8, D8, D8, 64);
-    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D16, D16, D16, 32);
-    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D16, D16, D16, 64);
-    bench_st_reduce_impl!(group, "sum_cols", bench_st_sum_cols_cube, D32, D32, D32, 64);
-
-    group.finish();
-}
-
 fn bench_asymmetric_reductions(c: &mut Criterion) {
     let mut group = c.benchmark_group("asymmetric_reductions");
 
@@ -288,7 +308,8 @@ fn bench_thread_scaling_reductions(c: &mut Criterion) {
 
         let param_str = format!("16x16_t{}", threads);
 
-        group.throughput(Throughput::Elements(size as u64));
+        let elements = size * (BENCH_ITERS as usize);
+        group.throughput(Throughput::Elements(elements as u64));
         group.bench_with_input(BenchmarkId::new("sum_rows", &param_str), &(), |b, _| {
             b.iter(|| {
                 let input = unsafe {
@@ -303,6 +324,7 @@ fn bench_thread_scaling_reductions(c: &mut Criterion) {
                     CubeDim::new_1d(threads),
                     input,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
@@ -317,7 +339,6 @@ criterion_group!(
     benches,
     bench_rt_reductions,
     bench_st_reductions,
-    bench_st_reductions_cube,
     bench_asymmetric_reductions,
     bench_thread_scaling_reductions,
 );

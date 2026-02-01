@@ -10,8 +10,12 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, St},
 };
 
+/// Number of iterations per kernel launch to amortize launch overhead
+const BENCH_ITERS: u32 = 1024;
+
 /// Benchmark kernel for mma_AtB with configurable tile sizes.
 /// C = A^T * B where A is loaded transposed.
+/// Runs `iters` iterations inside the kernel to amortize launch overhead.
 #[cube(launch)]
 fn bench_mma_AtB<
     F: Float,
@@ -24,22 +28,27 @@ fn bench_mma_AtB<
     in_a: &Tensor<Line<F>>,
     in_b: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st_a = St::<F, TileK, TileM>::new();
     let mut st_b = St::<F, TileK, TileN>::new();
     let mut rt_c = Rt::<F, ThreadTileM, ThreadTileN>::new();
-    rt_c.zero();
 
     load_st_transpose(in_a, &mut st_a, 0, 0, 0);
     load_st_direct(in_b, &mut st_b, 0, 0, 0);
 
-    mma_AtB(&mut rt_c, &st_a, &st_b);
+    #[unroll]
+    for _ in 0..iters {
+        rt_c.zero();
+        mma_AtB(&mut rt_c, &st_a, &st_b);
+    }
 
     store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
 }
 
 /// Benchmark kernel for mma_AB with configurable tile sizes.
 /// C = A * B where A is loaded directly (not transposed).
+/// Runs `iters` iterations inside the kernel to amortize launch overhead.
 #[cube(launch)]
 fn bench_mma_AB<
     F: Float,
@@ -52,16 +61,20 @@ fn bench_mma_AB<
     in_a: &Tensor<Line<F>>,
     in_b: &Tensor<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st_a = St::<F, TileM, TileK>::new();
     let mut st_b = St::<F, TileK, TileN>::new();
     let mut rt_c = Rt::<F, ThreadTileM, ThreadTileN>::new();
-    rt_c.zero();
 
     load_st_direct(in_a, &mut st_a, 0, 0, 0);
     load_st_direct(in_b, &mut st_b, 0, 0, 0);
 
-    mma_AB(&mut rt_c, &st_a, &st_b);
+    #[unroll]
+    for _ in 0..iters {
+        rt_c.zero();
+        mma_AB(&mut rt_c, &st_a, &st_b);
+    }
 
     store_rt_direct::<F, ThreadTileM, ThreadTileN, TileM, TileN>(&rt_c, output, 0, 0, 0);
 }
@@ -95,7 +108,8 @@ macro_rules! bench_mma_AtB_impl {
         let strides_b = get_strides(&shape_b);
         let strides_c = get_strides(&shape_c);
 
-        let flops = 2 * tile_m * tile_k * tile_n;
+        // FLOPs per iteration * number of iterations
+        let flops = 2 * tile_m * tile_k * tile_n * (BENCH_ITERS as usize);
         let param_str = format!("M{}K{}N{}_T{}", tile_m, tile_k, tile_n, thread_tile);
 
         $c.throughput(Throughput::Elements(flops as u64));
@@ -132,6 +146,7 @@ macro_rules! bench_mma_AtB_impl {
                     in_a,
                     in_b,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
@@ -169,7 +184,8 @@ macro_rules! bench_mma_AB_impl {
         let strides_b = get_strides(&shape_b);
         let strides_c = get_strides(&shape_c);
 
-        let flops = 2 * tile_m * tile_k * tile_n;
+        // FLOPs per iteration * number of iterations
+        let flops = 2 * tile_m * tile_k * tile_n * (BENCH_ITERS as usize);
         let param_str = format!("M{}K{}N{}_T{}", tile_m, tile_k, tile_n, thread_tile);
 
         $c.throughput(Throughput::Elements(flops as u64));
@@ -206,6 +222,7 @@ macro_rules! bench_mma_AB_impl {
                     in_a,
                     in_b,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");

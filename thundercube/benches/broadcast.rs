@@ -10,6 +10,9 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt, Rv, St},
 };
 
+/// Number of iterations per kernel launch to amortize launch overhead
+const BENCH_ITERS: u32 = 1024;
+
 // ==================== RT BROADCAST KERNELS ====================
 
 #[cube(launch)]
@@ -17,12 +20,18 @@ fn bench_rt_add_row<F: Float, R: Dim, C: Dim>(
     a: &Array<Line<F>>,
     row: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt = Rt::<F, R, C>::new();
     let mut rv = Rv::<F, C>::new();
     rt.copy_from_array(a);
     rv.copy_from_array(row);
-    rt.add_row(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.add_row(&rv);
+    }
+
     rt.copy_to_array(output);
 }
 
@@ -31,12 +40,18 @@ fn bench_rt_mul_row<F: Float, R: Dim, C: Dim>(
     a: &Array<Line<F>>,
     row: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt = Rt::<F, R, C>::new();
     let mut rv = Rv::<F, C>::new();
     rt.copy_from_array(a);
     rv.copy_from_array(row);
-    rt.mul_row(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.mul_row(&rv);
+    }
+
     rt.copy_to_array(output);
 }
 
@@ -45,12 +60,18 @@ fn bench_rt_add_col<F: Float, R: Dim, C: Dim>(
     a: &Array<Line<F>>,
     col: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt = Rt::<F, R, C>::new();
     let mut rv = Rv::<F, R>::new();
     rt.copy_from_array(a);
     rv.copy_from_array(col);
-    rt.add_col(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.add_col(&rv);
+    }
+
     rt.copy_to_array(output);
 }
 
@@ -59,12 +80,18 @@ fn bench_rt_mul_col<F: Float, R: Dim, C: Dim>(
     a: &Array<Line<F>>,
     col: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt = Rt::<F, R, C>::new();
     let mut rv = Rv::<F, R>::new();
     rt.copy_from_array(a);
     rv.copy_from_array(col);
-    rt.mul_col(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.mul_col(&rv);
+    }
+
     rt.copy_to_array(output);
 }
 
@@ -75,12 +102,18 @@ fn bench_st_add_row<F: Float, R: Dim, C: Dim>(
     a: &Tensor<Line<F>>,
     row: &Array<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
     let mut rv = Rv::<F, C>::new();
     rv.copy_from_array(row);
     load_st_direct(a, &mut st, 0, 0, 0);
-    st.add_row(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        st.add_row(&rv);
+    }
+
     store_st_direct(&st, output, 0, 0, 0);
 }
 
@@ -89,12 +122,18 @@ fn bench_st_mul_row<F: Float, R: Dim, C: Dim>(
     a: &Tensor<Line<F>>,
     row: &Array<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
     let mut rv = Rv::<F, C>::new();
     rv.copy_from_array(row);
     load_st_direct(a, &mut st, 0, 0, 0);
-    st.mul_row(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        st.mul_row(&rv);
+    }
+
     store_st_direct(&st, output, 0, 0, 0);
 }
 
@@ -103,12 +142,18 @@ fn bench_st_add_col<F: Float, R: Dim, C: Dim>(
     a: &Tensor<Line<F>>,
     col: &Array<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
     let mut rv = Rv::<F, R>::new();
     rv.copy_from_array(col);
     load_st_direct(a, &mut st, 0, 0, 0);
-    st.add_col(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        st.add_col(&rv);
+    }
+
     store_st_direct(&st, output, 0, 0, 0);
 }
 
@@ -117,12 +162,18 @@ fn bench_st_mul_col<F: Float, R: Dim, C: Dim>(
     a: &Tensor<Line<F>>,
     col: &Array<Line<F>>,
     output: &mut Tensor<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut st = St::<F, R, C>::new();
     let mut rv = Rv::<F, R>::new();
     rv.copy_from_array(col);
     load_st_direct(a, &mut st, 0, 0, 0);
-    st.mul_col(&rv);
+
+    #[unroll]
+    for _ in 0..iters {
+        st.mul_col(&rv);
+    }
+
     store_st_direct(&st, output, 0, 0, 0);
 }
 
@@ -145,7 +196,9 @@ macro_rules! bench_rt_broadcast_impl {
 
         let param_str = format!("{}x{}", rows, cols);
 
-        $c.throughput(Throughput::Elements(size as u64));
+        // Elements per iteration * number of iterations
+        let elements = size * (BENCH_ITERS as usize);
+        $c.throughput(Throughput::Elements(elements as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let a =
@@ -163,6 +216,7 @@ macro_rules! bench_rt_broadcast_impl {
                     a,
                     vec,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
@@ -193,7 +247,9 @@ macro_rules! bench_st_broadcast_impl {
 
         let param_str = format!("{}x{}_t{}", rows, cols, $threads);
 
-        $c.throughput(Throughput::Elements(size as u64));
+        // Elements per iteration * number of iterations
+        let elements = size * (BENCH_ITERS as usize);
+        $c.throughput(Throughput::Elements(elements as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let a = unsafe {
@@ -213,6 +269,7 @@ macro_rules! bench_st_broadcast_impl {
                     a,
                     vec,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");

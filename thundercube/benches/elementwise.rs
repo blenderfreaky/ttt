@@ -9,45 +9,93 @@ use thundercube::{
     tiles::{D4, D8, D16, D32, Dim, DimOrOne, Rt},
 };
 
+/// Number of iterations per kernel launch to amortize launch overhead
+const BENCH_ITERS: u32 = 1024;
+
 // ==================== UNARY OPERATION KERNELS ====================
 
 #[cube(launch)]
-fn bench_exp<F: Float, R: Dim, C: Dim>(input: &Array<Line<F>>, output: &mut Array<Line<F>>) {
+fn bench_exp<F: Float, R: Dim, C: Dim>(
+    input: &Array<Line<F>>,
+    output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
+) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
-    rt.exp();
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.exp();
+    }
+
     rt.copy_to_array(output);
 }
 
 #[cube(launch)]
-fn bench_tanh<F: Float, R: Dim, C: Dim>(input: &Array<Line<F>>, output: &mut Array<Line<F>>) {
+fn bench_tanh<F: Float, R: Dim, C: Dim>(
+    input: &Array<Line<F>>,
+    output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
+) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
-    rt.tanh();
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.tanh();
+    }
+
     rt.copy_to_array(output);
 }
 
 #[cube(launch)]
-fn bench_sigmoid<F: Float, R: Dim, C: Dim>(input: &Array<Line<F>>, output: &mut Array<Line<F>>) {
+fn bench_sigmoid<F: Float, R: Dim, C: Dim>(
+    input: &Array<Line<F>>,
+    output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
+) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
-    rt.sigmoid();
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.sigmoid();
+    }
+
     rt.copy_to_array(output);
 }
 
 #[cube(launch)]
-fn bench_gelu<F: Float, R: Dim, C: Dim>(input: &Array<Line<F>>, output: &mut Array<Line<F>>) {
+fn bench_gelu<F: Float, R: Dim, C: Dim>(
+    input: &Array<Line<F>>,
+    output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
+) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
-    rt.gelu();
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.gelu();
+    }
+
     rt.copy_to_array(output);
 }
 
 #[cube(launch)]
-fn bench_sqrt<F: Float, R: Dim, C: Dim>(input: &Array<Line<F>>, output: &mut Array<Line<F>>) {
+fn bench_sqrt<F: Float, R: Dim, C: Dim>(
+    input: &Array<Line<F>>,
+    output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
+) {
     let mut rt = Rt::<F, R, C>::new();
     rt.copy_from_array(input);
-    rt.sqrt();
+
+    #[unroll]
+    for _ in 0..iters {
+        rt.sqrt();
+    }
+
     rt.copy_to_array(output);
 }
 
@@ -58,12 +106,18 @@ fn bench_add<F: Float, R: Dim, C: Dim>(
     a: &Array<Line<F>>,
     b: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt_a = Rt::<F, R, C>::new();
     let mut rt_b = Rt::<F, R, C>::new();
     rt_a.copy_from_array(a);
     rt_b.copy_from_array(b);
-    rt_a.add(&rt_b);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt_a.add(&rt_b);
+    }
+
     rt_a.copy_to_array(output);
 }
 
@@ -72,12 +126,18 @@ fn bench_mul<F: Float, R: Dim, C: Dim>(
     a: &Array<Line<F>>,
     b: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt_a = Rt::<F, R, C>::new();
     let mut rt_b = Rt::<F, R, C>::new();
     rt_a.copy_from_array(a);
     rt_b.copy_from_array(b);
-    rt_a.mul(&rt_b);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt_a.mul(&rt_b);
+    }
+
     rt_a.copy_to_array(output);
 }
 
@@ -86,12 +146,18 @@ fn bench_div<F: Float, R: Dim, C: Dim>(
     a: &Array<Line<F>>,
     b: &Array<Line<F>>,
     output: &mut Array<Line<F>>,
+    #[comptime] iters: u32,
 ) {
     let mut rt_a = Rt::<F, R, C>::new();
     let mut rt_b = Rt::<F, R, C>::new();
     rt_a.copy_from_array(a);
     rt_b.copy_from_array(b);
-    rt_a.div(&rt_b);
+
+    #[unroll]
+    for _ in 0..iters {
+        rt_a.div(&rt_b);
+    }
+
     rt_a.copy_to_array(output);
 }
 
@@ -110,7 +176,9 @@ macro_rules! bench_unary_impl {
 
         let param_str = format!("{}x{}", rows, cols);
 
-        $c.throughput(Throughput::Elements(size as u64));
+        // Elements per iteration * number of iterations
+        let elements = size * (BENCH_ITERS as usize);
+        $c.throughput(Throughput::Elements(elements as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let input =
@@ -124,6 +192,7 @@ macro_rules! bench_unary_impl {
                     CubeDim::new_1d(1),
                     input,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
@@ -149,7 +218,9 @@ macro_rules! bench_binary_impl {
 
         let param_str = format!("{}x{}", rows, cols);
 
-        $c.throughput(Throughput::Elements(size as u64));
+        // Elements per iteration * number of iterations
+        let elements = size * (BENCH_ITERS as usize);
+        $c.throughput(Throughput::Elements(elements as u64));
         $c.bench_with_input(BenchmarkId::new($group_name, &param_str), &(), |b, _| {
             b.iter(|| {
                 let a =
@@ -166,6 +237,7 @@ macro_rules! bench_binary_impl {
                     a,
                     b,
                     output,
+                    BENCH_ITERS,
                 )
                 .expect("Kernel launch failed");
                 block_on(client.sync()).expect("Sync failed");
