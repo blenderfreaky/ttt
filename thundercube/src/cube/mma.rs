@@ -11,22 +11,26 @@ use crate::{
 ///
 /// Each thread computes a sub-tile of C based on its UNIT_POS.
 /// The tile is divided into (TileM / ThreadTileM) × (TileN / ThreadTileN) sub-tiles.
+///
+/// FIn: input element type (A and B matrices)
+/// FAcc: accumulator element type (C matrix)
 macro_rules! define_plane_mma {
     ($name:ident, $mma_rt_fn:ident,
      [$a_d0:ident, $a_d1:ident], [$b_d0:ident, $b_d1:ident],
      [$rt_d0:ident, $rt_d1:ident]) => {
         #[cube]
         pub fn $name<
-            F: Float,
+            FIn: Float,
+            FAcc: Float,
             TileM: Dim,
             TileK: Dim,
             TileN: Dim,
             ThreadTileM: Dim,
             ThreadTileN: Dim,
         >(
-            rt_c: &mut Rt<F, $rt_d0, $rt_d1>,
-            st_a: &St<F, $a_d0, $a_d1>,
-            st_b: &St<F, $b_d0, $b_d1>,
+            rt_c: &mut Rt<FAcc, $rt_d0, $rt_d1>,
+            st_a: &St<FIn, $a_d0, $a_d1>,
+            st_b: &St<FIn, $b_d0, $b_d1>,
         ) {
             let threads_m = TileM::VALUE / ThreadTileM::VALUE;
             let threads_n = TileN::VALUE / ThreadTileN::VALUE;
@@ -40,7 +44,7 @@ macro_rules! define_plane_mma {
                 let offset_m = ThreadTileM::LINES * thread_m;
                 let offset_n = ThreadTileN::LINES * thread_n;
 
-                $mma_rt_fn::<F, ThreadTileM, ThreadTileN, TileM, TileK, TileN>(
+                $mma_rt_fn::<FIn, FAcc, ThreadTileM, ThreadTileN, TileM, TileK, TileN>(
                     rt_c, st_a, st_b, offset_m, offset_n,
                 );
             }
@@ -166,7 +170,8 @@ mod tests {
                 let mut rt_c = Rt::<F, ThreadTileM, ThreadTileN>::new();
                 rt_c.zero();
 
-                $mma_fn::<F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(
+                // Using F, F for homogeneous types (backward compatible)
+                $mma_fn::<F, F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(
                     &mut rt_c, &st_a, &st_b,
                 );
 
@@ -192,7 +197,8 @@ mod tests {
                 let mut rt_c = Rt::<F, ThreadTileN, ThreadTileM>::new();
                 rt_c.zero();
 
-                $mma_fn::<F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(
+                // Using F, F for homogeneous types (backward compatible)
+                $mma_fn::<F, F, TileM, TileK, TileN, ThreadTileM, ThreadTileN>(
                     &mut rt_c, &st_a, &st_b,
                 );
 
