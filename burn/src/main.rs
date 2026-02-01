@@ -409,6 +409,7 @@ fn main() {
                     &config,
                     &artifact_dir,
                     &tokenizer,
+                    &tokenizer_name,
                     resume_epoch,
                 );
             } else {

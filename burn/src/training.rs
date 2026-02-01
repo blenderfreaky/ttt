@@ -313,6 +313,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     config: &TTTTrainingConfig,
     artifact_dir: &str,
     tokenizer: &Tokenizer,
+    tokenizer_name: &str,
     resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
@@ -323,9 +324,9 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     println!("Loading pre-tokenized datasets...");
     // Load max_seq_len + 1 tokens to account for next-token prediction shift
     // (inputs: 0..max_seq_len, targets: 1..max_seq_len+1)
-    let dataset_train = load_or_pretokenize(tokenizer, "train", config.max_seq_len + 1)
+    let dataset_train = load_or_pretokenize(tokenizer, tokenizer_name, "train", config.max_seq_len + 1)
         .expect("Failed to load/create pre-tokenized train dataset");
-    let dataset_test = load_or_pretokenize(tokenizer, "validation", config.max_seq_len + 1)
+    let dataset_test = load_or_pretokenize(tokenizer, tokenizer_name, "validation", config.max_seq_len + 1)
         .expect("Failed to load/create pre-tokenized test dataset");
 
     println!(

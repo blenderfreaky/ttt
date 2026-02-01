@@ -273,31 +273,41 @@ impl<B: Backend> Batcher<B, TokenizedItem, TrainingTextGenerationBatch<B>> for T
     }
 }
 
+/// Sanitize a tokenizer name for use in a filename.
+/// Replaces path separators and other problematic characters.
+fn sanitize_tokenizer_name(name: &str) -> String {
+    name.replace(['/', '\\', ':', ' '], "_")
+        .replace("..", "_")
+}
+
 /// Get the default path for a pre-tokenized dataset
 #[must_use]
 pub fn pretokenized_path(
     dataset_name: &str,
     split: &str,
     max_seq_len: usize,
+    tokenizer_name: &str,
 ) -> std::path::PathBuf {
     let cache_dir = std::env::var("TTT_PRETOKENIZED_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
             dirs::cache_dir().unwrap_or_else(|| std::path::PathBuf::from(".cache"))
         });
+    let sanitized_tokenizer = sanitize_tokenizer_name(tokenizer_name);
     cache_dir
         .join("ttt-burn")
-        .join(format!("{dataset_name}_{split}_{max_seq_len}.bin"))
+        .join(format!("{dataset_name}_{split}_{max_seq_len}_{sanitized_tokenizer}.bin"))
 }
 
 /// Load or create a pre-tokenized dataset.
 /// If the binary file doesn't exist, downloads and tokenizes the source dataset.
 pub fn load_or_pretokenize<T: TokenizerTrait>(
     tokenizer: &T,
+    tokenizer_name: &str,
     split: &str,
     max_seq_len: usize,
 ) -> std::io::Result<PreTokenizedDataset> {
-    let path = pretokenized_path("tinystories", split, max_seq_len);
+    let path = pretokenized_path("tinystories", split, max_seq_len, tokenizer_name);
 
     if path.exists() {
         println!("Loading pre-tokenized dataset from {}", path.display());
