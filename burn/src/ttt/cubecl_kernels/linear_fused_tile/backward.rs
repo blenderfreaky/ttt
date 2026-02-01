@@ -202,7 +202,7 @@ fn backward_stage3_update<P: ParamsTrait>(
     token_eta: &Tensor<Line<P::E>>,
     ttt_lr_eta: &Tensor<Line<P::E>>,
     last_eta: &Rv<P::E, P::CS>,
-    _last_token_eta: P::E,
+    last_token_eta: P::E,
     ttt_lr_eta_idx: usize,
     buf: &mut ReduceBuf<P::E>,
     scratch1: &mut St<P::E, P::CS, P::F>,
@@ -298,31 +298,31 @@ fn backward_stage3_update<P: ParamsTrait>(
     // Build η (lower triangular) into cs_cs_a (reuse)
     build_eta_matrix::<P>(token_eta, ttt_lr_eta, cs_cs_a, ttt_lr_eta_idx, false);
 
-    // Compute grad_z1_bar @ grad_l^T into cs_cs_b (reuse)
-    let mut grad_l_reg = P::cs_cs_reg();
-    grad_l_reg.zero();
-    cube::mma_ABt(&mut grad_l_reg, grad_z1_bar, grad_l);
+    // d_attn_base = grad_z1_bar @ grad_l^T into cs_cs_b
+    let mut d_attn_reg = P::cs_cs_reg();
+    d_attn_reg.zero();
+    cube::mma_ABt(&mut d_attn_reg, grad_z1_bar, grad_l);
 
     sync_cube();
 
-    cube::store_rt_to_st(&grad_l_reg, cs_cs_b);
+    cube::store_rt_to_st(&d_attn_reg, cs_cs_b);
 
     sync_cube();
 
-    // d_attn = -cs_cs_b * η (element-wise, lower tri from η)
-    cs_cs_b.neg();
     cs_cs_b.mul(cs_cs_a);
+    cs_cs_b.neg();
+    cs_cs_b.tril();
 
     sync_cube();
 
-    // grad_xq_attn = d_attn @ XK
-    let mut grad_xq_attn_reg = P::cs_f_reg();
-    grad_xq_attn_reg.zero();
-    cube::mma_AB(&mut grad_xq_attn_reg, cs_cs_b, xk_smem);
+    // d_xq (from attn) = d_attn @ XK
+    let mut d_xq_attn_reg = P::cs_f_reg();
+    d_xq_attn_reg.zero();
+    cube::mma_AB(&mut d_xq_attn_reg, cs_cs_b, xk_smem);
 
     sync_cube();
 
-    cube::store_rt_to_st(&grad_xq_attn_reg, scratch1);
+    cube::store_rt_to_st(&d_xq_attn_reg, scratch1);
 
     sync_cube();
 
@@ -330,97 +330,124 @@ fn backward_stage3_update<P: ParamsTrait>(
 
     sync_cube();
 
-    // grad_xk_attn = d_attn^T @ XQ
-    let mut grad_xk_attn_reg = P::cs_f_reg();
-    grad_xk_attn_reg.zero();
-    cube::mma_AtB(&mut grad_xk_attn_reg, cs_cs_b, xq_smem);
+    // d_xk (from attn) = d_attn^T @ XQ
+    // Compute d_attn^T directly: grad_l @ grad_z1_bar^T * η^T
+    let mut d_attn_t_reg = P::cs_cs_reg();
+    d_attn_t_reg.zero();
+    cube::mma_ABt(&mut d_attn_t_reg, grad_l, grad_z1_bar);
 
     sync_cube();
 
-    cube::store_rt_to_st(&grad_xk_attn_reg, grad_xk_attn_out);
+    cube::store_rt_to_st(&d_attn_t_reg, cs_cs_b);
 
     sync_cube();
 
-    // --- grad_xk_mini from weight gradient ---
-    // d_XK_from_grad_l = (last_η · grad_l) @ grad_W_last^T
-    scratch1.copy_from(grad_l);
-    scratch1.mul_col(last_eta);
-
-    sync_cube();
-
-    let mut grad_xk_wl_reg = P::cs_f_reg();
-    grad_xk_wl_reg.zero();
-    cube::mma_ABt(&mut grad_xk_wl_reg, scratch1, grad_W_last);
-
-    sync_cube();
-
-    cube::store_rt_to_st(&grad_xk_wl_reg, grad_xk_mini_out);
-
-    sync_cube();
-
-    // --- grad_ttt_lr_eta ---
-    // grad_ttt_lr_eta = sum_over_rows(grad_grad_l * grad_l * token_eta_broadcast)
-
-    // Rebuild η^T into cs_cs_a to get the structure
+    // Rebuild η^T into cs_cs_a
     build_eta_matrix::<P>(token_eta, ttt_lr_eta, cs_cs_a, ttt_lr_eta_idx, true);
 
-    // Compute η^T @ (grad_z1_bar * grad_l)
-    scratch2.copy_from(grad_z1_bar);
+    cs_cs_b.mul(cs_cs_a);
+    cs_cs_b.neg();
+    cs_cs_b.triu();
+
+    sync_cube();
+
+    let mut d_xk_attn_reg = P::cs_f_reg();
+    d_xk_attn_reg.zero();
+    cube::mma_AB(&mut d_xk_attn_reg, cs_cs_b, xq_smem);
+
+    sync_cube();
+
+    cube::store_rt_to_st(&d_xk_attn_reg, grad_xk_attn_out);
+
+    sync_cube();
+
+    // --- grad_xk_mini from weight update term ---
+    // grad_l_Last = grad_l @ grad_W_last^T
+    let mut grad_l_last_reg = P::cs_f_reg();
+    grad_l_last_reg.zero();
+    cube::mma_ABt(&mut grad_l_last_reg, grad_l, grad_W_last);
+
+    sync_cube();
+
+    cube::store_rt_to_st(&grad_l_last_reg, scratch1);
+
+    sync_cube();
+
+    // grad_xk_mini = -grad_l_last * last_eta
+    grad_xk_mini_out.copy_from(scratch1);
+    grad_xk_mini_out.mul_col(last_eta);
+    grad_xk_mini_out.neg();
+
+    sync_cube();
+
+    // --- grad_ttt_lr_eta from weight/bias update ---
+    // grad_last_eta = sum(-(grad_l_last * XK) - (grad_b_last * grad_l))
+    scratch2.copy_from(scratch1); // scratch1 = grad_l_last
+    scratch2.mul(xk_smem);
+
+    sync_cube();
+
+    let mut grad_eta_term1 = P::cs_reg_big();
+    cube::sum_rows(scratch2, &mut grad_eta_term1, buf);
+
+    scratch2.set_row(grad_b_last);
     scratch2.mul(grad_l);
 
     sync_cube();
 
-    let mut eta_prod_reg = P::cs_f_reg();
-    eta_prod_reg.zero();
-    cube::mma_AB(&mut eta_prod_reg, cs_cs_a, scratch2);
+    let mut grad_eta_term2 = P::cs_reg_big();
+    cube::sum_rows(scratch2, &mut grad_eta_term2, buf);
+
+    grad_eta_term1.add(&grad_eta_term2);
+    grad_eta_term1.neg();
+
+    // Scale by last_token_eta
+    grad_eta_term1.mul_scalar(last_token_eta);
+
+    // --- grad_ttt_lr_eta from η terms in z1_bar ---
+    // Reuse cs_cs_a/b for attn computation
+    build_attn_matrix::<P>(q_smem, k_smem, cs_cs_a, false); // attn (lower tri)
+
+    // d_eta_base = -grad_z1_bar @ grad_l^T (lower tri)
+    let mut d_eta_base_reg = P::cs_cs_reg();
+    d_eta_base_reg.zero();
+    cube::mma_ABt(&mut d_eta_base_reg, grad_z1_bar, grad_l);
 
     sync_cube();
 
-    cube::store_rt_to_st(&eta_prod_reg, scratch1);
+    cube::store_rt_to_st(&d_eta_base_reg, cs_cs_b);
 
     sync_cube();
 
-    // Negate
-    scratch1.neg();
+    cs_cs_b.neg();
+    cs_cs_b.tril();
 
-    // Add attn contribution: (η·attn)^T @ (grad_z1_bar * grad_l)
-    build_attn_matrix::<P>(q_smem, k_smem, cs_cs_b, true);
+    // d_eta = d_eta_base + d_eta_base * attn
     cs_cs_a.mul(cs_cs_b);
 
     sync_cube();
 
-    let mut eta_attn_prod_reg = P::cs_f_reg();
-    eta_attn_prod_reg.zero();
-    cube::mma_AB(&mut eta_attn_prod_reg, cs_cs_a, scratch2);
+    cs_cs_b.add(cs_cs_a);
 
     sync_cube();
 
-    cube::store_rt_to_st(&eta_attn_prod_reg, scratch2);
-
-    sync_cube();
-
-    scratch1.sub(scratch2);
-
-    sync_cube();
-
-    // Reduce columns weighted by token_eta to get per-column grad
-    // First multiply each row by corresponding token_eta
+    // grad_ttt_lr_eta += sum_cols(d_eta * token_eta)
+    // d_eta[i,j] contributes to grad_ttt_lr_eta[j] with weight token_eta[i]
+    // Manual implementation: multiply each row by token_eta[row], then sum columns
+    // Load token_eta into a register vector
     let mut token_eta_rv = P::cs_reg_big();
     cube::broadcast::load_rv_direct(token_eta, &mut token_eta_rv, 0);
 
-    // Need to compute weighted column sum
-    // Build lower triangular token_eta matrix
-    build_eta_matrix::<P>(token_eta, ttt_lr_eta, cs_cs_b, ttt_lr_eta_idx, false);
-
-    // Sum columns with weight from token_eta (diagonal of eta gives token_eta * ttt_lr_eta)
-    // We need sum_i(scratch1[i,j] * token_eta[i]) for each j
-    // Multiply rows by token_eta then reduce
+    // Multiply cs_cs_b rows by token_eta (in-place)
     cs_cs_b.mul_col(&token_eta_rv);
 
     sync_cube();
 
+    // Sum columns to get grad_ttt_lr_eta contribution
     let mut grad_ttt_lr_eta = P::cs_reg_big();
     cube::reduce_cols::<P::E, P::CS, P::CS, SumOp>(cs_cs_b, &mut grad_ttt_lr_eta, buf);
+
+    grad_ttt_lr_eta.add(&grad_eta_term1);
 
     Stage3Outputs::<P> {
         grad_ttt_lr_eta,
@@ -556,13 +583,73 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 
     sync_cube();
 
-    // grad_L_Z1 = grad_L_x_hat / std
+    // grad_L_std = -grad_L_x_hat * (x_hat / std) - grad_grad_l * (grad_l / std)
+    scratch1.copy_from(grad_Z1_out);
+    scratch1.mul(x_hat_fused);
+    scratch1.div_col(std_fused);
+    scratch1.neg();
+
+    // scratch2 still has grad_L_grad_x_hat, reuse it
+    scratch2.copy_from(grad_grad_l);
+    scratch2.mul(grad_l);
+    scratch2.div_col(std_fused);
+
+    sync_cube();
+
+    scratch1.sub(scratch2);
+
+    sync_cube();
+
+    let mut sum_grad_L_std = P::cs_reg_big();
+    cube::sum_rows(scratch1, &mut sum_grad_L_std, buf);
+
+    // Compute final grad_Z1:
+    // grad_Z1 = grad_L_x_hat / std - (1/F) * sum(grad_L_x_hat) / std + (1/F) * sum(grad_L_std) * x_hat
+    // grad_Z1_out currently holds grad_L_x_hat
+
+    let mut sum_grad_L_x_hat = P::cs_reg_big();
+    cube::sum_rows(grad_Z1_out, &mut sum_grad_L_x_hat, buf);
+
     grad_Z1_out.div_col(std_fused);
 
-    // grad_L_target = -grad_L_Z1 + grad_grad_l
-    grad_target_out.copy_from(grad_Z1_out);
+    let mut term2 = sum_grad_L_x_hat;
+    term2.div(std_fused);
+    term2.mul_scalar(f_inv);
+    grad_Z1_out.sub_col(&term2);
+
+    sync_cube();
+
+    scratch1.copy_from(x_hat_fused);
+    let mut term3 = sum_grad_L_std;
+    term3.mul_scalar(f_inv);
+    scratch1.mul_col(&term3);
+
+    sync_cube();
+
+    grad_Z1_out.add(scratch1);
+
+    sync_cube();
+
+    // grad_target = -ln_weight * grad_L_grad_x_hat
+    // We lost grad_L_grad_x_hat... need to recompute or save it
+    // Recompute: grad_L_grad_x_hat = grad_grad_l/std + (1/F)*sum1 + (1/F)*x_hat*sum2
+    scratch2.copy_from(grad_grad_l);
+    scratch2.div_col(std_fused);
+    scratch2.add_col(&s1);
+
+    scratch1.copy_from(x_hat_fused);
+    scratch1.mul_col(&sum2);
+    scratch1.mul_scalar(f_inv);
+
+    sync_cube();
+
+    scratch2.add(scratch1);
+
+    sync_cube();
+
+    grad_target_out.copy_from(scratch2);
+    grad_target_out.mul_row(ln_weight);
     grad_target_out.neg();
-    grad_target_out.add(grad_grad_l);
 
     sync_cube();
 
@@ -621,7 +708,10 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     // Store grad_XQ
     cube::store_st_direct(scratch1, &mut grads.grad_xq, stage_offset, 0, 0);
 
-    // grad_XK = grad_Z1 @ W_init^T + grad_xk_mini + grad_xk_attn
+    // grad_XV = grad_target
+    cube::store_st_direct(grad_target, &mut grads.grad_xv, stage_offset, 0, 0);
+
+    // grad_XK = -grad_target + grad_xk_mini + grad_xk_attn + grad_Z1 @ W_init^T
     let mut grad_xk_reg = P::cs_f_reg();
     grad_xk_reg.zero();
     cube::mma_ABt(&mut grad_xk_reg, grad_Z1, weight_init);
@@ -632,15 +722,13 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 
     sync_cube();
 
+    scratch1.sub(grad_target);
     scratch1.add(grad_xk_mini);
     scratch1.add(grad_xk_attn);
 
     sync_cube();
 
     cube::store_st_direct(scratch1, &mut grads.grad_xk, stage_offset, 0, 0);
-
-    // grad_XV = grad_target
-    cube::store_st_direct(grad_target, &mut grads.grad_xv, stage_offset, 0, 0);
 
     // Accumulate weight gradients
     // grad_W = grad_W_z1bar + XK^T @ grad_Z1
