@@ -1,0 +1,19 @@
+[package]
+name = "ttt-training"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ttt-core = { workspace = true }
+ttt-layer = { workspace = true }
+ttt-data = { workspace = true }
+ttt-fused = { workspace = true }
+burn = { workspace = true, features = ["train", "tui", "metrics", "std"] }
+
+[features]
+default = []
+bf16 = ["ttt-core/bf16", "ttt-layer/bf16", "ttt-fused/bf16"]
+rocm = ["burn/rocm", "ttt-core/rocm", "ttt-layer/rocm", "ttt-fused/rocm"]
+cuda = ["burn/cuda", "ttt-core/cuda", "ttt-layer/cuda", "ttt-fused/cuda"]
+wgpu = ["burn/wgpu", "ttt-core/wgpu", "ttt-layer/wgpu", "ttt-fused/wgpu"]
+cpu = ["burn/cpu", "ttt-core/cpu", "ttt-layer/cpu", "ttt-fused/cpu"]

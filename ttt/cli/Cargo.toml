@@ -1,0 +1,49 @@
+[package]
+name = "ttt"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ttt-kernels = { workspace = true }
+ttt-core = { workspace = true }
+ttt-fused = { workspace = true }
+ttt-layer = { workspace = true }
+ttt-data = { workspace = true }
+ttt-training = { workspace = true }
+burn = { workspace = true, features = ["ndarray", "train", "tui", "metrics", "autodiff", "cubecl", "fusion"] }
+clap.workspace = true
+clap_complete.workspace = true
+glob.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+safetensors.workspace = true
+rand.workspace = true
+paste.workspace = true
+
+[[bin]]
+name = "ttt"
+path = "src/main.rs"
+
+[[bench]]
+name = "ttt_benchmark"
+harness = false
+
+[[bench]]
+name = "tile_configs"
+harness = false
+
+[features]
+default = []
+bf16 = ["ttt-kernels/bf16", "ttt-core/bf16", "ttt-fused/bf16", "ttt-layer/bf16", "ttt-training/bf16"]
+rocm = ["burn/rocm", "ttt-kernels/rocm", "ttt-core/rocm", "ttt-fused/rocm", "ttt-layer/rocm", "ttt-training/rocm"]
+cuda = ["burn/cuda", "ttt-kernels/cuda", "ttt-core/cuda", "ttt-fused/cuda", "ttt-layer/cuda", "ttt-training/cuda"]
+wgpu = ["burn/wgpu", "ttt-kernels/wgpu", "ttt-core/wgpu", "ttt-fused/wgpu", "ttt-layer/wgpu", "ttt-training/wgpu"]
+cpu = ["burn/cpu", "ttt-kernels/cpu", "ttt-core/cpu", "ttt-fused/cpu", "ttt-layer/cpu", "ttt-training/cpu"]
+streaming = ["ttt-layer/streaming"]
+sweep_tests = []
+tile-tuning = []
