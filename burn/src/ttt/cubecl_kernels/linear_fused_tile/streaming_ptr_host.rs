@@ -818,42 +818,11 @@ mod tests {
 
     use crate::ttt::{
         CpuBackend, GpuBackend,
-        cubecl_kernels::Fused,
+        cubecl_kernels::{Fused, test_utils::assert_data_close},
         layer::{Qkv, TTTInnerModel, TTTInputsInner},
         linear::{TTTLinear, TTTLinearConfig},
         util::MultiHeadLayerNorm,
     };
-
-    fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
-        assert_eq!(
-            a.len(),
-            b.len(),
-            "{name}: Data sizes don't match: {} vs {}",
-            a.len(),
-            b.len()
-        );
-
-        let mut max_diff = 0.0f32;
-        let mut max_idx = 0;
-        let mut max_av = 0.0f32;
-        let mut max_bv = 0.0f32;
-
-        for (i, (&av, &bv)) in a.iter().zip(b.iter()).enumerate() {
-            let diff = (av - bv).abs();
-            if diff > max_diff {
-                max_diff = diff;
-                max_idx = i;
-                max_av = av;
-                max_bv = bv;
-            }
-        }
-
-        let tolerance = atol + rtol * max_bv.abs();
-        assert!(
-            max_diff <= tolerance,
-            "{name}: Max mismatch at index {max_idx}: {max_av} vs {max_bv} (diff: {max_diff}, tolerance: {tolerance})",
-        );
-    }
 
     /// Test ptr streaming kernel against CPU reference implementation.
     /// Uses TTTInnerModel::forward() which loops over multiple mini-batches.

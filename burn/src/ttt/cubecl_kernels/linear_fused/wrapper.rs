@@ -79,46 +79,20 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>> {
 mod tests {
     use std::sync::Arc;
 
-    use burn::{
-        module::{Ignored, Param},
-        tensor::TensorData,
-    };
+    use burn::tensor::TensorData;
     use burn_backend::Backend;
 
     use super::*;
     use crate::ttt::{
         CpuBackend, GpuAutodiffBackend, GpuBackend,
+        cubecl_kernels::test_utils::{
+            TestDims, assert_data_close, create_model_from_params, default_test_config,
+            extract_model_params, generate_test_inputs, inputs_from_data, inputs_to_data,
+            run_forward,
+        },
         layer::{Qkv, TTTInnerModel, TTTInputsInner},
         linear::{TTTLinear, TTTLinearConfig},
-        util::MultiHeadLayerNorm,
     };
-
-    // Note: A similar function `compare_tensors` exists in tests/validate_full.rs for
-    // integration tests. This version uses rtol+atol and panics on failure.
-    fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str) {
-        assert_eq!(a.len(), b.len(), "{name}: Data sizes don't match");
-
-        let mut max_diff = 0.0f32;
-        let mut max_idx = 0;
-        let mut max_av = 0.0f32;
-        let mut max_bv = 0.0f32;
-
-        for (i, (&av, &bv)) in a.iter().zip(b.iter()).enumerate() {
-            let diff = (av - bv).abs();
-            if diff > max_diff {
-                max_diff = diff;
-                max_idx = i;
-                max_av = av;
-                max_bv = bv;
-            }
-        }
-
-        let tolerance = atol + rtol * max_bv.abs();
-        assert!(
-            max_diff <= tolerance,
-            "{name}: Max mismatch at index {max_idx}: {max_av} vs {max_bv} (diff: {max_diff}, tolerance: {tolerance})",
-        );
-    }
 
     #[test]
     fn test_fused_api_vs_reference() {
@@ -282,154 +256,36 @@ mod tests {
 
     #[test]
     fn test_fused_ttt_linear_vs_reference() {
-        let batch_size = 2usize;
-        let num_heads = 4usize;
-        let head_dim = 16usize;
-        let seq_len = 8usize;
-        let hidden_size = num_heads * head_dim;
-        let epsilon = 1e-6f64;
+        let dims = TestDims::new(2, 4, 16, 8);
+        let config = default_test_config(dims);
+        let cpu_device: <CpuBackend as Backend>::Device = Default::default();
 
-        let config = Arc::new(crate::ttt::TTTConfig {
-            num_heads,
-            hidden_size,
-            token_size: hidden_size,
-            mini_batch_size: seq_len,
-            base_lr: 1.0,
-            epsilon,
-            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
-        });
-        let linear_config = Arc::new(TTTLinearConfig::new());
-
-        let cpu_device = Default::default();
-
-        // random input tensors
-        let xq_cpu: Tensor<CpuBackend, 4> = Tensor::random(
-            [batch_size, num_heads, seq_len, head_dim],
-            burn::tensor::Distribution::Normal(0.0, 0.1),
+        // Create CPU reference model and extract params
+        let ref_model: TTTLinear<CpuBackend> = TTTLinear::new(
+            &config,
+            &Arc::new(TTTLinearConfig::new()),
             &cpu_device,
         );
-        let xk_cpu: Tensor<CpuBackend, 4> = Tensor::random(
-            [batch_size, num_heads, seq_len, head_dim],
-            burn::tensor::Distribution::Normal(0.0, 0.1),
-            &cpu_device,
-        );
-        let xv_cpu: Tensor<CpuBackend, 4> = Tensor::random(
-            [batch_size, num_heads, seq_len, head_dim],
-            burn::tensor::Distribution::Normal(0.0, 0.1),
-            &cpu_device,
-        );
-        let token_eta_cpu: Tensor<CpuBackend, 1> =
-            Tensor::arange(1..(seq_len as i64 + 1), &cpu_device)
-                .float()
-                .recip();
-        let ttt_lr_eta_cpu: Tensor<CpuBackend, 3> = Tensor::random(
-            [batch_size, num_heads, seq_len],
-            burn::tensor::Distribution::Uniform(0.01, 0.05),
-            &cpu_device,
-        );
+        let params = extract_model_params(&ref_model);
 
-        let xq_data: Vec<f32> = xq_cpu.to_data().to_vec().unwrap();
-        let xk_data: Vec<f32> = xk_cpu.to_data().to_vec().unwrap();
-        let xv_data: Vec<f32> = xv_cpu.to_data().to_vec().unwrap();
-        let token_eta_data: Vec<f32> = token_eta_cpu.to_data().to_vec().unwrap();
-        let ttt_lr_eta_data: Vec<f32> = ttt_lr_eta_cpu.to_data().to_vec().unwrap();
+        // Generate inputs and extract data
+        let inputs = generate_test_inputs(dims, dims.seq_len, &cpu_device);
+        let input_data = inputs_to_data(&inputs);
 
-        let ttt_linear_cpu: TTTLinear<CpuBackend> =
-            TTTLinear::new(&config, &linear_config, &cpu_device);
-        let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
-
-        let weight_init_data: Vec<f32> =
-            ttt_linear_cpu.weight_init.val().to_data().to_vec().unwrap();
-        let bias_init_data: Vec<f32> = ttt_linear_cpu.bias_init.val().to_data().to_vec().unwrap();
-        let ln_weight_data: Vec<f32> = ttt_linear_cpu
-            .layer_norm
-            .weight
-            .val()
-            .to_data()
-            .to_vec()
-            .unwrap();
-        let ln_bias_data: Vec<f32> = ttt_linear_cpu
-            .layer_norm
-            .bias
-            .val()
-            .to_data()
-            .to_vec()
-            .unwrap();
-
-        let inputs_cpu = TTTInputsInner {
-            qkv: Qkv {
-                xq: xq_cpu,
-                xk: xk_cpu,
-                xv: xv_cpu,
-            },
-            token_eta: token_eta_cpu,
-            ttt_lr_eta: ttt_lr_eta_cpu,
-            start_idx: 0,
-        };
-
-        let output_ref = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
+        // Run reference
+        let (output_ref, _) = run_forward(&ref_model, &inputs, dims.batch_size, dims.seq_len);
         let output_ref_data: Vec<f32> = output_ref.to_data().to_vec().unwrap();
 
+        // Create GPU fused model with same params
         let gpu_device: <GpuBackend as Backend>::Device = Default::default();
+        let fused_model: TTTLinear<GpuBackend> =
+            create_model_from_params(&params, &config, dims, &gpu_device);
+        let fused_linear: Fused<GpuBackend, TTTLinear<GpuBackend>> = Fused::from(fused_model);
 
-        let fused_linear: Fused<GpuBackend, TTTLinear<GpuBackend>> = TTTLinear {
-            weight_init: Param::from_tensor(Tensor::from_data(
-                TensorData::new(weight_init_data, [num_heads, head_dim, head_dim]),
-                &gpu_device,
-            )),
-            bias_init: Param::from_tensor(Tensor::from_data(
-                TensorData::new(bias_init_data, [num_heads, head_dim]),
-                &gpu_device,
-            )),
-            layer_norm: MultiHeadLayerNorm {
-                weight: Param::from_tensor(Tensor::from_data(
-                    TensorData::new(ln_weight_data, [num_heads, head_dim]),
-                    &gpu_device,
-                )),
-                bias: Param::from_tensor(Tensor::from_data(
-                    TensorData::new(ln_bias_data, [num_heads, head_dim]),
-                    &gpu_device,
-                )),
-                epsilon,
-            },
-            config: Ignored(config),
-        }
-        .into();
-
-        let mut fused_state = fused_linear.init_state(batch_size);
-
-        let xq_gpu: Tensor<GpuBackend, 4> = Tensor::from_data(
-            TensorData::new(xq_data, [batch_size, num_heads, seq_len, head_dim]),
-            &gpu_device,
-        );
-        let xk_gpu: Tensor<GpuBackend, 4> = Tensor::from_data(
-            TensorData::new(xk_data, [batch_size, num_heads, seq_len, head_dim]),
-            &gpu_device,
-        );
-        let xv_gpu: Tensor<GpuBackend, 4> = Tensor::from_data(
-            TensorData::new(xv_data, [batch_size, num_heads, seq_len, head_dim]),
-            &gpu_device,
-        );
-        let token_eta_gpu: Tensor<GpuBackend, 1> =
-            Tensor::from_data(TensorData::new(token_eta_data, [seq_len]), &gpu_device);
-        let ttt_lr_eta_gpu: Tensor<GpuBackend, 3> = Tensor::from_data(
-            TensorData::new(ttt_lr_eta_data, [batch_size, num_heads, seq_len]),
-            &gpu_device,
-        );
-
-        let inputs_gpu = TTTInputsInner {
-            qkv: Qkv {
-                xq: xq_gpu,
-                xk: xk_gpu,
-                xv: xv_gpu,
-            },
-            token_eta: token_eta_gpu,
-            ttt_lr_eta: ttt_lr_eta_gpu,
-            start_idx: 0,
-        };
-
-        let output_fused =
-            fused_linear.forward_mini_batch(&mut fused_state, &inputs_gpu, 0..seq_len);
+        // Recreate inputs on GPU
+        let inputs_gpu = inputs_from_data(&input_data, dims, &gpu_device);
+        let (output_fused, _) =
+            run_forward(&fused_linear, &inputs_gpu, dims.batch_size, dims.seq_len);
         let output_fused_data: Vec<f32> = output_fused.to_data().to_vec().unwrap();
 
         assert_data_close(
@@ -445,79 +301,53 @@ mod tests {
     fn test_fused_backward_gradients_vs_reference() {
         use burn::backend::Autodiff;
 
-        let batch_size = 2usize;
-        let num_heads = 2usize;
-        let head_dim = 8usize;
-        let seq_len = 4usize;
-        let hidden_size = num_heads * head_dim;
-        let epsilon = 1e-6f64;
+        let dims = TestDims::new(2, 2, 8, 4);
+        let config = default_test_config(dims);
 
         // Seed RNG for deterministic results
         let cpu_device: <CpuBackend as Backend>::Device = Default::default();
         CpuBackend::seed(&cpu_device, 42);
 
-        let config = Arc::new(crate::ttt::TTTConfig {
-            num_heads,
-            hidden_size,
-            token_size: hidden_size,
-            mini_batch_size: seq_len,
-            base_lr: 1.0,
-            epsilon,
-            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
-        });
-        let linear_config = Arc::new(TTTLinearConfig::new());
-
+        // Create CPU reference with autodiff
         let ttt_linear_cpu: TTTLinear<Autodiff<CpuBackend>> =
-            TTTLinear::new(&config, &linear_config, &cpu_device);
-        let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
+            TTTLinear::new(&config, &Arc::new(TTTLinearConfig::new()), &cpu_device);
+        let mut state_cpu = ttt_linear_cpu.init_state(dims.batch_size);
 
-        let weight_init_data: Vec<f32> =
-            ttt_linear_cpu.weight_init.val().to_data().to_vec().unwrap();
-        let bias_init_data: Vec<f32> = ttt_linear_cpu.bias_init.val().to_data().to_vec().unwrap();
-        let ln_weight_data: Vec<f32> = ttt_linear_cpu
-            .layer_norm
-            .weight
-            .val()
-            .to_data()
-            .to_vec()
-            .unwrap();
-        let ln_bias_data: Vec<f32> = ttt_linear_cpu
-            .layer_norm
-            .bias
-            .val()
-            .to_data()
-            .to_vec()
-            .unwrap();
+        // Extract params for GPU model
+        let params = extract_model_params(&ttt_linear_cpu);
 
+        // Create input tensors with gradients (autodiff requires manual setup)
+        let shape = [dims.batch_size, dims.num_heads, dims.seq_len, dims.head_dim];
         let xq_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
-            [batch_size, num_heads, seq_len, head_dim],
+            shape,
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         )
         .require_grad();
         let xk_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
-            [batch_size, num_heads, seq_len, head_dim],
+            shape,
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         )
         .require_grad();
         let xv_cpu: Tensor<Autodiff<CpuBackend>, 4> = Tensor::random(
-            [batch_size, num_heads, seq_len, head_dim],
+            shape,
             burn::tensor::Distribution::Normal(0.0, 0.1),
             &cpu_device,
         )
         .require_grad();
         let token_eta_cpu: Tensor<Autodiff<CpuBackend>, 1> =
-            Tensor::arange(1..(seq_len as i64 + 1), &cpu_device)
+            Tensor::arange(1..(dims.seq_len as i64 + 1), &cpu_device)
                 .float()
                 .recip();
         let ttt_lr_eta_cpu: Tensor<Autodiff<CpuBackend>, 3> = Tensor::random(
-            [batch_size, num_heads, seq_len],
+            [dims.batch_size, dims.num_heads, dims.seq_len],
             burn::tensor::Distribution::Uniform(0.01, 0.05),
             &cpu_device,
         )
         .require_grad();
 
+        // Extract data for GPU
         let xq_data: Vec<f32> = xq_cpu.clone().inner().to_data().to_vec().unwrap();
         let xk_data: Vec<f32> = xk_cpu.clone().inner().to_data().to_vec().unwrap();
         let xv_data: Vec<f32> = xv_cpu.clone().inner().to_data().to_vec().unwrap();
@@ -535,7 +365,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_cpu = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..seq_len);
+        let output_cpu = ttt_linear_cpu.forward_mini_batch(&mut state_cpu, &inputs_cpu, 0..dims.seq_len);
 
         let loss_cpu = output_cpu.sum();
         let grads_cpu = loss_cpu.backward();
@@ -550,53 +380,33 @@ mod tests {
             .to_vec()
             .unwrap();
 
+        // Create GPU model with same params
         let gpu_device: <GpuAutodiffBackend as Backend>::Device = Default::default();
+        let fused_linear: Fused<GpuAutodiffBackend, TTTLinear<GpuAutodiffBackend>> =
+            Fused::from(create_model_from_params(&params, &config, dims, &gpu_device));
 
-        let fused_linear: Fused<_, TTTLinear<_>> = TTTLinear {
-            weight_init: Param::from_tensor(Tensor::from_data(
-                TensorData::new(weight_init_data, [num_heads, head_dim, head_dim]),
-                &gpu_device,
-            )),
-            bias_init: Param::from_tensor(Tensor::from_data(
-                TensorData::new(bias_init_data, [num_heads, head_dim]),
-                &gpu_device,
-            )),
-            layer_norm: MultiHeadLayerNorm {
-                weight: Param::from_tensor(Tensor::from_data(
-                    TensorData::new(ln_weight_data, [num_heads, head_dim]),
-                    &gpu_device,
-                )),
-                bias: Param::from_tensor(Tensor::from_data(
-                    TensorData::new(ln_bias_data, [num_heads, head_dim]),
-                    &gpu_device,
-                )),
-                epsilon,
-            },
-            config: Ignored(config),
-        }
-        .into();
+        let mut fused_state = fused_linear.init_state(dims.batch_size);
 
-        let mut fused_state = fused_linear.init_state(batch_size);
-
+        // Create GPU input tensors with gradients (autodiff requires manual setup)
         let xq_gpu: Tensor<GpuAutodiffBackend, 4> = Tensor::from_data(
-            TensorData::new(xq_data, [batch_size, num_heads, seq_len, head_dim]),
+            TensorData::new(xq_data, shape),
             &gpu_device,
         )
         .require_grad();
         let xk_gpu: Tensor<GpuAutodiffBackend, 4> = Tensor::from_data(
-            TensorData::new(xk_data, [batch_size, num_heads, seq_len, head_dim]),
+            TensorData::new(xk_data, shape),
             &gpu_device,
         )
         .require_grad();
         let xv_gpu: Tensor<GpuAutodiffBackend, 4> = Tensor::from_data(
-            TensorData::new(xv_data, [batch_size, num_heads, seq_len, head_dim]),
+            TensorData::new(xv_data, shape),
             &gpu_device,
         )
         .require_grad();
         let token_eta_gpu: Tensor<GpuAutodiffBackend, 1> =
-            Tensor::from_data(TensorData::new(token_eta_data, [seq_len]), &gpu_device);
+            Tensor::from_data(TensorData::new(token_eta_data, [dims.seq_len]), &gpu_device);
         let ttt_lr_eta_gpu: Tensor<GpuAutodiffBackend, 3> = Tensor::from_data(
-            TensorData::new(ttt_lr_eta_data, [batch_size, num_heads, seq_len]),
+            TensorData::new(ttt_lr_eta_data, [dims.batch_size, dims.num_heads, dims.seq_len]),
             &gpu_device,
         )
         .require_grad();
@@ -612,7 +422,7 @@ mod tests {
             start_idx: 0,
         };
 
-        let output_gpu = fused_linear.forward_mini_batch(&mut fused_state, &inputs_gpu, 0..seq_len);
+        let output_gpu = fused_linear.forward_mini_batch(&mut fused_state, &inputs_gpu, 0..dims.seq_len);
 
         let loss_gpu = output_gpu.sum();
         let grads_gpu = loss_gpu.backward();

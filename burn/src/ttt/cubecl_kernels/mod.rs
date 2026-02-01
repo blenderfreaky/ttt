@@ -25,6 +25,10 @@ pub mod kernel;
 pub mod linear_fused;
 pub mod linear_fused_tile;
 pub mod ttt;
+pub mod util;
+
+#[cfg(test)]
+pub mod test_utils;
 
 // Re-export commonly used items
 pub use backend::FusedTttBackend;

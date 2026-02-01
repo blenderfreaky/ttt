@@ -7,7 +7,6 @@ use burn_cubecl::{
         into_contiguous,
         reduce::{KernelReduceStrategy, reduce_dim},
     },
-    ops::numeric::empty_device,
     tensor::CubeTensor,
 };
 use cubek::reduce::components::instructions::ReduceOperationConfig;
@@ -18,19 +17,8 @@ use crate::ttt::cubecl_kernels::{
     bundle::TensorBundle,
     kernel::{CanBackwardNoOut, FusedKernel, UseNoOut},
     ttt::{TttInputs, TttKernel, TttOutputs},
+    util::empty_like,
 };
-
-/// Create an empty tensor with the same client/device as the template.
-pub fn empty_like<R: CubeRuntime, F: FloatElement>(
-    template: &CubeTensor<R>,
-    shape: impl Into<Shape>,
-) -> CubeTensor<R> {
-    empty_device::<R, F>(
-        template.client.clone(),
-        template.device.clone(),
-        shape.into(),
-    )
-}
 
 /// Reduce sum over batch dimension (dim 0) and reshape to remove that dimension.
 fn reduce_sum_batch<R: CubeRuntime>(

@@ -2,10 +2,9 @@
 
 use std::fmt::Debug;
 
-use burn_backend::Shape;
 use burn_cubecl::{
     CubeRuntime, FloatElement, kernel::into_contiguous,
-    ops::numeric::{empty_device, zeros_client},
+    ops::numeric::zeros_client,
     tensor::CubeTensor,
 };
 use cubecl::prelude::*;
@@ -29,6 +28,7 @@ use crate::{
         kernel::{CanBackwardWithOut, FusedKernel, UseWithOut},
         linear_fused_tile::helpers::Params,
         ttt::{TttInputs, TttOutputs},
+        util::empty_like,
     },
 };
 
@@ -290,18 +290,6 @@ pub struct TttTileKernel;
 /// Marker type for the multi-stage tiled TTT kernel.
 #[derive(Debug, Clone, Copy)]
 pub struct TttTileMultiKernel;
-
-/// Create an empty tensor with the same client/device as the template.
-fn empty_like<R: CubeRuntime, F: FloatElement>(
-    template: &CubeTensor<R>,
-    shape: impl Into<Shape>,
-) -> CubeTensor<R> {
-    empty_device::<R, F>(
-        template.client.clone(),
-        template.device.clone(),
-        shape.into(),
-    )
-}
 
 /// Launch the tiled TTT forward kernel with automatic tile size dispatch.
 ///
