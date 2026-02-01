@@ -807,275 +807,43 @@ unsafe impl<R: CubeRuntime> Send for TttPtrStreamingState<R> {}
 
 #[cfg(all(test, feature = "rocm"))]
 mod tests {
-    use std::sync::Arc;
-
-    use burn::{
-        module::{Ignored, Param},
-        tensor::{Tensor, TensorData},
-    };
-    use burn_backend::Backend;
-    use tracing::trace;
-
+    use super::super::streaming_ptr_wrapper::FusedTilePtrStreamingState;
     use crate::ttt::{
-        CpuBackend, GpuBackend,
-        cubecl_kernels::{Fused, test_utils::assert_data_close},
-        layer::{Qkv, TTTInnerModel, TTTInputsInner},
-        linear::{TTTLinear, TTTLinearConfig},
-        util::MultiHeadLayerNorm,
+        GpuBackend,
+        cubecl_kernels::{
+            Fused,
+            test_utils::{TestDims, test_fwd},
+        },
+        linear::TTTLinear,
     };
 
-    /// Test ptr streaming kernel against CPU reference implementation.
-    /// Uses TTTInnerModel::forward() which loops over multiple mini-batches.
+    type Fused1 = Fused<GpuBackend, TTTLinear<GpuBackend>>;
+    type Fused2 = Fused<GpuBackend, Fused1>;
+    type Fused3 = Fused<GpuBackend, Fused2>;
+    type Fused4 = Fused<GpuBackend, Fused3>;
+    type FusedPtrStreaming = Fused<GpuBackend, Fused4>;
+
+    // TODO: ptr streaming kernel has issues, needs investigation
     #[test]
     #[ignore]
-    fn test_ptr_streaming_vs_cpu() {
-        // Acquire mutex to prevent concurrent streaming tests.
-        // See STREAMING_TEST_MUTEX doc comment for explanation.
+    fn test_ptr_streaming_vs_ttt_linear() {
         let _guard = crate::ttt::cubecl_kernels::linear_fused_tile::STREAMING_TEST_MUTEX
             .lock()
             .unwrap();
 
-        // Initialize tracing for tests (ignore if already initialized)
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-            .try_init();
-
-        // Test with multiple cubes
-        let batch_size = 2usize;
-        let num_heads = 2usize;
-        let head_dim = 32usize;
-        let mini_batch_size = 8usize;
-        let num_mini_batches = 2usize;
-        let seq_len = mini_batch_size * num_mini_batches; // 16 total
-        let hidden_size = num_heads * head_dim;
-        let epsilon = 1e-6f64;
-        let threads = 8;
-
-        let config = Arc::new(crate::ttt::TTTConfig {
-            num_heads,
-            hidden_size,
-            token_size: hidden_size,
-            mini_batch_size,
-            base_lr: 1.0,
-            epsilon,
-            threads: Some(threads),
-            ..crate::ttt::TTTConfig::new(crate::ttt::TEST_VOCAB_SIZE)
-        });
-        let linear_config = Arc::new(TTTLinearConfig::new());
-
-        let cpu_device = Default::default();
-
-        // token_eta is constant across iterations
-        let token_eta_cpu: Tensor<CpuBackend, 1> =
-            Tensor::arange(1..(mini_batch_size as i64 + 1), &cpu_device)
-                .float()
-                .recip()
-                .repeat_dim(0, num_mini_batches);
-        let token_eta_data: Vec<f32> = token_eta_cpu.to_data().to_vec().unwrap();
-
-        // Create CPU reference implementation
-        let ttt_linear_cpu: TTTLinear<CpuBackend> =
-            TTTLinear::new(&config, &linear_config, &cpu_device);
-        let mut state_cpu = ttt_linear_cpu.init_state(batch_size);
-
-        // Get weight/bias/ln params for GPU
-        let weight_init_data: Vec<f32> =
-            ttt_linear_cpu.weight_init.val().to_data().to_vec().unwrap();
-        let bias_init_data: Vec<f32> = ttt_linear_cpu.bias_init.val().to_data().to_vec().unwrap();
-        let ln_weight_data: Vec<f32> = ttt_linear_cpu
-            .layer_norm
-            .weight
-            .val()
-            .to_data()
-            .to_vec()
-            .unwrap();
-        let ln_bias_data: Vec<f32> = ttt_linear_cpu
-            .layer_norm
-            .bias
-            .val()
-            .to_data()
-            .to_vec()
-            .unwrap();
-
-        // Create GPU tensors
-        let gpu_device: <GpuBackend as Backend>::Device = Default::default();
-
-        // Create GPU model with same weights as CPU reference
-        let ttt_linear_gpu: TTTLinear<GpuBackend> = TTTLinear {
-            weight_init: Param::from_tensor(Tensor::from_data(
-                TensorData::new(weight_init_data, [num_heads, head_dim, head_dim]),
-                &gpu_device,
-            )),
-            bias_init: Param::from_tensor(Tensor::from_data(
-                TensorData::new(bias_init_data, [num_heads, head_dim]),
-                &gpu_device,
-            )),
-            layer_norm: MultiHeadLayerNorm {
-                weight: Param::from_tensor(Tensor::from_data(
-                    TensorData::new(ln_weight_data, [num_heads, head_dim]),
-                    &gpu_device,
-                )),
-                bias: Param::from_tensor(Tensor::from_data(
-                    TensorData::new(ln_bias_data, [num_heads, head_dim]),
-                    &gpu_device,
-                )),
-                epsilon,
+        let dims = TestDims::multi_stage(2, 2, 32, 8, 2).with_iterations(2);
+        test_fwd::<GpuBackend, FusedPtrStreaming, FusedTilePtrStreamingState<GpuBackend>, _>(
+            dims,
+            |m| {
+                let a: Fused1 = m.into();
+                let b: Fused2 = a.into();
+                let c: Fused3 = b.into();
+                let d: Fused4 = c.into();
+                d.into()
             },
-            config: Ignored(config),
-        };
-
-        // Create quintuple-Fused wrapper for ptr streaming kernel
-        let inner_fused: Fused<GpuBackend, TTTLinear<GpuBackend>> = ttt_linear_gpu.into();
-        let inner_fused2: Fused<GpuBackend, Fused<GpuBackend, TTTLinear<GpuBackend>>> =
-            inner_fused.into();
-        let inner_fused3: Fused<
-            GpuBackend,
-            Fused<GpuBackend, Fused<GpuBackend, TTTLinear<GpuBackend>>>,
-        > = inner_fused2.into();
-        let inner_fused4: Fused<
-            GpuBackend,
-            Fused<GpuBackend, Fused<GpuBackend, Fused<GpuBackend, TTTLinear<GpuBackend>>>>,
-        > = inner_fused3.into();
-        let fused_ptr_streaming: Fused<
-            GpuBackend,
-            Fused<
-                GpuBackend,
-                Fused<GpuBackend, Fused<GpuBackend, Fused<GpuBackend, TTTLinear<GpuBackend>>>>,
-            >,
-        > = inner_fused4.into();
-
-        let mut streaming_state = fused_ptr_streaming.init_state(batch_size);
-
-        use cubecl::prelude::ComputeClient;
-        let client = ComputeClient::<cubecl::hip::HipRuntime>::load(&gpu_device);
-
-        // Run multiple iterations to verify persistent kernel works across forward calls
-        let num_iterations = 2;
-        for iter in 0..num_iterations {
-            trace!("[TEST] === Iteration {} ===", iter + 1);
-
-            // Generate fresh random inputs for each iteration
-            let xq_cpu: Tensor<CpuBackend, 4> = Tensor::random(
-                [batch_size, num_heads, seq_len, head_dim],
-                burn::tensor::Distribution::Normal(0.0, 0.1),
-                &cpu_device,
-            );
-            let xk_cpu: Tensor<CpuBackend, 4> = Tensor::random(
-                [batch_size, num_heads, seq_len, head_dim],
-                burn::tensor::Distribution::Normal(0.0, 0.1),
-                &cpu_device,
-            );
-            let xv_cpu: Tensor<CpuBackend, 4> = Tensor::random(
-                [batch_size, num_heads, seq_len, head_dim],
-                burn::tensor::Distribution::Normal(0.0, 0.1),
-                &cpu_device,
-            );
-            let ttt_lr_eta_cpu: Tensor<CpuBackend, 3> = Tensor::random(
-                [batch_size, num_heads, seq_len],
-                burn::tensor::Distribution::Uniform(0.01, 0.05),
-                &cpu_device,
-            );
-
-            // Run CPU reference (state carries over between iterations)
-            let inputs_cpu = TTTInputsInner {
-                qkv: Qkv {
-                    xq: xq_cpu.clone(),
-                    xk: xk_cpu.clone(),
-                    xv: xv_cpu.clone(),
-                },
-                token_eta: token_eta_cpu.clone(),
-                ttt_lr_eta: ttt_lr_eta_cpu.clone(),
-                start_idx: iter * seq_len,
-            };
-            let output_ref = ttt_linear_cpu.forward(&mut state_cpu, inputs_cpu);
-            let output_ref_data: Vec<f32> = output_ref.to_data().to_vec().unwrap();
-
-            // Create GPU input tensors
-            let xq_data: Vec<f32> = xq_cpu.to_data().to_vec().unwrap();
-            let xk_data: Vec<f32> = xk_cpu.to_data().to_vec().unwrap();
-            let xv_data: Vec<f32> = xv_cpu.to_data().to_vec().unwrap();
-            let ttt_lr_eta_data: Vec<f32> = ttt_lr_eta_cpu.to_data().to_vec().unwrap();
-
-            let xq_gpu: Tensor<GpuBackend, 4> = Tensor::from_data(
-                TensorData::new(xq_data, [batch_size, num_heads, seq_len, head_dim]),
-                &gpu_device,
-            );
-            let xk_gpu: Tensor<GpuBackend, 4> = Tensor::from_data(
-                TensorData::new(xk_data, [batch_size, num_heads, seq_len, head_dim]),
-                &gpu_device,
-            );
-            let xv_gpu: Tensor<GpuBackend, 4> = Tensor::from_data(
-                TensorData::new(xv_data, [batch_size, num_heads, seq_len, head_dim]),
-                &gpu_device,
-            );
-            let token_eta_gpu: Tensor<GpuBackend, 1> = Tensor::from_data(
-                TensorData::new(token_eta_data.clone(), [seq_len]),
-                &gpu_device,
-            );
-            let ttt_lr_eta_gpu: Tensor<GpuBackend, 3> = Tensor::from_data(
-                TensorData::new(ttt_lr_eta_data, [batch_size, num_heads, seq_len]),
-                &gpu_device,
-            );
-
-            let inputs_gpu = TTTInputsInner {
-                qkv: Qkv {
-                    xq: xq_gpu,
-                    xk: xk_gpu,
-                    xv: xv_gpu,
-                },
-                token_eta: token_eta_gpu,
-                ttt_lr_eta: ttt_lr_eta_gpu,
-                start_idx: iter * seq_len,
-            };
-
-            // Run GPU forward (state carries over between iterations)
-            trace!(
-                "[TEST] calling forward (iter {}) with {} mini-batches...",
-                iter + 1,
-                num_mini_batches
-            );
-            let output_streaming = fused_ptr_streaming.forward(&mut streaming_state, inputs_gpu);
-            trace!(
-                "[TEST] forward returned, output shape: {:?}",
-                output_streaming.shape()
-            );
-
-            // Sync and compare
-            thundercube::util::wait_for_sync(&client).expect("sync failed");
-            let output_streaming_data: Vec<f32> = output_streaming.to_data().to_vec().unwrap();
-
-            // Compute max diff and correlation
-            let mut max_diff = 0.0f32;
-            let mut sum_product = 0.0f32;
-            let mut sum_sq_a = 0.0f32;
-            let mut sum_sq_b = 0.0f32;
-            for (&a, &b) in output_streaming_data.iter().zip(output_ref_data.iter()) {
-                max_diff = max_diff.max((a - b).abs());
-                sum_product += a * b;
-                sum_sq_a += a * a;
-                sum_sq_b += b * b;
-            }
-            let correlation = sum_product / (sum_sq_a.sqrt() * sum_sq_b.sqrt());
-            trace!(
-                "Iteration {} - Output max diff: {}, correlation: {}",
-                iter + 1,
-                max_diff,
-                correlation
-            );
-
-            // Compare outputs (relaxed tolerance due to numerical differences)
-            assert_data_close(
-                &output_streaming_data,
-                &output_ref_data,
-                0.5,
-                0.4, // increased from 0.2 due to flakiness
-                &format!("Iteration {}: output", iter + 1),
-            );
-        }
-
-        trace!(
-            "Ptr streaming vs CPU ref test passed with {} iterations!",
-            num_iterations
+            0.5,
+            0.4,
+            "PtrStreaming",
         );
     }
 }

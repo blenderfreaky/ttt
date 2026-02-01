@@ -81,13 +81,15 @@ mod tests {
     use crate::ttt::{
         GpuAutodiffBackend, GpuBackend,
         cubecl_kernels::test_utils::{TestDims, test_backward_fmb, test_fmb},
-        linear::TTTLinear,
+        linear::{TTTLinear, TTTLinearState},
     };
+
+    type FusedLinear = Fused<GpuBackend, TTTLinear<GpuBackend>>;
 
     #[test]
     fn test_fused_ttt_linear_vs_reference() {
         let dims = TestDims::new(2, 4, 16, 8);
-        test_fmb::<GpuBackend, Fused<GpuBackend, TTTLinear<GpuBackend>>, _>(
+        test_fmb::<GpuBackend, FusedLinear, TTTLinearState<GpuBackend>, _>(
             dims,
             |m| m.into(),
             1e-3,

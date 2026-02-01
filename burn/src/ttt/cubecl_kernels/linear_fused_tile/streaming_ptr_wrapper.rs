@@ -69,6 +69,12 @@ impl<B: FusedTttBackend> FusedTilePtrStreamingState<B> {
     }
 }
 
+impl<B: FusedTttBackend> AsRef<TTTLinearState<B>> for FusedTilePtrStreamingState<B> {
+    fn as_ref(&self) -> &TTTLinearState<B> {
+        &self.inner
+    }
+}
+
 /// Configuration for the ptr streaming kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PtrStreamingKernelConfig {

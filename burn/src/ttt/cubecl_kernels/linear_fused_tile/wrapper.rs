@@ -246,7 +246,7 @@ mod tests {
     use crate::ttt::{
         GpuAutodiffBackend, GpuBackend,
         cubecl_kernels::test_utils::{TestDims, test_fmb, test_fwd, test_backward_fmb},
-        linear::TTTLinear,
+        linear::{TTTLinear, TTTLinearState},
     };
 
     type FusedSingle = Fused<GpuBackend, TTTLinear<GpuBackend>>;
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn test_fused_tile_vs_ttt_linear() {
         let dims = TestDims::new(2, 2, 32, 8);
-        test_fmb::<GpuBackend, FusedTile, _>(dims, |m| {
+        test_fmb::<GpuBackend, FusedTile, TTTLinearState<GpuBackend>, _>(dims, |m| {
             let a: FusedSingle = m.into();
             a.into()
         }, 1e-2, 1e-3, "FusedTile");
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn test_fused_tile_multi_vs_ttt_linear() {
         let dims = TestDims::multi_stage(2, 2, 32, 8, 4);
-        test_fwd::<GpuBackend, FusedTileMulti, _>(dims, |m| {
+        test_fwd::<GpuBackend, FusedTileMulti, TTTLinearState<GpuBackend>, _>(dims, |m| {
             let a: FusedSingle = m.into();
             let b: FusedTile = a.into();
             b.into()
