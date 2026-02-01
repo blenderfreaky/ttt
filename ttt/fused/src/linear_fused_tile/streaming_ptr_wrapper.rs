@@ -18,6 +18,8 @@ use burn::{
 };
 use burn_cubecl::{CubeRuntime, FloatElement, kernel::into_contiguous, tensor::CubeTensor};
 use tracing::trace;
+use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
+use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
 
 use super::{
     launch::TttTileOutputs,
@@ -26,8 +28,6 @@ use super::{
     },
 };
 use crate::{Fused, FusedTttBackend, PtrStreamingKernel, ttt::TttInputs};
-use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
-use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
 
 /// Inner handle that cleans up the streaming state on drop.
 #[derive(Debug)]

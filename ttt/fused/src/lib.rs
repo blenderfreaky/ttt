@@ -22,7 +22,7 @@
     clippy::cast_possible_wrap,
     clippy::too_many_lines,
     clippy::type_complexity,
-    clippy::format_push_string,
+    clippy::format_push_string
 )]
 
 //! TTT Fused Kernels
@@ -35,27 +35,26 @@
 
 use std::marker::PhantomData;
 
-use burn::prelude::*;
-use burn::backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy};
+use burn::{
+    backend::autodiff::{Autodiff, checkpoint::strategy::CheckpointStrategy},
+    prelude::*,
+};
 use burn_cubecl::{BoolElement, CubeBackend, CubeRuntime, FloatElement, IntElement};
 use burn_fusion::{Fusion, FusionBackend};
-
-use ttt_kernels::{FusedKernel, FusedKernelBackend, GeluBwdKernel, GeluTanhKernel};
 use ttt_core::TTTInnerModel;
+use ttt_kernels::{FusedKernel, FusedKernelBackend, GeluBwdKernel, GeluTanhKernel};
 
 pub mod linear_fused;
 pub mod linear_fused_tile;
 pub mod ttt;
 
 // Re-export commonly used items from ttt module
-pub use ttt::{TttInputs, TttKernel, TttOutputs};
 pub use linear_fused::fused_ttt_forward;
-
-// Re-export kernel types from linear_fused_tile
-pub use linear_fused_tile::{TttTileKernel, TttTileMultiKernel};
-
 #[cfg(feature = "rocm")]
 pub use linear_fused_tile::{TttPtrStreamingKernel, TttStreamingKernel};
+// Re-export kernel types from linear_fused_tile
+pub use linear_fused_tile::{TttTileKernel, TttTileMultiKernel};
+pub use ttt::{TttInputs, TttKernel, TttOutputs};
 
 // ============================================================================
 // Kernel marker types

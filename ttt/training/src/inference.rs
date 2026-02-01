@@ -4,14 +4,14 @@ use burn::{
     prelude::*,
     record::{DefaultRecorder, Recorder},
 };
+use ttt_core::{TTTInnerModel, TTTLinear};
+use ttt_data::{Tokenizer, TokenizerTrait};
+use ttt_fused::FusedTttBackend;
 
 use crate::{
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
     training::TTTTrainingConfig,
 };
-use ttt_core::{TTTInnerModel, TTTLinear};
-use ttt_data::{Tokenizer, TokenizerTrait};
-use ttt_fused::FusedTttBackend;
 
 pub struct TTTTextGenerator<B: FusedTttBackend, Inner> {
     model: TTTTextGenerationModel<B, Inner>,

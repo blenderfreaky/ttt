@@ -8,16 +8,6 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use super::{
-    forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
-    helpers::Params,
-    streaming_ptr::{
-        CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
-        STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
-    },
-};
-
-use crate::FusedTttConfig;
 use burn::tensor::Shape;
 use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
 use cubecl::{frontend::ArrayArg, prelude::*};
@@ -27,6 +17,16 @@ use thundercube::{
     util::wait_for_sync,
 };
 use tracing::trace;
+
+use super::{
+    forward::{ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch},
+    helpers::Params,
+    streaming_ptr::{
+        CTRL_ARRAY_SIZE, PTR_OUTPUT, PTR_TABLE_SIZE, STATUS_DONE, STATUS_IDLE, STATUS_READY,
+        STATUS_SHUTDOWN, fused_ttt_streaming_ptr_kernel,
+    },
+};
+use crate::FusedTttConfig;
 
 /// Configuration for pointer-based streaming.
 #[derive(Debug, Clone, Copy)]
@@ -772,9 +772,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_ptr_streaming_vs_ttt_linear() {
-        let _guard = super::STREAMING_TEST_MUTEX
-            .lock()
-            .unwrap();
+        let _guard = super::STREAMING_TEST_MUTEX.lock().unwrap();
 
         let dims = TestDims::multi_stage(2, 2, 32, 8, 2).with_iterations(2);
         test_fwd::<

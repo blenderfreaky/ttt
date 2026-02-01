@@ -1,6 +1,6 @@
 use burn::tensor::{Tensor, TensorPrimitive};
-
 use ttt_kernels::FusedKernelBackend;
+
 use crate::ttt::{TttInputs, TttKernel, TttOutputs};
 
 pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3>>(

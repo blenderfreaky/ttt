@@ -11,7 +11,7 @@
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
     clippy::too_many_lines,
-    clippy::type_complexity,
+    clippy::type_complexity
 )]
 
 //! TTT Layer - Outer layer implementations
@@ -28,9 +28,8 @@ pub mod ttt;
 
 // Re-export commonly used items
 pub use block::{TTTBlock, TTTBlockConfig, TTTBlockWithSeq};
-pub use lm::{TTTModel, TTTConfigModelExt};
+pub use lm::{TTTConfigModelExt, TTTModel};
 pub use ttt::{TTT, TTTConfigExt};
-
 // Re-export TTTLayerType for use with the dispatch macro
 pub use ttt_core::TTTLayerType;
 

@@ -1,10 +1,10 @@
 //! High-level API for the tiled TTT-Linear forward kernel.
 
 use burn::tensor::{Tensor, TensorPrimitive};
+use ttt_kernels::FusedKernelBackend;
 
 use super::launch::{TttTileKernel, TttTileMultiKernel};
 use crate::{FusedTttBackend, FusedTttConfig, ttt::TttInputs};
-use ttt_kernels::FusedKernelBackend;
 
 pub fn default_threads(mini_batch_len: usize, head_dim: usize) -> usize {
     // Note: 16x128, 32x64, 64x64 removed due to GPU shared memory limits

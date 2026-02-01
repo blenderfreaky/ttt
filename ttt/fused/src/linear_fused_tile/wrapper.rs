@@ -3,10 +3,10 @@
 use std::{ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
+use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear};
 
 use super::api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 use crate::{Fused, FusedTttBackend, FusedTttConfig, TileKernel, TileMultiKernel};
-use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear};
 
 /// TTTInnerModel implementation for the tiled fused kernel.
 impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileKernel> {
@@ -215,9 +215,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
 
 #[cfg(test)]
 mod tests {
-    use crate::{FusedTile, FusedTileMulti};
     use ttt_core::{GpuAutodiffBackend, GpuBackend, TTTLinearState};
     use ttt_kernels::test_utils::{TestDims, test_backward_fmb, test_fmb, test_fwd};
+
+    use crate::{FusedTile, FusedTileMulti};
 
     #[test]
     fn test_fused_tile_vs_ttt_linear() {

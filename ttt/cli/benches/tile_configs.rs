@@ -8,10 +8,7 @@
 use burn::tensor::Tensor;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use ttt_core::{GpuAutodiffBackend, GpuBackend};
-use ttt_fused::{
-    FusedTttBackend, FusedTttConfig,
-    linear_fused_tile::fused_ttt_tile_forward,
-};
+use ttt_fused::{FusedTttBackend, FusedTttConfig, linear_fused_tile::fused_ttt_tile_forward};
 
 fn device<B: FusedTttBackend>() -> B::Device {
     Default::default()

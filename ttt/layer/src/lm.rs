@@ -5,10 +5,10 @@ use burn::{
     nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     tensor::{Int, Tensor},
 };
-
-use crate::block::{TTTBlockConfig, TTTBlockWithSeq};
 use ttt_core::{PositionEncodingType, TTTConfig, TTTInnerModel};
 use ttt_fused::FusedTttBackend;
+
+use crate::block::{TTTBlockConfig, TTTBlockWithSeq};
 
 #[derive(Module, Debug)]
 pub struct TTTModel<B: FusedTttBackend, Inner> {

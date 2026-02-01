@@ -1,13 +1,13 @@
+use burn::{config::Config, optim::AdamConfig, tensor::backend::Backend};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
-
-use burn::{config::Config, optim::AdamConfig, tensor::backend::Backend};
+use ttt::{artifact_info, metrics_export};
 use ttt_core::{PositionEncodingType, TTTConfig, TTTLayerType, TrainingBackend};
 use ttt_data::{Tokenizer, TokenizerTrait};
-use ttt_training::{TTTTrainingConfig, train_dataset, train_dataset_pretokenized, generate as inference_generate, interactive};
-
-use ttt::artifact_info;
-use ttt::metrics_export;
+use ttt_training::{
+    TTTTrainingConfig, generate as inference_generate, interactive, train_dataset,
+    train_dataset_pretokenized,
+};
 
 /// Load a tokenizer from a HuggingFace model name or local file path.
 fn load_tokenizer(identifier: &str) -> Tokenizer {
@@ -425,8 +425,7 @@ fn main() {
             let device = Default::default();
             let tokenizer = load_tokenizer(&tokenizer);
 
-            match inference_generate::<TrainingBackend>(&artifact_dir, device, &prompt, tokenizer)
-            {
+            match inference_generate::<TrainingBackend>(&artifact_dir, device, &prompt, tokenizer) {
                 Ok(generated) => {
                     println!("Prompt: {}", prompt);
                     println!("Generated: {}", generated);

@@ -7,11 +7,10 @@ use burn::{
     tensor::{Distribution, backend::AutodiffBackend},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
-
 use ttt_core::{TTTConfig, TTTInnerModel};
 use ttt_data::{TokenizerTrait, TrainingTextGenerationBatch};
 use ttt_fused::FusedTttBackend;
-use ttt_layer::{TTTModel, TTTConfigModelExt};
+use ttt_layer::{TTTConfigModelExt, TTTModel};
 
 #[derive(Config, Debug)]
 pub struct TTTTextGenerationConfig {

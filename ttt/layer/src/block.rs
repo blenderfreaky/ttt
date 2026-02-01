@@ -6,13 +6,13 @@ use burn::{
     nn::{RmsNorm, RmsNormConfig},
     tensor::Tensor,
 };
-
-use crate::ttt::{TTT, TTTConfigExt};
 use ttt_core::{
     TTTConfig, TTTInnerModel,
     util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
 };
 use ttt_fused::FusedTttBackend;
+
+use crate::ttt::{TTT, TTTConfigExt};
 
 // We can't write the trait bound due to a limitation of the Module derive macro
 // but impls enforce it

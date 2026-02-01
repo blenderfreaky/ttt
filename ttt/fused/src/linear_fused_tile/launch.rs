@@ -8,6 +8,12 @@ use burn_cubecl::{
 };
 use cubecl::prelude::*;
 use thundercube::prelude::{D4, D8, D16, D32, D64, LINE_SIZE};
+use ttt_kernels::{
+    TensorBundle,
+    kernel::{CanBackwardWithOut, FusedKernel, UseWithOut},
+    tensor_bundle,
+    util::empty_like,
+};
 
 use super::{
     backward::{
@@ -18,13 +24,11 @@ use super::{
         ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch, fused_ttt_forward_kernel,
         fused_ttt_forward_kernel_multi,
     },
+    helpers::Params,
 };
-use crate::{FusedTttConfig, ttt::{TttInputs, TttOutputs}};
-use super::helpers::Params;
-use ttt_kernels::{
-    tensor_bundle, TensorBundle,
-    kernel::{CanBackwardWithOut, FusedKernel, UseWithOut},
-    util::empty_like,
+use crate::{
+    FusedTttConfig,
+    ttt::{TttInputs, TttOutputs},
 };
 
 tensor_bundle! {

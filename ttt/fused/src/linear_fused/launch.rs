@@ -10,13 +10,16 @@ use burn_cubecl::{
     tensor::CubeTensor,
 };
 use cubek::reduce::components::instructions::ReduceOperationConfig;
-
-use super::{backward::launch_fused_ttt_backward, forward::launch_fused_ttt_forward};
-use crate::{FusedTttConfig, ttt::{TttInputs, TttKernel, TttOutputs}};
 use ttt_kernels::{
     TensorBundle,
     kernel::{CanBackwardNoOut, FusedKernel, UseNoOut},
     util::empty_like,
+};
+
+use super::{backward::launch_fused_ttt_backward, forward::launch_fused_ttt_forward};
+use crate::{
+    FusedTttConfig,
+    ttt::{TttInputs, TttKernel, TttOutputs},
 };
 
 /// Reduce sum over batch dimension (dim 0) and reshape to remove that dimension.

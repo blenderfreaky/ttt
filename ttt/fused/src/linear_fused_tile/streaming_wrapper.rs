@@ -18,6 +18,8 @@ use burn::{
 };
 use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
 use tracing::trace;
+use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
+use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
 
 use super::{
     launch::TttTileOutputs,
@@ -26,8 +28,6 @@ use super::{
     },
 };
 use crate::{Fused, FusedTttBackend, StreamingKernel, ttt::TttInputs};
-use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
-use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
 
 /// Inner handle that cleans up the streaming state on drop.
 #[derive(Debug)]
@@ -371,9 +371,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_streaming_vs_ttt_linear() {
-        let _guard = super::STREAMING_TEST_MUTEX
-            .lock()
-            .unwrap();
+        let _guard = super::STREAMING_TEST_MUTEX.lock().unwrap();
 
         let dims = TestDims::new(2, 2, 32, 8).with_iterations(2);
         test_fwd::<

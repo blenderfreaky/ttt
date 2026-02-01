@@ -31,10 +31,12 @@
 use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
-use super::forward::ForwardIntermediates;
-use super::helpers::{
-    CsCsTile, CsFTile, CsRegBig, FCsTile, FFTile, FRegBig, ParamsTrait, build_attn_matrix,
-    build_eta_matrix,
+use super::{
+    forward::ForwardIntermediates,
+    helpers::{
+        CsCsTile, CsFTile, CsRegBig, FCsTile, FFTile, FRegBig, ParamsTrait, build_attn_matrix,
+        build_eta_matrix,
+    },
 };
 use crate::FusedTttConfig;
 

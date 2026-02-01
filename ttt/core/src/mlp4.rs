@@ -6,7 +6,6 @@ use burn::{
     nn::Initializer,
     tensor::{Tensor, s},
 };
-
 use ttt_kernels::{gelu_bwd, gelu_tanh};
 
 use crate::{

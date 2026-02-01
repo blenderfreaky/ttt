@@ -1,9 +1,9 @@
 use std::{ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
+use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear};
 
 use crate::{Fused, FusedTttBackend, LinearKernel, fused_ttt_forward};
-use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear};
 
 impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, LinearKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
@@ -67,9 +67,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, LinearKerne
 
 #[cfg(test)]
 mod tests {
-    use crate::FusedLinear;
     use ttt_core::{GpuAutodiffBackend, GpuBackend, TTTLinearState};
     use ttt_kernels::test_utils::{TestDims, test_backward_fmb, test_fmb};
+
+    use crate::FusedLinear;
 
     #[test]
     fn test_fused_ttt_linear_vs_reference() {
@@ -88,10 +89,12 @@ mod tests {
     #[ignore]
     fn test_fused_backward_gradients_vs_reference() {
         let dims = TestDims::new(2, 2, 8, 4);
-        test_backward_fmb::<
-            GpuAutodiffBackend,
-            FusedLinear<GpuAutodiffBackend>,
-            _,
-        >(dims, |m| m.into(), 2e-2, 1e-3, "Fused");
+        test_backward_fmb::<GpuAutodiffBackend, FusedLinear<GpuAutodiffBackend>, _>(
+            dims,
+            |m| m.into(),
+            2e-2,
+            1e-3,
+            "Fused",
+        );
     }
 }

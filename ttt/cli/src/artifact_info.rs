@@ -2,7 +2,6 @@ use std::path::Path;
 
 use burn::optim::AdamConfig;
 use serde_json::Value;
-
 use ttt_core::TTTConfig;
 use ttt_training::TTTTrainingConfig;
 

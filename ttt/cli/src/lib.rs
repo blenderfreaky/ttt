@@ -11,7 +11,7 @@
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
     clippy::too_many_lines,
-    clippy::type_complexity,
+    clippy::type_complexity
 )]
 
 //! TTT - Text-to-Text Transformer with Test-Time Training
@@ -27,24 +27,19 @@ pub use ttt_core::{
     CpuBackend, GpuAutodiffBackend, GpuBackend, PositionEncodingType, TTTConfig, TTTLayerType,
     TrainingBackend,
 };
-
 // Re-export inner models
-pub use ttt_core::{TTTLinear, TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4, TTTInnerModel};
-
-// Re-export fused kernels
-pub use ttt_fused::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend};
-
-// Re-export layer types
-pub use ttt_layer::{TTT, TTTBlock, TTTBlockWithSeq, TTTModel, dispatch_ttt_layer_type};
-
+pub use ttt_core::{TTTInnerModel, TTTLinear, TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4};
 // Re-export data types
 pub use ttt_data::{
-    TextDataset, TextGenerationBatcher, Tokenizer, TokenizerTrait, PreTokenizedDataset,
+    PreTokenizedDataset, TextDataset, TextGenerationBatcher, Tokenizer, TokenizerTrait,
 };
-
+// Re-export fused kernels
+pub use ttt_fused::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend};
+// Re-export layer types
+pub use ttt_layer::{TTT, TTTBlock, TTTBlockWithSeq, TTTModel, dispatch_ttt_layer_type};
 // Re-export training types
 pub use ttt_training::{
-    TTTTextGenerator, TTTTextGenerationConfig, TTTTextGenerationModel, TTTTrainingConfig,
+    TTTTextGenerationConfig, TTTTextGenerationModel, TTTTextGenerator, TTTTrainingConfig,
 };
 
 #[cfg(not(any(feature = "cuda", feature = "rocm", feature = "wgpu", feature = "cpu")))]

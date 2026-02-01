@@ -36,8 +36,8 @@ pub mod util;
 
 // Re-export commonly used items
 pub use config::{
-    CpuBackend, GpuAutodiffBackend, GpuBackend, PositionEncodingType, TTTConfig, TTTLayerType,
-    TEST_VOCAB_SIZE, TrainingBackend,
+    CpuBackend, GpuAutodiffBackend, GpuBackend, PositionEncodingType, TEST_VOCAB_SIZE, TTTConfig,
+    TTTLayerType, TrainingBackend,
 };
 pub use inner::{Qkv, TTTInnerModel, TTTInputsInner};
 pub use linear::{TTTLinear, TTTLinearConfig, TTTLinearState};

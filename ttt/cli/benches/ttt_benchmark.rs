@@ -24,13 +24,12 @@ use std::{sync::Arc, time::Duration};
 use burn::prelude::*;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use paste::paste;
-
 use ttt_core::{
-    GpuAutodiffBackend, GpuBackend, TTTConfig, TTTInnerModel, TTTInputsInner, Qkv,
-    TTTLinear, TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4,
+    GpuAutodiffBackend, GpuBackend, Qkv, TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear,
+    TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4,
 };
-use ttt_fused::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend};
 use ttt_data::TrainingTextGenerationBatch;
+use ttt_fused::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend};
 use ttt_training::{TTTTextGenerationConfig, TTTTextGenerationModel};
 
 pub fn device<B: FusedTttBackend>() -> B::Device {

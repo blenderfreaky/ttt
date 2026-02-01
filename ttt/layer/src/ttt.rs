@@ -11,7 +11,6 @@ use burn::{
     prelude::*,
     tensor::{Tensor, activation::sigmoid},
 };
-
 use ttt_core::{
     PositionEncodingType, Qkv, TTTConfig, TTTInnerModel, TTTInputsInner,
     util::{RotaryEmbedding, RotaryEmbeddingConfig, causal_conv1d_fn},

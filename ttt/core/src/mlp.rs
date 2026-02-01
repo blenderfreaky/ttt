@@ -4,11 +4,10 @@ use burn::{
     config::Config,
     module::{Ignored, Module, Param},
     nn::Initializer,
+    prelude::Backend,
     tensor::{Tensor, s},
 };
-
-use burn::prelude::Backend;
-use ttt_kernels::{gelu_bwd, gelu_tanh, FusedKernelBackend, GeluBwdKernel, GeluTanhKernel};
+use ttt_kernels::{FusedKernelBackend, GeluBwdKernel, GeluTanhKernel, gelu_bwd, gelu_tanh};
 
 /// Backend trait that supports GELU kernels.
 pub trait GeluBackend:

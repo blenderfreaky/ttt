@@ -11,7 +11,7 @@
     clippy::cast_precision_loss,
     clippy::cast_possible_wrap,
     clippy::too_many_lines,
-    clippy::type_complexity,
+    clippy::type_complexity
 )]
 
 //! TTT Training - Training loop and inference utilities

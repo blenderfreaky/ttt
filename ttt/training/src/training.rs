@@ -16,15 +16,15 @@ use burn::{
         metric::{AccuracyMetric, LearningRateMetric, LossMetric, PerplexityMetric},
     },
 };
-
-use crate::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 use ttt_core::{TTTConfig, TTTInnerModel};
 use ttt_data::{
-    TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher, TokenizedItem,
-    Tokenizer, TokenizerTrait, TrainingTextGenerationBatch, load_or_pretokenize,
+    TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher, TokenizedItem, Tokenizer,
+    TokenizerTrait, TrainingTextGenerationBatch, load_or_pretokenize,
 };
 use ttt_fused::FusedTttBackend;
 use ttt_layer::dispatch_ttt_layer_type;
+
+use crate::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 
 #[derive(Config, Debug)]
 pub struct TTTTrainingConfig {
