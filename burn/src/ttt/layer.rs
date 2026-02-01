@@ -54,7 +54,7 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
     fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
         let mut output = inputs.qkv.xv.zeros_like();
 
-        let [batch_size, num_heads, seq_len, head_dim] = inputs.qkv.xv.shape().dims();
+        let [_batch_size, _num_heads, seq_len, _head_dim] = inputs.qkv.xv.shape().dims();
 
         let mini_batch_size = self.get_config().mini_batch_size;
         let num_mini_batch = seq_len / mini_batch_size;
@@ -198,7 +198,6 @@ pub struct Qkv<B: Backend> {
 impl<B: Backend> Qkv<B> {
     #[must_use]
     pub fn slice_seq(&self, range: Range<usize>) -> Self {
-        let [batch_size, num_heads, _, head_dim] = self.xq.shape().dims();
         Self {
             xq: self.xq.clone().slice(s![.., .., range.clone(), ..]),
             xk: self.xk.clone().slice(s![.., .., range.clone(), ..]),
@@ -250,7 +249,6 @@ pub struct TTTInputsInner<B: Backend> {
 impl<B: Backend> TTTInputsInner<B> {
     #[must_use]
     pub fn slice_seq(&self, range: Range<usize>) -> Self {
-        let [batch_size, num_heads, _] = self.ttt_lr_eta.shape().dims();
         Self {
             qkv: self.qkv.slice_seq(range.clone()),
             token_eta: self.token_eta.clone().slice(s![range.clone()]),
