@@ -57,9 +57,9 @@ impl BenchConfig {
             name: "12m",
             hidden_size: 256,
             num_heads: 4,
-            num_layers: 4,
-            mlp_intermediate: 1024,
-            mini_batch_size: 32,
+            num_layers: 6,
+            mlp_intermediate: 512,
+            mini_batch_size: 16,
         }
     }
 
@@ -69,7 +69,7 @@ impl BenchConfig {
             hidden_size: 512,
             num_heads: 8,
             num_layers: 6,
-            mlp_intermediate: 2048,
+            mlp_intermediate: 768,
             mini_batch_size: 16,
         }
     }
@@ -80,7 +80,7 @@ impl BenchConfig {
             hidden_size: 768,
             num_heads: 12,
             num_layers: 12,
-            mlp_intermediate: 3072,
+            mlp_intermediate: 2048,
             mini_batch_size: 16,
         }
     }
@@ -91,7 +91,7 @@ impl BenchConfig {
             hidden_size: 1024,
             num_heads: 16,
             num_layers: 24,
-            mlp_intermediate: 4096,
+            mlp_intermediate: 2736,
             mini_batch_size: 16,
         }
     }
@@ -99,21 +99,21 @@ impl BenchConfig {
     pub const fn m760() -> Self {
         Self {
             name: "760m",
-            hidden_size: 1280,
-            num_heads: 20,
-            num_layers: 36,
-            mlp_intermediate: 5120,
+            hidden_size: 1536,
+            num_heads: 16,
+            num_layers: 24,
+            mlp_intermediate: 4096,
             mini_batch_size: 16,
         }
     }
 
-    pub const fn m1500() -> Self {
+    pub const fn b1() -> Self {
         Self {
-            name: "1500m",
-            hidden_size: 1600,
-            num_heads: 25,
-            num_layers: 48,
-            mlp_intermediate: 6400,
+            name: "1b",
+            hidden_size: 2048,
+            num_heads: 32,
+            num_layers: 24,
+            mlp_intermediate: 5504,
             mini_batch_size: 16,
         }
     }
@@ -405,37 +405,41 @@ fn bench_full_backward<
 
 /// Runtime parameters used across all benchmarks
 const BENCH_PARAMS: &[RuntimeParams] = &[
-    // Sweep batch sizes to find GPU saturation point
     RuntimeParams {
         batch_size: 1,
-        seq_length: 32,
+        seq_length: 2048,
         vocab_size: 1000,
     },
-    RuntimeParams {
-        batch_size: 4,
-        seq_length: 32,
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 16,
-        seq_length: 32,
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 64,
-        seq_length: 32,
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 256,
-        seq_length: 32,
-        vocab_size: 1000,
-    },
-    RuntimeParams {
-        batch_size: 1024,
-        seq_length: 32,
-        vocab_size: 1000,
-    },
+    // RuntimeParams {
+    //     batch_size: 1,
+    //     seq_length: 32,
+    //     vocab_size: 1000,
+    // },
+    // RuntimeParams {
+    //     batch_size: 4,
+    //     seq_length: 32,
+    //     vocab_size: 1000,
+    // },
+    // RuntimeParams {
+    //     batch_size: 16,
+    //     seq_length: 32,
+    //     vocab_size: 1000,
+    // },
+    // RuntimeParams {
+    //     batch_size: 64,
+    //     seq_length: 32,
+    //     vocab_size: 1000,
+    // },
+    // RuntimeParams {
+    //     batch_size: 256,
+    //     seq_length: 32,
+    //     vocab_size: 1000,
+    // },
+    // RuntimeParams {
+    //     batch_size: 1024,
+    //     seq_length: 32,
+    //     vocab_size: 1000,
+    // },
     // RuntimeParams {
     //     batch_size: 16,
     //     seq_length: 8192,
@@ -454,7 +458,7 @@ const BENCH_CONFIGS: &[BenchConfig] = &[
     BenchConfig::m125(),
     // BenchConfig::m350(),
     // BenchConfig::m760(),
-    // BenchConfig::m1500(),
+    // BenchConfig::b1(),
 ];
 
 /// Generate a single benchmark entry function
