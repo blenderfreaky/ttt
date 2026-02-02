@@ -13,7 +13,7 @@ result*
 .direnv/
 flake.lock
 
-# Worktrees (separate experiments)
+# Worktrees
 .worktree/
 
 # Editor/IDE
@@ -24,9 +24,7 @@ flake.lock
 
 # Logs and misc
 *.log
-.claude/
-notes
 
-# Unused directories
-zluda/
+# Irrelevant directories
 nix/
+.github/
