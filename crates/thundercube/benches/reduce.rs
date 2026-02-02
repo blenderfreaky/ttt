@@ -69,7 +69,7 @@ fn bench_st_sum_rows<F: Float, R: Dim, C: Dim>(
 
     #[unroll]
     for _ in 0..iters {
-        sum_rows_plane::<F, R, C>(&st, &mut result);
+        sum_rows_plane::<F, F, R, C>(&st, &mut result);
     }
 
     if UNIT_POS == 0 {
@@ -91,7 +91,7 @@ fn bench_st_sum_cols<F: Float, R: Dim, C: Dim>(
 
     #[unroll]
     for _ in 0..iters {
-        sum_cols_plane::<F, R, C>(&st, &mut result);
+        sum_cols_plane::<F, F, R, C>(&st, &mut result);
     }
 
     if UNIT_POS == 0 {

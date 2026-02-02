@@ -154,14 +154,10 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
     // Saved tensors from forward
     xq: TensorHandleRef<R>,
     xk: TensorHandleRef<R>,
-    xv: TensorHandleRef<R>,
     weight_init: TensorHandleRef<R>,
-    bias_init: TensorHandleRef<R>,
-    weight_last: TensorHandleRef<R>,
     token_eta: TensorHandleRef<R>,
     ttt_lr_eta: TensorHandleRef<R>,
     ln_weight: TensorHandleRef<R>,
-    ln_bias: TensorHandleRef<R>,
     // Forward intermediates
     x_hat_fused: TensorHandleRef<R>,
     std_fused: TensorHandleRef<R>,
@@ -197,14 +193,10 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
     let saved_launch = SavedTensorsLaunch::<F, R>::new(
         xq.as_tensor_arg(vectorization),
         xk.as_tensor_arg(vectorization),
-        xv.as_tensor_arg(vectorization),
         weight_init.as_tensor_arg(vectorization),
-        bias_init.as_tensor_arg(vectorization),
-        weight_last.as_tensor_arg(vectorization),
         token_eta.as_tensor_arg(vectorization),
         ttt_lr_eta.as_tensor_arg(vectorization),
         ln_weight.as_tensor_arg(vectorization),
-        ln_bias.as_tensor_arg(vectorization),
     );
 
     let fwd_launch = ForwardIntermediatesLaunch::<F, R>::new(
@@ -325,7 +317,6 @@ pub struct TttSavedTensors<T> {
     pub xv: T,
     pub weight_init: T,
     pub bias_init: T,
-    pub weight_last: T,
     pub token_eta: T,
     pub ttt_lr_eta: T,
     pub ln_weight: T,
@@ -394,14 +385,10 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         &saved.xq.client,
         saved.xq.as_handle_ref(),
         saved.xk.as_handle_ref(),
-        saved.xv.as_handle_ref(),
         saved.weight_init.as_handle_ref(),
-        saved.bias_init.as_handle_ref(),
-        saved.weight_last.as_handle_ref(),
         saved.token_eta.as_handle_ref(),
         saved.ttt_lr_eta.as_handle_ref(),
         saved.ln_weight.as_handle_ref(),
-        saved.ln_bias.as_handle_ref(),
         fwd.x_hat_fused.as_handle_ref(),
         fwd.std_fused.as_handle_ref(),
         fwd.grad_output_fused.as_handle_ref(),
@@ -446,14 +433,10 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
     // Saved tensors from forward
     xq: TensorHandleRef<R>,
     xk: TensorHandleRef<R>,
-    xv: TensorHandleRef<R>,
     weight_init: TensorHandleRef<R>,
-    bias_init: TensorHandleRef<R>,
-    weight_last: TensorHandleRef<R>,
     token_eta: TensorHandleRef<R>,
     ttt_lr_eta: TensorHandleRef<R>,
     ln_weight: TensorHandleRef<R>,
-    ln_bias: TensorHandleRef<R>,
     // Forward intermediates
     x_hat_fused: TensorHandleRef<R>,
     std_fused: TensorHandleRef<R>,
@@ -490,14 +473,10 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
     let saved_launch = SavedTensorsLaunch::<F, R>::new(
         xq.as_tensor_arg(vectorization),
         xk.as_tensor_arg(vectorization),
-        xv.as_tensor_arg(vectorization),
         weight_init.as_tensor_arg(vectorization),
-        bias_init.as_tensor_arg(vectorization),
-        weight_last.as_tensor_arg(vectorization),
         token_eta.as_tensor_arg(vectorization),
         ttt_lr_eta.as_tensor_arg(vectorization),
         ln_weight.as_tensor_arg(vectorization),
-        ln_bias.as_tensor_arg(vectorization),
     );
 
     let fwd_launch = ForwardIntermediatesLaunch::<F, R>::new(
@@ -599,14 +578,10 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         &saved.xq.client,
         saved.xq.as_handle_ref(),
         saved.xk.as_handle_ref(),
-        saved.xv.as_handle_ref(),
         saved.weight_init.as_handle_ref(),
-        saved.bias_init.as_handle_ref(),
-        saved.weight_last.as_handle_ref(),
         saved.token_eta.as_handle_ref(),
         saved.ttt_lr_eta.as_handle_ref(),
         saved.ln_weight.as_handle_ref(),
-        saved.ln_bias.as_handle_ref(),
         fwd.x_hat_fused.as_handle_ref(),
         fwd.std_fused.as_handle_ref(),
         fwd.grad_output_fused.as_handle_ref(),
@@ -856,13 +831,13 @@ impl CanBackwardWithOut<9, 10> for TttTileKernel {
             xv: inputs.xv,
             weight_init: inputs.weight,
             bias_init: inputs.bias,
-            weight_last: outputs.weight_out, // Final weight from forward pass
             token_eta: inputs.token_eta,
             ttt_lr_eta: inputs.ttt_lr_eta,
             ln_weight: inputs.ln_weight,
             ln_bias: inputs.ln_bias,
         };
 
+        // Note: outputs.weight_out is not passed to backward kernel (not needed)
         let fwd = FwdIntermediates {
             x_hat_fused: outputs.x_hat_fused,
             std_fused: outputs.std_fused,
@@ -942,13 +917,13 @@ impl CanBackwardWithOut<9, 10> for TttTileMultiKernel {
         let threads = config.threads;
 
         // Construct saved tensors from inputs and outputs
+        // Note: outputs.weight_out is not passed to backward kernel (not needed)
         let saved = TttSavedTensors {
             xq: inputs.xq,
             xk: inputs.xk,
             xv: inputs.xv,
             weight_init: inputs.weight,
             bias_init: inputs.bias,
-            weight_last: outputs.weight_out, // Final weight from forward pass
             token_eta: inputs.token_eta,
             ttt_lr_eta: inputs.ttt_lr_eta,
             ln_weight: inputs.ln_weight,

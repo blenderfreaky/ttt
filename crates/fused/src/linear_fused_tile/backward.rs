@@ -49,14 +49,10 @@ use crate::FusedTttConfig;
 pub struct SavedTensors<F: Float> {
     pub xq: Tensor<Line<F>>,
     pub xk: Tensor<Line<F>>,
-    pub xv: Tensor<Line<F>>,
     pub weight_init: Tensor<Line<F>>,
-    pub bias_init: Tensor<Line<F>>,
-    pub weight_last: Tensor<Line<F>>,
     pub token_eta: Tensor<Line<F>>,
     pub ttt_lr_eta: Tensor<Line<F>>,
     pub ln_weight: Tensor<Line<F>>,
-    pub ln_bias: Tensor<Line<F>>,
 }
 
 /// Gradient outputs from backward pass.
