@@ -37,7 +37,4 @@ pub mod util;
 // Re-export commonly used items
 pub use bundle::TensorBundle;
 pub use gelu::{GeluBwdKernel, GeluInput, GeluOutput, GeluTanhKernel, gelu_bwd, gelu_tanh};
-pub use kernel::{
-    BackwardImpl, CanBackwardNoOut, CanBackwardWithOut, FusedKernel, FusedKernelBackend, UseNoOut,
-    UseWithOut,
-};
+pub use kernel::{FusedKernel, FusedKernelBackend};

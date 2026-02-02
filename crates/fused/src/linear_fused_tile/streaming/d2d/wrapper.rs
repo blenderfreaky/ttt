@@ -19,10 +19,10 @@ use burn::{
 use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
 use tracing::trace;
 use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
-use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
+use ttt_kernels::kernel::FusedKernel;
 
 use super::{
-    super::super::launch::TttTileOutputs,
+    super::TttTileOutputs,
     host::{StreamingConfig, get_or_create_streaming_state, remove_streaming_state_by_id},
 };
 use crate::{Fused, FusedTttBackend, StreamingKernel, ttt::TttInputs};
@@ -114,16 +114,17 @@ impl StreamingKernelConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct TttStreamingKernel;
 
-impl FusedKernel<9, 10> for TttStreamingKernel {
+impl FusedKernel<9, 10, 9> for TttStreamingKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttTileOutputs<T>;
-    type Backward = StreamingBackward;
+    type SavedState<T: Debug + Clone + Send> = TttInputs<T>;
     type Config = StreamingKernelConfig;
 
     fn forward_launch<R: CubeRuntime + 'static, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         config: StreamingKernelConfig,
-    ) -> TttTileOutputs<CubeTensor<R>> {
+    ) -> (TttTileOutputs<CubeTensor<R>>, TttInputs<CubeTensor<R>>) {
+        let saved = inputs.clone();
         let [batch_size, num_heads, _seq_len, head_dim] = inputs.xq.shape.dims();
 
         let streaming_config = StreamingConfig::new(
@@ -177,41 +178,15 @@ impl FusedKernel<9, 10> for TttStreamingKernel {
             "streaming forward complete, output handle stream: {:?}",
             result.output.handle.stream
         );
-        result
+        (result, saved)
     }
-}
 
-/// Marker for streaming backward - uses no saved outputs (recomputes if needed)
-pub struct StreamingBackward;
-
-impl CanBackwardNoOut<9, 10> for TttStreamingKernel {
-    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
-        _inputs: TttInputs<CubeTensor<R>>,
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        _saved: TttInputs<CubeTensor<R>>,
         _grad_outputs: TttTileOutputs<CubeTensor<R>>,
         _config: StreamingKernelConfig,
     ) -> TttInputs<CubeTensor<R>> {
-        // TODO: Implement streaming backward
-        // For now, panic - streaming is forward-only
         panic!("Streaming kernel backward not yet implemented")
-    }
-}
-
-impl<K, const N: usize, const M: usize> ttt_kernels::kernel::BackwardImpl<K, N, M>
-    for StreamingBackward
-where
-    K: CanBackwardNoOut<N, M>,
-{
-    fn should_save_outputs() -> bool {
-        false
-    }
-
-    fn call<R: CubeRuntime, F: FloatElement>(
-        inputs: K::Inputs<CubeTensor<R>>,
-        _outputs: Option<K::Outputs<CubeTensor<R>>>,
-        grad_outputs: K::Outputs<CubeTensor<R>>,
-        config: K::Config,
-    ) -> K::Inputs<CubeTensor<R>> {
-        K::backward_no_out::<R, F>(inputs, grad_outputs, config)
     }
 }
 
@@ -264,7 +239,8 @@ pub fn fused_ttt_streaming_forward<B: FusedTttBackend>(
 
     let config = StreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
 
-    let outputs = <B as FusedKernelBackend<TttStreamingKernel, 9, 10>>::forward(inputs, config);
+    let (outputs, _saved) =
+        <B as FusedKernelBackend<TttStreamingKernel, 9, 10, 9>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),

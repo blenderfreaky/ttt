@@ -11,7 +11,7 @@ use cubecl::prelude::*;
 use thundercube::prelude::{D4, D8, D16, D32, D64, LINE_SIZE};
 use ttt_kernels::{
     TensorBundle,
-    kernel::{CanBackwardWithOut, FusedKernel, UseWithOut},
+    kernel::FusedKernel,
     tensor_bundle,
     util::empty_like,
 };
@@ -33,10 +33,12 @@ use crate::{
 };
 
 tensor_bundle! {
-    /// Extended outputs including forward intermediates for backward.
-    /// Contains 3 outputs + 7 forward intermediates = 10 tensors.
-    pub struct TttTileOutputs[10] {
-        output, weight_out, bias_out,
+    /// Saved state for backward pass.
+    /// Contains 6 saved inputs + 7 forward intermediates = 13 tensors.
+    pub struct TttSavedState[13] {
+        // Saved inputs (subset needed for backward)
+        xq, xk, weight_init, token_eta, ttt_lr_eta, ln_weight,
+        // Forward intermediates
         x_hat_fused, std_fused, grad_output_fused, grad_x_hat_fused, grad_l_wrt_Z1, x_hat_ln, std_ln
     }
 }
@@ -787,21 +789,35 @@ pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
     )
 }
 
-impl FusedKernel<9, 10> for TttTileKernel {
+impl FusedKernel<9, 3, 13> for TttTileKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
-    type Outputs<T: Debug + Clone + Send> = TttTileOutputs<T>;
-    type Backward = UseWithOut;
+    type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
+    type SavedState<T: Debug + Clone + Send> = TttSavedState<T>;
     type Config = FusedTttConfig;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         config: FusedTttConfig,
-    ) -> TttTileOutputs<CubeTensor<R>> {
+    ) -> (TttOutputs<CubeTensor<R>>, TttSavedState<CubeTensor<R>>) {
+        // Clone inputs needed for saved state before moving into forward
+        let saved_inputs = TttSavedTensors {
+            xq: inputs.xq.clone(),
+            xk: inputs.xk.clone(),
+            weight_init: inputs.weight.clone(),
+            token_eta: inputs.token_eta.clone(),
+            ttt_lr_eta: inputs.ttt_lr_eta.clone(),
+            ln_weight: inputs.ln_weight.clone(),
+        };
+
         let (outputs, fwd) = forward::<R, F>(inputs, config);
-        TttTileOutputs {
-            output: outputs.output,
-            weight_out: outputs.weight,
-            bias_out: outputs.bias,
+
+        let saved = TttSavedState {
+            xq: saved_inputs.xq,
+            xk: saved_inputs.xk,
+            weight_init: saved_inputs.weight_init,
+            token_eta: saved_inputs.token_eta,
+            ttt_lr_eta: saved_inputs.ttt_lr_eta,
+            ln_weight: saved_inputs.ln_weight,
             x_hat_fused: fwd.x_hat_fused,
             std_fused: fwd.std_fused,
             grad_output_fused: fwd.grad_output_fused,
@@ -809,42 +825,40 @@ impl FusedKernel<9, 10> for TttTileKernel {
             grad_l_wrt_Z1: fwd.grad_l_wrt_Z1,
             x_hat_ln: fwd.x_hat_ln,
             std_ln: fwd.std_ln,
-        }
-    }
-}
+        };
 
-impl CanBackwardWithOut<9, 10> for TttTileKernel {
-    fn backward_with_out<R: CubeRuntime, F: FloatElement>(
-        inputs: TttInputs<CubeTensor<R>>,
-        outputs: TttTileOutputs<CubeTensor<R>>,
-        grad_outputs: TttTileOutputs<CubeTensor<R>>,
+        (outputs, saved)
+    }
+
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        saved: TttSavedState<CubeTensor<R>>,
+        grad_outputs: TttOutputs<CubeTensor<R>>,
         config: FusedTttConfig,
     ) -> TttInputs<CubeTensor<R>> {
-        let token_eta_shape = inputs.token_eta.shape.clone();
+        let token_eta_shape = saved.token_eta.shape.clone();
         let epsilon = config.epsilon();
         let threads = config.threads;
 
-        let saved = TttSavedTensors {
-            xq: inputs.xq,
-            xk: inputs.xk,
-            weight_init: inputs.weight,
-            token_eta: inputs.token_eta,
-            ttt_lr_eta: inputs.ttt_lr_eta,
-            ln_weight: inputs.ln_weight,
+        let saved_tensors = TttSavedTensors {
+            xq: saved.xq,
+            xk: saved.xk,
+            weight_init: saved.weight_init,
+            token_eta: saved.token_eta,
+            ttt_lr_eta: saved.ttt_lr_eta,
+            ln_weight: saved.ln_weight,
         };
 
-        // Note: outputs.weight_out is not passed to backward kernel (not needed)
         let fwd = FwdIntermediates {
-            x_hat_fused: outputs.x_hat_fused,
-            std_fused: outputs.std_fused,
-            grad_output_fused: outputs.grad_output_fused,
-            grad_x_hat_fused: outputs.grad_x_hat_fused,
-            grad_l_wrt_Z1: outputs.grad_l_wrt_Z1,
-            x_hat_ln: outputs.x_hat_ln,
-            std_ln: outputs.std_ln,
+            x_hat_fused: saved.x_hat_fused,
+            std_fused: saved.std_fused,
+            grad_output_fused: saved.grad_output_fused,
+            grad_x_hat_fused: saved.grad_x_hat_fused,
+            grad_l_wrt_Z1: saved.grad_l_wrt_Z1,
+            x_hat_ln: saved.x_hat_ln,
+            std_ln: saved.std_ln,
         };
 
-        let grad_inputs = backward::<R, F>(saved, fwd, grad_outputs.output, epsilon, threads);
+        let grad_inputs = backward::<R, F>(saved_tensors, fwd, grad_outputs.output, epsilon, threads);
 
         // TODO: token_eta gradient is currently zeros (not computed by backward kernel)
         let grad_token_eta = empty_like::<R, F>(&grad_inputs.grad_xq, token_eta_shape);
@@ -863,26 +877,41 @@ impl CanBackwardWithOut<9, 10> for TttTileKernel {
     }
 }
 
-impl FusedKernel<9, 10> for TttTileMultiKernel {
+impl FusedKernel<9, 3, 13> for TttTileMultiKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
-    type Outputs<T: Debug + Clone + Send> = TttTileOutputs<T>;
-    type Backward = UseWithOut;
+    type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
+    type SavedState<T: Debug + Clone + Send> = TttSavedState<T>;
     type Config = FusedTttConfig;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         config: FusedTttConfig,
-    ) -> TttTileOutputs<CubeTensor<R>> {
+    ) -> (TttOutputs<CubeTensor<R>>, TttSavedState<CubeTensor<R>>) {
         let mini_batch_len = config.mini_batch_len;
         assert!(
             mini_batch_len > 0,
             "mini_batch_len must be set for TttTileMultiKernel"
         );
+
+        // Clone inputs needed for saved state before moving into forward
+        let saved_inputs = TttSavedTensors {
+            xq: inputs.xq.clone(),
+            xk: inputs.xk.clone(),
+            weight_init: inputs.weight.clone(),
+            token_eta: inputs.token_eta.clone(),
+            ttt_lr_eta: inputs.ttt_lr_eta.clone(),
+            ln_weight: inputs.ln_weight.clone(),
+        };
+
         let (outputs, fwd) = forward_multi::<R, F>(inputs, config);
-        TttTileOutputs {
-            output: outputs.output,
-            weight_out: outputs.weight,
-            bias_out: outputs.bias,
+
+        let saved = TttSavedState {
+            xq: saved_inputs.xq,
+            xk: saved_inputs.xk,
+            weight_init: saved_inputs.weight_init,
+            token_eta: saved_inputs.token_eta,
+            ttt_lr_eta: saved_inputs.ttt_lr_eta,
+            ln_weight: saved_inputs.ln_weight,
             x_hat_fused: fwd.x_hat_fused,
             std_fused: fwd.std_fused,
             grad_output_fused: fwd.grad_output_fused,
@@ -890,15 +919,14 @@ impl FusedKernel<9, 10> for TttTileMultiKernel {
             grad_l_wrt_Z1: fwd.grad_l_wrt_Z1,
             x_hat_ln: fwd.x_hat_ln,
             std_ln: fwd.std_ln,
-        }
-    }
-}
+        };
 
-impl CanBackwardWithOut<9, 10> for TttTileMultiKernel {
-    fn backward_with_out<R: CubeRuntime, F: FloatElement>(
-        inputs: TttInputs<CubeTensor<R>>,
-        outputs: TttTileOutputs<CubeTensor<R>>,
-        grad_outputs: TttTileOutputs<CubeTensor<R>>,
+        (outputs, saved)
+    }
+
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        saved: TttSavedState<CubeTensor<R>>,
+        grad_outputs: TttOutputs<CubeTensor<R>>,
         config: FusedTttConfig,
     ) -> TttInputs<CubeTensor<R>> {
         let mini_batch_len = config.mini_batch_len;
@@ -907,34 +935,31 @@ impl CanBackwardWithOut<9, 10> for TttTileMultiKernel {
             "mini_batch_len must be set for TttTileMultiKernel backward"
         );
 
-        // Capture scalars before moving into saved
-        let token_eta_shape = inputs.token_eta.shape.clone();
+        let token_eta_shape = saved.token_eta.shape.clone();
         let epsilon = config.epsilon();
         let threads = config.threads;
 
-        // Construct saved tensors from inputs and outputs
-        // Note: outputs.weight_out is not passed to backward kernel (not needed)
-        let saved = TttSavedTensors {
-            xq: inputs.xq,
-            xk: inputs.xk,
-            weight_init: inputs.weight,
-            token_eta: inputs.token_eta,
-            ttt_lr_eta: inputs.ttt_lr_eta,
-            ln_weight: inputs.ln_weight,
+        let saved_tensors = TttSavedTensors {
+            xq: saved.xq,
+            xk: saved.xk,
+            weight_init: saved.weight_init,
+            token_eta: saved.token_eta,
+            ttt_lr_eta: saved.ttt_lr_eta,
+            ln_weight: saved.ln_weight,
         };
 
         let fwd = FwdIntermediates {
-            x_hat_fused: outputs.x_hat_fused,
-            std_fused: outputs.std_fused,
-            grad_output_fused: outputs.grad_output_fused,
-            grad_x_hat_fused: outputs.grad_x_hat_fused,
-            grad_l_wrt_Z1: outputs.grad_l_wrt_Z1,
-            x_hat_ln: outputs.x_hat_ln,
-            std_ln: outputs.std_ln,
+            x_hat_fused: saved.x_hat_fused,
+            std_fused: saved.std_fused,
+            grad_output_fused: saved.grad_output_fused,
+            grad_x_hat_fused: saved.grad_x_hat_fused,
+            grad_l_wrt_Z1: saved.grad_l_wrt_Z1,
+            x_hat_ln: saved.x_hat_ln,
+            std_ln: saved.std_ln,
         };
 
         let grad_inputs = backward_multi::<R, F>(
-            saved,
+            saved_tensors,
             fwd,
             grad_outputs.output,
             mini_batch_len,

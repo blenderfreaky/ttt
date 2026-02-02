@@ -4,8 +4,21 @@
 //! - `d2d`: Device-to-device memory copy based streaming
 //! - `ptr`: Raw GPU pointer based streaming (zero-copy)
 
+use std::fmt::Debug;
+
+use ttt_kernels::tensor_bundle;
+
 pub mod d2d;
 pub mod ptr;
+
+tensor_bundle! {
+    /// Outputs for streaming TTT kernels.
+    /// Contains 3 main outputs + 7 forward intermediates = 10 tensors.
+    pub struct TttTileOutputs[10] {
+        output, weight_out, bias_out,
+        x_hat_fused, std_fused, grad_output_fused, grad_x_hat_fused, grad_l_wrt_Z1, x_hat_ln, std_ln
+    }
+}
 
 // Re-export commonly used items
 pub use d2d::{

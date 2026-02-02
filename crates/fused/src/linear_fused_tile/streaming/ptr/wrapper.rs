@@ -19,10 +19,10 @@ use burn::{
 use burn_cubecl::{CubeRuntime, FloatElement, kernel::into_contiguous, tensor::CubeTensor};
 use tracing::trace;
 use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
-use ttt_kernels::kernel::{CanBackwardNoOut, FusedKernel};
+use ttt_kernels::kernel::FusedKernel;
 
 use super::{
-    super::super::launch::TttTileOutputs,
+    super::TttTileOutputs,
     host::{
         PtrStreamingConfig, get_or_create_ptr_streaming_state, remove_ptr_streaming_state_by_id,
     },
@@ -115,16 +115,17 @@ impl PtrStreamingKernelConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct TttPtrStreamingKernel;
 
-impl FusedKernel<9, 10> for TttPtrStreamingKernel {
+impl FusedKernel<9, 10, 9> for TttPtrStreamingKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttTileOutputs<T>;
-    type Backward = PtrStreamingBackward;
+    type SavedState<T: Debug + Clone + Send> = TttInputs<T>;
     type Config = PtrStreamingKernelConfig;
 
     fn forward_launch<R: CubeRuntime + 'static, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         config: PtrStreamingKernelConfig,
-    ) -> TttTileOutputs<CubeTensor<R>> {
+    ) -> (TttTileOutputs<CubeTensor<R>>, TttInputs<CubeTensor<R>>) {
+        let saved = inputs.clone();
         let [batch_size, num_heads, _seq_len, head_dim] = inputs.xq.shape.dims();
 
         let ptr_config = PtrStreamingConfig::new(
@@ -182,7 +183,7 @@ impl FusedKernel<9, 10> for TttPtrStreamingKernel {
         let dtype = output.dtype;
         let output = mul_scalar(output.clone(), InputScalar::new(1.0f32, dtype));
 
-        TttTileOutputs {
+        let outputs = TttTileOutputs {
             output,
             weight_out: state.tensors.weight.clone(),
             bias_out: state.tensors.bias.clone(),
@@ -193,39 +194,16 @@ impl FusedKernel<9, 10> for TttPtrStreamingKernel {
             grad_l_wrt_Z1: state.tensors.grad_l_wrt_Z1.clone(),
             x_hat_ln: state.tensors.x_hat_ln.clone(),
             std_ln: state.tensors.std_ln.clone(),
-        }
+        };
+        (outputs, saved)
     }
-}
 
-/// Marker for ptr streaming backward - uses no saved outputs
-pub struct PtrStreamingBackward;
-
-impl CanBackwardNoOut<9, 10> for TttPtrStreamingKernel {
-    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
-        _inputs: TttInputs<CubeTensor<R>>,
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        _saved: TttInputs<CubeTensor<R>>,
         _grad_outputs: TttTileOutputs<CubeTensor<R>>,
         _config: PtrStreamingKernelConfig,
     ) -> TttInputs<CubeTensor<R>> {
         panic!("Ptr streaming kernel backward not yet implemented")
-    }
-}
-
-impl<K, const N: usize, const M: usize> ttt_kernels::kernel::BackwardImpl<K, N, M>
-    for PtrStreamingBackward
-where
-    K: CanBackwardNoOut<N, M>,
-{
-    fn should_save_outputs() -> bool {
-        false
-    }
-
-    fn call<R: CubeRuntime, F: FloatElement>(
-        inputs: K::Inputs<CubeTensor<R>>,
-        _outputs: Option<K::Outputs<CubeTensor<R>>>,
-        grad_outputs: K::Outputs<CubeTensor<R>>,
-        config: K::Config,
-    ) -> K::Inputs<CubeTensor<R>> {
-        K::backward_no_out::<R, F>(inputs, grad_outputs, config)
     }
 }
 
@@ -276,7 +254,8 @@ pub fn fused_ttt_ptr_streaming_forward<B: FusedTttBackend>(
     let config =
         PtrStreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
 
-    let outputs = <B as FusedKernelBackend<TttPtrStreamingKernel, 9, 10>>::forward(inputs, config);
+    let (outputs, _saved) =
+        <B as FusedKernelBackend<TttPtrStreamingKernel, 9, 10, 9>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),

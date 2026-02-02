@@ -11,12 +11,12 @@ use ttt_kernels::{FusedKernelBackend, GeluBwdKernel, GeluTanhKernel, gelu_bwd, g
 
 /// Backend trait that supports GELU kernels.
 pub trait GeluBackend:
-    Backend + FusedKernelBackend<GeluTanhKernel, 1, 1> + FusedKernelBackend<GeluBwdKernel, 1, 1>
+    Backend + FusedKernelBackend<GeluTanhKernel, 1, 1, 1> + FusedKernelBackend<GeluBwdKernel, 1, 1, 1>
 {
 }
 
 impl<B> GeluBackend for B where
-    B: Backend + FusedKernelBackend<GeluTanhKernel, 1, 1> + FusedKernelBackend<GeluBwdKernel, 1, 1>
+    B: Backend + FusedKernelBackend<GeluTanhKernel, 1, 1, 1> + FusedKernelBackend<GeluBwdKernel, 1, 1, 1>
 {
 }
 

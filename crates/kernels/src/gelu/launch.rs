@@ -14,7 +14,7 @@ use crate::{
         launch_gelu_bwd_forward, launch_gelu_tanh, launch_gelu_tanh_backward,
         launch_gelu_tanh_backward_backward,
     },
-    kernel::{CanBackwardNoOut, FusedKernel, UseNoOut},
+    kernel::FusedKernel,
 };
 
 fn empty_like<R: CubeRuntime, F: FloatElement>(template: &CubeTensor<R>) -> CubeTensor<R> {
@@ -26,32 +26,31 @@ fn empty_like<R: CubeRuntime, F: FloatElement>(template: &CubeTensor<R>) -> Cube
 }
 
 // GELU tanh forward kernel
-impl FusedKernel<1, 1> for GeluTanhKernel {
+// SavedState = Inputs (just need input for backward)
+impl FusedKernel<1, 1, 1> for GeluTanhKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
-    type Backward = UseNoOut;
+    type SavedState<T: Debug + Clone + Send> = GeluInput<T>;
     type Config = ();
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
         _config: (),
-    ) -> GeluOutput<CubeTensor<R>> {
+    ) -> (GeluOutput<CubeTensor<R>>, GeluInput<CubeTensor<R>>) {
         let input = into_contiguous(inputs.input);
         let output = empty_like::<R, F>(&input);
 
         launch_gelu_tanh::<R, F>(&input.client, input.as_handle_ref(), output.as_handle_ref());
 
-        GeluOutput { output }
+        (GeluOutput { output }, GeluInput { input })
     }
-}
 
-impl CanBackwardNoOut<1, 1> for GeluTanhKernel {
-    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
-        inputs: GeluInput<CubeTensor<R>>,
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        saved: GeluInput<CubeTensor<R>>,
         grad_outputs: GeluOutput<CubeTensor<R>>,
         _config: (),
     ) -> GeluInput<CubeTensor<R>> {
-        let input = into_contiguous(inputs.input);
+        let input = into_contiguous(saved.input);
         let grad_output = into_contiguous(grad_outputs.output);
         let grad_input = empty_like::<R, F>(&input);
 
@@ -67,16 +66,16 @@ impl CanBackwardNoOut<1, 1> for GeluTanhKernel {
 }
 
 // GELU backward derivative forward kernel (computes gelu'(x))
-impl FusedKernel<1, 1> for GeluBwdKernel {
+impl FusedKernel<1, 1, 1> for GeluBwdKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
-    type Backward = UseNoOut;
+    type SavedState<T: Debug + Clone + Send> = GeluInput<T>;
     type Config = ();
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
         _config: (),
-    ) -> GeluOutput<CubeTensor<R>> {
+    ) -> (GeluOutput<CubeTensor<R>>, GeluInput<CubeTensor<R>>) {
         let input = into_contiguous(inputs.input);
         let output = empty_like::<R, F>(&input);
 
@@ -86,17 +85,15 @@ impl FusedKernel<1, 1> for GeluBwdKernel {
             output.as_handle_ref(),
         );
 
-        GeluOutput { output }
+        (GeluOutput { output }, GeluInput { input })
     }
-}
 
-impl CanBackwardNoOut<1, 1> for GeluBwdKernel {
-    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
-        inputs: GeluInput<CubeTensor<R>>,
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        saved: GeluInput<CubeTensor<R>>,
         grad_outputs: GeluOutput<CubeTensor<R>>,
         _config: (),
     ) -> GeluInput<CubeTensor<R>> {
-        let input = into_contiguous(inputs.input);
+        let input = into_contiguous(saved.input);
         let grad_output = into_contiguous(grad_outputs.output);
         let grad_input = empty_like::<R, F>(&input);
 
@@ -112,16 +109,16 @@ impl CanBackwardNoOut<1, 1> for GeluBwdKernel {
 }
 
 // GELU tanh backward kernel (for second-order gradients)
-impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
+impl FusedKernel<1, 1, 1> for GeluTanhBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
-    type Backward = UseNoOut;
+    type SavedState<T: Debug + Clone + Send> = GeluInput<T>;
     type Config = ();
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
         _config: (),
-    ) -> GeluOutput<CubeTensor<R>> {
+    ) -> (GeluOutput<CubeTensor<R>>, GeluInput<CubeTensor<R>>) {
         // This is gelu_bwd(x) - same as GeluBwdKernel
         let input = into_contiguous(inputs.input);
         let output = empty_like::<R, F>(&input);
@@ -132,17 +129,15 @@ impl FusedKernel<1, 1> for GeluTanhBackwardKernel {
             output.as_handle_ref(),
         );
 
-        GeluOutput { output }
+        (GeluOutput { output }, GeluInput { input })
     }
-}
 
-impl CanBackwardNoOut<1, 1> for GeluTanhBackwardKernel {
-    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
-        inputs: GeluInput<CubeTensor<R>>,
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        saved: GeluInput<CubeTensor<R>>,
         grad_outputs: GeluOutput<CubeTensor<R>>,
         _config: (),
     ) -> GeluInput<CubeTensor<R>> {
-        let input = into_contiguous(inputs.input);
+        let input = into_contiguous(saved.input);
         let grad_output = into_contiguous(grad_outputs.output);
         let grad_input = empty_like::<R, F>(&input);
 
@@ -158,16 +153,16 @@ impl CanBackwardNoOut<1, 1> for GeluTanhBackwardKernel {
 }
 
 // GELU tanh backward-backward kernel (third-order not supported)
-impl FusedKernel<1, 1> for GeluTanhBackwardBackwardKernel {
+impl FusedKernel<1, 1, 1> for GeluTanhBackwardBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
-    type Backward = UseNoOut;
+    type SavedState<T: Debug + Clone + Send> = GeluInput<T>;
     type Config = ();
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: GeluInput<CubeTensor<R>>,
         _config: (),
-    ) -> GeluOutput<CubeTensor<R>> {
+    ) -> (GeluOutput<CubeTensor<R>>, GeluInput<CubeTensor<R>>) {
         let input = into_contiguous(inputs.input);
         let output = empty_like::<R, F>(&input);
 
@@ -180,13 +175,11 @@ impl FusedKernel<1, 1> for GeluTanhBackwardBackwardKernel {
             output.as_handle_ref(),
         );
 
-        GeluOutput { output }
+        (GeluOutput { output }, GeluInput { input })
     }
-}
 
-impl CanBackwardNoOut<1, 1> for GeluTanhBackwardBackwardKernel {
-    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
-        _inputs: GeluInput<CubeTensor<R>>,
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        _saved: GeluInput<CubeTensor<R>>,
         _grad_outputs: GeluOutput<CubeTensor<R>>,
         _config: (),
     ) -> GeluInput<CubeTensor<R>> {

@@ -10,11 +10,7 @@ use burn_cubecl::{
     tensor::CubeTensor,
 };
 use cubek::reduce::components::instructions::ReduceOperationConfig;
-use ttt_kernels::{
-    TensorBundle,
-    kernel::{CanBackwardNoOut, FusedKernel, UseNoOut},
-    util::empty_like,
-};
+use ttt_kernels::{TensorBundle, kernel::FusedKernel, util::empty_like};
 
 use super::{backward::launch_fused_ttt_backward, forward::launch_fused_ttt_forward};
 use crate::{
@@ -159,26 +155,26 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
     }
 }
 
-impl FusedKernel<9, 3> for TttKernel {
+impl FusedKernel<9, 3, 9> for TttKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
-    type Backward = UseNoOut;
+    type SavedState<T: Debug + Clone + Send> = TttInputs<T>;
     type Config = f32;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         epsilon: f32,
-    ) -> TttOutputs<CubeTensor<R>> {
-        forward::<R, F>(inputs, epsilon)
+    ) -> (TttOutputs<CubeTensor<R>>, TttInputs<CubeTensor<R>>) {
+        let saved = inputs.clone();
+        let outputs = forward::<R, F>(inputs, epsilon);
+        (outputs, saved)
     }
-}
 
-impl CanBackwardNoOut<9, 3> for TttKernel {
-    fn backward_no_out<R: CubeRuntime, F: FloatElement>(
-        inputs: TttInputs<CubeTensor<R>>,
+    fn backward_launch<R: CubeRuntime, F: FloatElement>(
+        saved: TttInputs<CubeTensor<R>>,
         grad_outputs: TttOutputs<CubeTensor<R>>,
         epsilon: f32,
     ) -> TttInputs<CubeTensor<R>> {
-        backward::<R, F>(inputs, grad_outputs, epsilon)
+        backward::<R, F>(saved, grad_outputs, epsilon)
     }
 }

@@ -15,6 +15,6 @@ pub use kernel::{
     fused_ttt_streaming_kernel,
 };
 pub use wrapper::{
-    FusedTileStreamingState, StreamHandle, StreamingBackward, StreamingKernelConfig,
-    TttStreamingKernel, fused_ttt_streaming_forward, next_stream_id,
+    FusedTileStreamingState, StreamHandle, StreamingKernelConfig, TttStreamingKernel,
+    fused_ttt_streaming_forward, next_stream_id,
 };

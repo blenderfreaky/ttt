@@ -1,9 +1,9 @@
 use burn::tensor::{Tensor, TensorPrimitive};
 use ttt_kernels::FusedKernelBackend;
 
-use crate::ttt::{TttInputs, TttKernel, TttOutputs};
+use crate::ttt::{TttInputs, TttKernel};
 
-pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3>>(
+pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3, 9>>(
     xq: Tensor<B, 4>,
     xk: Tensor<B, 4>,
     xv: Tensor<B, 4>,
@@ -27,7 +27,7 @@ pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3>>(
         ln_bias: ln_bias.into_primitive().tensor(),
     };
 
-    let outputs: TttOutputs<_> = B::forward(inputs, epsilon);
+    let (outputs, _saved) = B::forward(inputs, epsilon);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),
