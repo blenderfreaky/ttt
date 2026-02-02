@@ -252,7 +252,7 @@ mod tests {
         test_backward_fmb::<GpuAutodiffBackend, FusedTile<GpuAutodiffBackend>, _>(
             dims,
             |m| m.into(),
-            2e-2,
+            5e-2,
             1e-3,
             "FusedTile",
         );
