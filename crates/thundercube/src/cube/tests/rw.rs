@@ -59,12 +59,12 @@ fn rw_rt_via_st<F: Float, TileM: Dim, TileN: Dim, RtM: Dim, RtN: Dim>(
     sync_cube();
 
     // St -> Rt (cooperative)
-    load_rt_from_st::<F, RtM, RtN, TileM, TileN>(&st, &mut rt);
+    load_rt_from_st::<F, F, RtM, RtN, TileM, TileN>(&st, &mut rt);
 
     sync_cube();
 
     // Rt -> St (cooperative)
-    store_rt_to_st::<F, RtM, RtN, TileM, TileN>(&rt, &mut st);
+    store_rt_to_st::<F, F, RtM, RtN, TileM, TileN>(&rt, &mut st);
 
     sync_cube();
 
@@ -91,7 +91,7 @@ fn rw_rt_store_direct<F: Float, TileM: Dim, TileN: Dim, RtM: Dim, RtN: Dim>(
     sync_cube();
 
     // St -> Rt (cooperative)
-    load_rt_from_st::<F, RtM, RtN, TileM, TileN>(&st, &mut rt);
+    load_rt_from_st::<F, F, RtM, RtN, TileM, TileN>(&st, &mut rt);
 
     sync_cube();
 
@@ -118,7 +118,7 @@ fn rw_rt_store_direct_batched<F: Float, TileM: Dim, TileN: Dim, RtM: Dim, RtN: D
     sync_cube();
 
     // St -> Rt (cooperative)
-    load_rt_from_st::<F, RtM, RtN, TileM, TileN>(&st, &mut rt);
+    load_rt_from_st::<F, F, RtM, RtN, TileM, TileN>(&st, &mut rt);
 
     sync_cube();
 
@@ -145,7 +145,7 @@ fn rw_rt_load_direct<F: Float, TileM: Dim, TileN: Dim, RtM: Dim, RtN: Dim>(
     sync_cube();
 
     // Rt -> St (cooperative)
-    store_rt_to_st::<F, RtM, RtN, TileM, TileN>(&rt, &mut st);
+    store_rt_to_st::<F, F, RtM, RtN, TileM, TileN>(&rt, &mut st);
 
     sync_cube();
 
@@ -172,7 +172,7 @@ fn rw_rt_load_direct_batched<F: Float, TileM: Dim, TileN: Dim, RtM: Dim, RtN: Di
     sync_cube();
 
     // Rt -> St (cooperative)
-    store_rt_to_st::<F, RtM, RtN, TileM, TileN>(&rt, &mut st);
+    store_rt_to_st::<F, F, RtM, RtN, TileM, TileN>(&rt, &mut st);
 
     sync_cube();
 
@@ -255,7 +255,7 @@ fn mma_then_store_via_st<F: Float, M: Dim, K: Dim, N: Dim, RtM: Dim, RtN: Dim>(
     sync_cube();
 
     // Store via St
-    store_rt_to_st::<F, RtM, RtN, M, N>(&c_rt, &mut c_st);
+    store_rt_to_st::<F, F, RtM, RtN, M, N>(&c_rt, &mut c_st);
 
     sync_cube();
 
