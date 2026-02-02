@@ -6,6 +6,9 @@ mod host;
 mod kernel;
 mod wrapper;
 
+#[cfg(test)]
+mod tests;
+
 pub use host::{
     PtrStreamingConfig, PtrStreamingTensors, TttPtrStreamingState,
     get_or_create_ptr_streaming_state, remove_ptr_streaming_state,

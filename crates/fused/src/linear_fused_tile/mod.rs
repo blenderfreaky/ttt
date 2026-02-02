@@ -185,6 +185,9 @@ pub mod layer_norm;
 pub mod streaming;
 mod wrapper;
 
+#[cfg(test)]
+mod tests;
+
 pub use api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 pub use forward::{
     ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_kernel,

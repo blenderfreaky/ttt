@@ -9,6 +9,9 @@ mod forward;
 mod launch;
 mod wrapper;
 
+#[cfg(test)]
+mod tests;
+
 pub use api::fused_ttt_forward;
 pub use backward::launch_fused_ttt_backward;
 pub use forward::{fused_ttt_forward_kernel, launch_fused_ttt_forward};

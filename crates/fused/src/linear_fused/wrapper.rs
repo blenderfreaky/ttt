@@ -65,38 +65,3 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, NaiveKernel
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use ttt_core::{
-        GpuAutodiffBackend, GpuBackend, TTTLinearState,
-        test_utils::{TestDims, test_backward_fmb, test_fmb},
-    };
-
-    use crate::FusedLinear;
-
-    #[test]
-    fn test_fused_ttt_linear_vs_reference() {
-        let dims = TestDims::new(2, 4, 16, 8);
-        test_fmb::<GpuBackend, FusedLinear<GpuBackend>, TTTLinearState<GpuBackend>, _>(
-            dims,
-            |m| m.into(),
-            1e-3,
-            1e-4,
-            "Fused",
-        );
-    }
-
-    // TODO: investigate
-    #[test]
-    #[ignore]
-    fn test_fused_backward_gradients_vs_reference() {
-        let dims = TestDims::new(2, 2, 8, 4);
-        test_backward_fmb::<GpuAutodiffBackend, FusedLinear<GpuAutodiffBackend>, _>(
-            dims,
-            |m| m.into(),
-            2e-2,
-            1e-3,
-            "Fused",
-        );
-    }
-}

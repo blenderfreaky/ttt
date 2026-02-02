@@ -6,6 +6,9 @@ mod host;
 mod kernel;
 mod wrapper;
 
+#[cfg(test)]
+mod tests;
+
 pub use host::{
     StreamingBufferTensors, StreamingConfig, TttStreamingState, get_or_create_streaming_state,
     remove_streaming_state, remove_streaming_state_by_id, shutdown_streaming_state,

@@ -759,30 +759,3 @@ impl<R: CubeRuntime + 'static> Drop for TttPtrStreamingState<R> {
 // but the underlying handles are Send
 unsafe impl<R: CubeRuntime> Send for TttPtrStreamingState<R> {}
 
-#[cfg(all(test, feature = "rocm"))]
-mod tests {
-    use ttt_core::{
-        GpuBackend,
-        test_utils::{TestDims, test_fwd},
-    };
-
-    use super::super::FusedTilePtrStreamingState;
-    use crate::FusedPtrStreaming;
-
-    // TODO: ptr streaming kernel has issues, needs investigation
-    #[test]
-    #[ignore]
-    fn test_ptr_streaming_vs_ttt_linear() {
-        let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX
-            .lock()
-            .unwrap();
-
-        let dims = TestDims::multi_stage(2, 2, 32, 8, 2).with_iterations(2);
-        test_fwd::<
-            GpuBackend,
-            FusedPtrStreaming<GpuBackend>,
-            FusedTilePtrStreamingState<GpuBackend>,
-            _,
-        >(dims, |m| m.into(), 0.5, 0.4, "PtrStreaming");
-    }
-}
