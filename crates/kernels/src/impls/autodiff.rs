@@ -1,10 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::fmt::Debug;
 
 use burn::{
     backend::autodiff::{
@@ -36,48 +30,21 @@ impl<B: burn_backend::Backend> Backward<B, 0> for NoOpBackward {
     }
 }
 
-/// Shared state for backward ops across all outputs of a fused kernel.
-/// This allows us to run the backward kernel only once, collecting all
-/// output gradients before computing input gradients.
-struct SharedBackwardState<B: burn_backend::Backend, const N: usize, const M: usize, const S: usize>
-{
-    saved_state: [B::FloatTensorPrimitive; S],
-    output_shapes: [(Vec<usize>, FloatDType); M],
-    input_node_ids: [Option<NodeId>; N],
-
-    /// Bitmask of which outputs are tracked (will receive backward calls)
-    outputs_tracked: AtomicUsize,
-    /// Bitmask of which outputs have had backward called
-    backwards_called: AtomicUsize,
-    /// Collected grad_outputs from each output's backward call
-    grad_outputs: Mutex<[Option<B::FloatTensorPrimitive>; M]>,
-}
-
-impl<B: burn_backend::Backend, const N: usize, const M: usize, const S: usize> Debug
-    for SharedBackwardState<B, N, M, S>
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SharedBackwardState")
-            .field("outputs_tracked", &self.outputs_tracked)
-            .field("backwards_called", &self.backwards_called)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Backward op that shares state across all outputs.
-/// Only runs the backward kernel once when all tracked outputs have contributed gradients.
+/// Backward op for a specific output index.
+/// Each output is tracked separately and runs the backward kernel independently.
+/// Gradients to inputs accumulate via burn's gradient system.
 #[derive(Debug)]
-struct SharedOutputBackwardOp<K, const N: usize, const M: usize, const S: usize> {
+struct OutputBackwardOp<K, const N: usize, const M: usize, const S: usize> {
     output_idx: usize,
     _marker: std::marker::PhantomData<K>,
 }
 
 impl<K, const N: usize, const M: usize, const S: usize, B> Backward<B, N>
-    for SharedOutputBackwardOp<K, N, M, S>
+    for OutputBackwardOp<K, N, M, S>
 where
     K: FusedKernel,
     B: FusedKernelBackend<K>,
-    B::FloatTensorPrimitive: Send + Clone,
+    B::FloatTensorPrimitive: Send,
     K::SavedState<B::FloatTensorPrimitive>:
         TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; S]>,
     K::Outputs<B::FloatTensorPrimitive>:
@@ -85,7 +52,12 @@ where
     K::Inputs<B::FloatTensorPrimitive>:
         TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; N]>,
 {
-    type State = (Arc<SharedBackwardState<B, N, M, S>>, K::Config);
+    type State = (
+        K::SavedState<B::FloatTensorPrimitive>, // Saved state from forward
+        [(Vec<usize>, FloatDType); M],          // Output shapes for creating zeros
+        [Option<NodeId>; N],                    // Input node IDs for gradient registration
+        K::Config,                              // Saved config
+    );
 
     fn backward(
         self,
@@ -94,58 +66,41 @@ where
         _checkpointer: &mut Checkpointer,
     ) {
         let grad_output = grads.consume::<B>(&ops.node);
-        let (shared, config) = ops.state;
+        let (saved_state, output_shapes, input_node_ids, config) = ops.state;
 
-        // Store this output's gradient
+        // Get device from one of the saved tensors
+        let saved_arr = saved_state.into_array();
+        let device = B::float_device(&saved_arr[0]);
+
+        // Build grad_outputs with this gradient at the appropriate index, zeros elsewhere
+        let grad_outputs_arr: [B::FloatTensorPrimitive; M] = std::array::from_fn(|i| {
+            if i == self.output_idx {
+                grad_output.clone()
+            } else {
+                B::float_zeros(
+                    Shape::from(output_shapes[i].0.clone()),
+                    &device,
+                    output_shapes[i].1,
+                )
+            }
+        });
+        let grad_outputs = K::Outputs::from_array(grad_outputs_arr);
+
+        // Reconstruct saved state from the array
+        let saved_state = K::SavedState::from_array(saved_arr);
+
+        let grad_inputs = B::backward(saved_state, grad_outputs, config);
+
+        // Register gradients for all tracked parents (accumulates if called multiple times)
+        for (grad, node_id) in grad_inputs
+            .into_array()
+            .into_iter()
+            .zip(input_node_ids.iter())
         {
-            let mut grad_outputs = shared.grad_outputs.lock().unwrap();
-            grad_outputs[self.output_idx] = Some(grad_output);
-        }
-
-        // Mark this output as processed and check if we're the last one
-        let old_called = shared
-            .backwards_called
-            .fetch_or(1 << self.output_idx, Ordering::AcqRel);
-        let new_called = old_called | (1 << self.output_idx);
-        let tracked = shared.outputs_tracked.load(Ordering::Acquire);
-
-        if new_called == tracked {
-            // All tracked outputs have contributed their gradients.
-            // Run backward kernel once with the combined gradients.
-            let grad_outputs_lock = shared.grad_outputs.lock().unwrap();
-
-            // Get device from saved state
-            let device = B::float_device(&shared.saved_state[0]);
-
-            let grad_outputs_arr: [B::FloatTensorPrimitive; M] = std::array::from_fn(|i| {
-                grad_outputs_lock[i].clone().unwrap_or_else(|| {
-                    B::float_zeros(
-                        Shape::from(shared.output_shapes[i].0.clone()),
-                        &device,
-                        shared.output_shapes[i].1,
-                    )
-                })
-            });
-            drop(grad_outputs_lock);
-
-            let grad_outputs_bundle = K::Outputs::from_array(grad_outputs_arr);
-            let saved_state = K::SavedState::from_array(shared.saved_state.clone());
-
-            let grad_inputs = B::backward(saved_state, grad_outputs_bundle, config);
-
-            // Register gradients for all tracked parents
-            for (grad, node_id) in grad_inputs
-                .into_array()
-                .into_iter()
-                .zip(shared.input_node_ids.iter())
-            {
-                if let Some(id) = node_id {
-                    grads.register::<B>(*id, grad);
-                }
+            if let Some(id) = node_id {
+                grads.register::<B>(*id, grad);
             }
         }
-        // Else: still waiting for other outputs to contribute their gradients.
-        // The last output to call backward will register all input gradients.
     }
 }
 
@@ -195,19 +150,12 @@ where
             )
         });
 
-        // Create shared state for all output backward ops
-        let shared_state = Arc::new(SharedBackwardState::<B, N, M, S> {
-            saved_state: saved_primitives.clone(),
-            output_shapes,
-            input_node_ids,
-            outputs_tracked: AtomicUsize::new(0),
-            backwards_called: AtomicUsize::new(0),
-            grad_outputs: Mutex::new(std::array::from_fn(|_| None)),
-        });
+        // Save state for backward
+        let saved_state_for_backward = K::SavedState::from_array(saved_primitives.clone());
 
-        // Track each output, sharing the backward state
+        // Track each output separately
         let tracked_outputs: [FloatTensor<Self>; M] = std::array::from_fn(|idx| {
-            let backward_op = SharedOutputBackwardOp::<K, N, M, S> {
+            let backward_op = OutputBackwardOp::<K, N, M, S> {
                 output_idx: idx,
                 _marker: std::marker::PhantomData,
             };
@@ -217,16 +165,15 @@ where
                 .compute_bound()
                 .stateful()
             {
-                OpsKind::Tracked(prep) => {
-                    // Mark this output as tracked (will receive backward call)
-                    shared_state
-                        .outputs_tracked
-                        .fetch_or(1 << idx, Ordering::Release);
-                    prep.finish(
-                        (shared_state.clone(), config.clone()),
-                        output_primitives[idx].clone(),
-                    )
-                }
+                OpsKind::Tracked(prep) => prep.finish(
+                    (
+                        saved_state_for_backward.clone(),
+                        output_shapes.clone(),
+                        input_node_ids,
+                        config.clone(),
+                    ),
+                    output_primitives[idx].clone(),
+                ),
                 OpsKind::UnTracked(prep) => prep.finish(output_primitives[idx].clone()),
             }
         });
