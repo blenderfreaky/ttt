@@ -52,35 +52,68 @@ pub struct BenchConfig {
 }
 
 impl BenchConfig {
-    pub const fn tiny() -> Self {
+    pub const fn m12() -> Self {
         Self {
-            name: "tiny",
-            hidden_size: 64,
-            num_heads: 2,
-            num_layers: 1,
-            mlp_intermediate: 128,
-            mini_batch_size: 32, // 32×32@32 tile config
+            name: "12m",
+            hidden_size: 256,
+            num_heads: 4,
+            num_layers: 4,
+            mlp_intermediate: 1024,
+            mini_batch_size: 32,
         }
     }
 
-    pub const fn small() -> Self {
+    pub const fn m60() -> Self {
         Self {
-            name: "small",
-            hidden_size: 128,
-            num_heads: 4,
-            num_layers: 2,
-            mlp_intermediate: 256,
+            name: "60m",
+            hidden_size: 512,
+            num_heads: 8,
+            num_layers: 6,
+            mlp_intermediate: 2048,
             mini_batch_size: 16,
         }
     }
 
-    pub const fn medium() -> Self {
+    pub const fn m125() -> Self {
         Self {
-            name: "medium",
-            hidden_size: 256,
-            num_heads: 8,
-            num_layers: 4,
-            mlp_intermediate: 512,
+            name: "125m",
+            hidden_size: 768,
+            num_heads: 12,
+            num_layers: 12,
+            mlp_intermediate: 3072,
+            mini_batch_size: 16,
+        }
+    }
+
+    pub const fn m350() -> Self {
+        Self {
+            name: "350m",
+            hidden_size: 1024,
+            num_heads: 16,
+            num_layers: 24,
+            mlp_intermediate: 4096,
+            mini_batch_size: 16,
+        }
+    }
+
+    pub const fn m760() -> Self {
+        Self {
+            name: "760m",
+            hidden_size: 1280,
+            num_heads: 20,
+            num_layers: 36,
+            mlp_intermediate: 5120,
+            mini_batch_size: 16,
+        }
+    }
+
+    pub const fn m1500() -> Self {
+        Self {
+            name: "1500m",
+            hidden_size: 1600,
+            num_heads: 25,
+            num_layers: 48,
+            mlp_intermediate: 6400,
             mini_batch_size: 16,
         }
     }
@@ -416,9 +449,12 @@ const BENCH_PARAMS: &[RuntimeParams] = &[
 ];
 
 const BENCH_CONFIGS: &[BenchConfig] = &[
-    BenchConfig::tiny(),
-    // BenchConfig::small(),
-    // BenchConfig::medium(),
+    // BenchConfig::m12(),
+    // BenchConfig::m60(),
+    BenchConfig::m125(),
+    // BenchConfig::m350(),
+    // BenchConfig::m760(),
+    // BenchConfig::m1500(),
 ];
 
 /// Generate a single benchmark entry function
