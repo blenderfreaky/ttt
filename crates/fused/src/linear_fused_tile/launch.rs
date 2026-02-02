@@ -314,13 +314,10 @@ pub fn forward<R: CubeRuntime, F: FloatElement>(
 pub struct TttSavedTensors<T> {
     pub xq: T,
     pub xk: T,
-    pub xv: T,
     pub weight_init: T,
-    pub bias_init: T,
     pub token_eta: T,
     pub ttt_lr_eta: T,
     pub ln_weight: T,
-    pub ln_bias: T,
 }
 
 /// Gradient inputs for backward pass.
@@ -350,10 +347,10 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
     let shape = saved.xq.shape.clone();
     let [batch_size, num_heads, seq_len, head_dim] = shape.dims();
 
-    // Allocate output gradient tensors
+    // Allocate output gradient tensors (xk, xv have same shape as xq)
     let grad_xq = empty_like::<R, F>(&saved.xq, shape.clone());
-    let grad_xk = empty_like::<R, F>(&saved.xk, shape.clone());
-    let grad_xv = empty_like::<R, F>(&saved.xv, shape.clone());
+    let grad_xk = empty_like::<R, F>(&saved.xq, shape.clone());
+    let grad_xv = empty_like::<R, F>(&saved.xq, shape.clone());
     let grad_ttt_lr_eta = empty_like::<R, F>(&saved.ttt_lr_eta, saved.ttt_lr_eta.shape.clone());
 
     // Parameter gradients for weight/bias need batch dimension (separate per cube)
@@ -361,7 +358,8 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         &saved.weight_init,
         [batch_size, num_heads, head_dim, head_dim],
     );
-    let grad_bias_batched = empty_like::<R, F>(&saved.bias_init, [batch_size, num_heads, head_dim]);
+    let grad_bias_batched =
+        empty_like::<R, F>(&saved.weight_init, [batch_size, num_heads, head_dim]);
 
     // LN gradients are unbatched (atomic accumulation across batches)
     // Must be zero-initialized since kernel uses atomic adds
@@ -373,8 +371,8 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         f32::dtype(),
     );
     let grad_ln_bias = zeros_client::<R>(
-        saved.ln_bias.client.clone(),
-        saved.ln_bias.device.clone(),
+        saved.ln_weight.client.clone(),
+        saved.ln_weight.device.clone(),
         [num_heads, head_dim].into(),
         f32::dtype(),
     );
@@ -543,10 +541,10 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
     );
     let num_stages = seq_len / mini_batch_len;
 
-    // Allocate output gradient tensors
+    // Allocate output gradient tensors (xk, xv have same shape as xq)
     let grad_xq = empty_like::<R, F>(&saved.xq, shape.clone());
-    let grad_xk = empty_like::<R, F>(&saved.xk, shape.clone());
-    let grad_xv = empty_like::<R, F>(&saved.xv, shape.clone());
+    let grad_xk = empty_like::<R, F>(&saved.xq, shape.clone());
+    let grad_xv = empty_like::<R, F>(&saved.xq, shape.clone());
     let grad_ttt_lr_eta = empty_like::<R, F>(&saved.ttt_lr_eta, saved.ttt_lr_eta.shape.clone());
 
     // Parameter gradients for weight/bias need batch dimension (separate per cube)
@@ -554,7 +552,8 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         &saved.weight_init,
         [batch_size, num_heads, head_dim, head_dim],
     );
-    let grad_bias_batched = empty_like::<R, F>(&saved.bias_init, [batch_size, num_heads, head_dim]);
+    let grad_bias_batched =
+        empty_like::<R, F>(&saved.weight_init, [batch_size, num_heads, head_dim]);
 
     // LN gradients are unbatched (atomic accumulation across batches)
     // Must be zero-initialized since kernel uses atomic adds
@@ -566,8 +565,8 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         f32::dtype(),
     );
     let grad_ln_bias = zeros_client::<R>(
-        saved.ln_bias.client.clone(),
-        saved.ln_bias.device.clone(),
+        saved.ln_weight.client.clone(),
+        saved.ln_weight.device.clone(),
         [num_heads, head_dim].into(),
         f32::dtype(),
     );
@@ -828,13 +827,10 @@ impl CanBackwardWithOut<9, 10> for TttTileKernel {
         let saved = TttSavedTensors {
             xq: inputs.xq,
             xk: inputs.xk,
-            xv: inputs.xv,
             weight_init: inputs.weight,
-            bias_init: inputs.bias,
             token_eta: inputs.token_eta,
             ttt_lr_eta: inputs.ttt_lr_eta,
             ln_weight: inputs.ln_weight,
-            ln_bias: inputs.ln_bias,
         };
 
         // Note: outputs.weight_out is not passed to backward kernel (not needed)
@@ -921,13 +917,10 @@ impl CanBackwardWithOut<9, 10> for TttTileMultiKernel {
         let saved = TttSavedTensors {
             xq: inputs.xq,
             xk: inputs.xk,
-            xv: inputs.xv,
             weight_init: inputs.weight,
-            bias_init: inputs.bias,
             token_eta: inputs.token_eta,
             ttt_lr_eta: inputs.ttt_lr_eta,
             ln_weight: inputs.ln_weight,
-            ln_bias: inputs.ln_bias,
         };
 
         let fwd = FwdIntermediates {
