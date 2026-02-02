@@ -155,7 +155,7 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
     }
 }
 
-impl FusedKernel<9, 3, 9> for TttKernel {
+impl FusedKernel for TttKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
     type SavedState<T: Debug + Clone + Send> = TttInputs<T>;

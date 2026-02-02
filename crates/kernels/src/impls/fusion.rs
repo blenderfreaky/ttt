@@ -41,25 +41,24 @@ pub trait HasClient<B: FusionBackend> {
     fn client(&self) -> &GlobalFusionClient<B::FusionRuntime>;
 }
 
-impl<K, const N: usize, const M: usize, const S: usize, B> FusedKernelBackend<K, N, M, S>
-    for Fusion<B>
+impl<K, B> FusedKernelBackend<K> for Fusion<B>
 where
-    K: FusedKernel<N, M, S>,
-    B: FusedKernelBackend<K, N, M, S> + FusionBackend,
+    K: FusedKernel,
+    B: FusedKernelBackend<K> + FusionBackend,
     K::Inputs<FloatTensor<Self>>: HasClient<B>,
     K::SavedState<FloatTensor<Self>>: HasClient<B>,
     // Mapped<U> -> K::Inputs/Outputs/SavedState<U> conversions
-    <K::Inputs<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>, N>>::Mapped<FloatTensor<B>>:
+    <K::Inputs<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>>>::Mapped<FloatTensor<B>>:
         Into<K::Inputs<FloatTensor<B>>>,
-    <K::Outputs<FloatTensor<B>> as TensorBundle<FloatTensor<B>, M>>::Mapped<FloatTensor<Self>>:
+    <K::Outputs<FloatTensor<B>> as TensorBundle<FloatTensor<B>>>::Mapped<FloatTensor<Self>>:
         Into<K::Outputs<FloatTensor<Self>>>,
-    <K::Outputs<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>, M>>::Mapped<FloatTensor<B>>:
+    <K::Outputs<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>>>::Mapped<FloatTensor<B>>:
         Into<K::Outputs<FloatTensor<B>>>,
-    <K::SavedState<FloatTensor<B>> as TensorBundle<FloatTensor<B>, S>>::Mapped<FloatTensor<Self>>:
+    <K::SavedState<FloatTensor<B>> as TensorBundle<FloatTensor<B>>>::Mapped<FloatTensor<Self>>:
         Into<K::SavedState<FloatTensor<Self>>>,
-    <K::SavedState<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>, S>>::Mapped<FloatTensor<B>>:
+    <K::SavedState<FloatTensor<Self>> as TensorBundle<FloatTensor<Self>>>::Mapped<FloatTensor<B>>:
         Into<K::SavedState<FloatTensor<B>>>,
-    <K::Inputs<FloatTensor<B>> as TensorBundle<FloatTensor<B>, N>>::Mapped<FloatTensor<Self>>:
+    <K::Inputs<FloatTensor<B>> as TensorBundle<FloatTensor<B>>>::Mapped<FloatTensor<Self>>:
         Into<K::Inputs<FloatTensor<Self>>>,
 {
     fn forward(

@@ -1,26 +1,20 @@
 use std::fmt::Debug;
 
-/// Generic trait for tensor bundles with a fixed number of elements.
+/// Generic trait for tensor bundles.
 ///
-/// `N` is the number of tensors in the bundle.
-pub trait TensorBundle<T: Debug + Clone + Send, const N: usize>:
-    Sized + Clone + Send + Debug
-{
-    type Mapped<U: Debug + Clone + Send>: TensorBundle<U, N>;
+/// The array size is encoded in the `Array` associated type rather than
+/// as a const generic, allowing traits like `FusedKernel` to avoid const generics.
+pub trait TensorBundle<T: Debug + Clone + Send>: Sized + Clone + Send + Debug {
+    /// The array type for this bundle, e.g. `[T; 9]` for a 9-tensor bundle.
+    type Array;
+    /// The bundle type with a different element type.
+    type Mapped<U: Debug + Clone + Send>: TensorBundle<U, Array = Self::ArrayMapped<U>>;
+    /// The array type with a different element type.
+    type ArrayMapped<U>;
 
     fn map<U: Debug + Clone + Send>(self, f: impl FnMut(T) -> U) -> Self::Mapped<U>;
-    fn into_array(self) -> [T; N];
-    fn from_array(arr: [T; N]) -> Self;
-
-    fn try_map<U: Debug + Clone + Send, E: Debug + Clone + Send>(
-        self,
-        f: impl FnMut(T) -> Result<U, E>,
-    ) -> Result<Self::Mapped<U>, E> {
-        let arr = self.into_array();
-        let results: Result<Vec<U>, E> = arr.into_iter().map(f).collect();
-        let results_arr: [U; N] = results?.try_into().ok().unwrap();
-        Ok(Self::Mapped::from_array(results_arr))
-    }
+    fn into_array(self) -> Self::Array;
+    fn from_array(arr: Self::Array) -> Self;
 }
 
 /// Declares a tensor bundle struct with automatic TensorBundle implementation.
@@ -36,7 +30,7 @@ pub trait TensorBundle<T: Debug + Clone + Send, const N: usize>:
 ///
 /// This generates:
 /// - The struct with all fields public
-/// - `TensorBundle<T, N>` impl with map, into_array, from_array
+/// - `TensorBundle<T>` impl with map, into_array, from_array
 /// - `HasClient` impl for Fusion (using first field)
 /// - `<scalar>()` builder methods for each scalar
 #[macro_export]
@@ -56,8 +50,10 @@ macro_rules! tensor_bundle {
             )*)?
         }
 
-        impl<T: std::fmt::Debug + Clone + Send> $crate::TensorBundle<T, $n> for $name<T> {
+        impl<T: std::fmt::Debug + Clone + Send> $crate::TensorBundle<T> for $name<T> {
+            type Array = [T; $n];
             type Mapped<U: std::fmt::Debug + Clone + Send> = $name<U>;
+            type ArrayMapped<U> = [U; $n];
 
             fn map<U: std::fmt::Debug + Clone + Send>(self, mut f: impl FnMut(T) -> U) -> $name<U> {
                 $name {

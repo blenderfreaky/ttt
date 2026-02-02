@@ -789,7 +789,7 @@ pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
     )
 }
 
-impl FusedKernel<9, 3, 13> for TttTileKernel {
+impl FusedKernel for TttTileKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
     type SavedState<T: Debug + Clone + Send> = TttSavedState<T>;
@@ -877,7 +877,7 @@ impl FusedKernel<9, 3, 13> for TttTileKernel {
     }
 }
 
-impl FusedKernel<9, 3, 13> for TttTileMultiKernel {
+impl FusedKernel for TttTileMultiKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
     type SavedState<T: Debug + Clone + Send> = TttSavedState<T>;

@@ -115,7 +115,7 @@ impl PtrStreamingKernelConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct TttPtrStreamingKernel;
 
-impl FusedKernel<9, 10, 9> for TttPtrStreamingKernel {
+impl FusedKernel for TttPtrStreamingKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttTileOutputs<T>;
     type SavedState<T: Debug + Clone + Send> = TttInputs<T>;
@@ -255,7 +255,7 @@ pub fn fused_ttt_ptr_streaming_forward<B: FusedTttBackend>(
         PtrStreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
 
     let (outputs, _saved) =
-        <B as FusedKernelBackend<TttPtrStreamingKernel, 9, 10, 9>>::forward(inputs, config);
+        <B as FusedKernelBackend<TttPtrStreamingKernel>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),

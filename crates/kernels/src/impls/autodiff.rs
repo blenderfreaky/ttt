@@ -42,9 +42,15 @@ struct OutputBackwardOp<K, const N: usize, const M: usize, const S: usize> {
 impl<K, const N: usize, const M: usize, const S: usize, B> Backward<B, N>
     for OutputBackwardOp<K, N, M, S>
 where
-    K: FusedKernel<N, M, S>,
-    B: FusedKernelBackend<K, N, M, S>,
+    K: FusedKernel,
+    B: FusedKernelBackend<K>,
     B::FloatTensorPrimitive: Send,
+    K::SavedState<B::FloatTensorPrimitive>:
+        TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; S]>,
+    K::Outputs<B::FloatTensorPrimitive>:
+        TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; M]>,
+    K::Inputs<B::FloatTensorPrimitive>:
+        TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; N]>,
 {
     type State = (
         K::SavedState<B::FloatTensorPrimitive>, // Saved state from forward
@@ -98,13 +104,26 @@ where
     }
 }
 
-impl<K, const N: usize, const M: usize, const S: usize, B, C> FusedKernelBackend<K, N, M, S>
+impl<K, B, C, const N: usize, const M: usize, const S: usize> FusedKernelBackend<K>
     for Autodiff<B, C>
 where
-    K: FusedKernel<N, M, S>,
-    B: FusedKernelBackend<K, N, M, S>,
+    K: FusedKernel,
+    B: FusedKernelBackend<K>,
     C: CheckpointStrategy,
     B::FloatTensorPrimitive: Clone,
+    // Extract N, M, S from the Array associated types
+    K::Inputs<B::FloatTensorPrimitive>:
+        TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; N]>,
+    K::Outputs<B::FloatTensorPrimitive>:
+        TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; M]>,
+    K::SavedState<B::FloatTensorPrimitive>:
+        TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; S]>,
+    K::Inputs<FloatTensor<Self>>:
+        TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; N]>,
+    K::Outputs<FloatTensor<Self>>:
+        TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; M]>,
+    K::SavedState<FloatTensor<Self>>:
+        TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; S]>,
 {
     fn forward(
         inputs: K::Inputs<FloatTensor<Self>>,

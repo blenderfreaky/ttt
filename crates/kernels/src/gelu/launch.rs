@@ -27,7 +27,7 @@ fn empty_like<R: CubeRuntime, F: FloatElement>(template: &CubeTensor<R>) -> Cube
 
 // GELU tanh forward kernel
 // SavedState = Inputs (just need input for backward)
-impl FusedKernel<1, 1, 1> for GeluTanhKernel {
+impl FusedKernel for GeluTanhKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
     type SavedState<T: Debug + Clone + Send> = GeluInput<T>;
@@ -66,7 +66,7 @@ impl FusedKernel<1, 1, 1> for GeluTanhKernel {
 }
 
 // GELU backward derivative forward kernel (computes gelu'(x))
-impl FusedKernel<1, 1, 1> for GeluBwdKernel {
+impl FusedKernel for GeluBwdKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
     type SavedState<T: Debug + Clone + Send> = GeluInput<T>;
@@ -109,7 +109,7 @@ impl FusedKernel<1, 1, 1> for GeluBwdKernel {
 }
 
 // GELU tanh backward kernel (for second-order gradients)
-impl FusedKernel<1, 1, 1> for GeluTanhBackwardKernel {
+impl FusedKernel for GeluTanhBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
     type SavedState<T: Debug + Clone + Send> = GeluInput<T>;
@@ -153,7 +153,7 @@ impl FusedKernel<1, 1, 1> for GeluTanhBackwardKernel {
 }
 
 // GELU tanh backward-backward kernel (third-order not supported)
-impl FusedKernel<1, 1, 1> for GeluTanhBackwardBackwardKernel {
+impl FusedKernel for GeluTanhBackwardBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
     type SavedState<T: Debug + Clone + Send> = GeluInput<T>;

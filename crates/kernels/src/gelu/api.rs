@@ -4,7 +4,7 @@ use super::types::{GeluBwdKernel, GeluInput, GeluTanhKernel};
 use crate::kernel::FusedKernelBackend;
 
 /// GELU activation with tanh approximation.
-pub fn gelu_tanh<B: FusedKernelBackend<GeluTanhKernel, 1, 1, 1>, const D: usize>(
+pub fn gelu_tanh<B: FusedKernelBackend<GeluTanhKernel>, const D: usize>(
     input: Tensor<B, D>,
 ) -> Tensor<B, D> {
     let inputs = GeluInput {
@@ -16,7 +16,7 @@ pub fn gelu_tanh<B: FusedKernelBackend<GeluTanhKernel, 1, 1, 1>, const D: usize>
 
 /// Computes d/dx gelu(x) directly.
 /// Used in TTT MLP forward pass for gradient computation.
-pub fn gelu_bwd<B: FusedKernelBackend<GeluBwdKernel, 1, 1, 1>, const D: usize>(
+pub fn gelu_bwd<B: FusedKernelBackend<GeluBwdKernel>, const D: usize>(
     input: Tensor<B, D>,
 ) -> Tensor<B, D> {
     let inputs = GeluInput {

@@ -45,7 +45,7 @@ pub fn fused_ttt_tile_forward<B: FusedTttBackend>(
         ln_bias: ln_bias.into_primitive().tensor(),
     };
 
-    let (outputs, _saved) = <B as FusedKernelBackend<TttTileKernel, 9, 3, 13>>::forward(inputs, config);
+    let (outputs, _saved) = <B as FusedKernelBackend<TttTileKernel>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),
@@ -79,7 +79,7 @@ pub fn fused_ttt_tile_forward_multi<B: FusedTttBackend>(
         ln_bias: ln_bias.into_primitive().tensor(),
     };
 
-    let (outputs, _saved) = <B as FusedKernelBackend<TttTileMultiKernel, 9, 3, 13>>::forward(inputs, config);
+    let (outputs, _saved) = <B as FusedKernelBackend<TttTileMultiKernel>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),

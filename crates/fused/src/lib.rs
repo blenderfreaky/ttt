@@ -103,47 +103,47 @@ pub type FusedPtrStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, PtrStreamingKer
 /// Unified backend trait for fused TTT kernels.
 #[cfg(feature = "rocm")]
 pub trait FusedTttBackend:
-    FusedKernelBackend<TttKernel, 9, 3, 9>
-    + FusedKernelBackend<TttTileKernel, 9, 3, 13>
-    + FusedKernelBackend<TttTileMultiKernel, 9, 3, 13>
-    + FusedKernelBackend<TttStreamingKernel, 9, 10, 9>
-    + FusedKernelBackend<TttPtrStreamingKernel, 9, 10, 9>
-    + FusedKernelBackend<GeluTanhKernel, 1, 1, 1>
-    + FusedKernelBackend<GeluBwdKernel, 1, 1, 1>
+    FusedKernelBackend<TttKernel>
+    + FusedKernelBackend<TttTileKernel>
+    + FusedKernelBackend<TttTileMultiKernel>
+    + FusedKernelBackend<TttStreamingKernel>
+    + FusedKernelBackend<TttPtrStreamingKernel>
+    + FusedKernelBackend<GeluTanhKernel>
+    + FusedKernelBackend<GeluBwdKernel>
 {
 }
 
 #[cfg(not(feature = "rocm"))]
 pub trait FusedTttBackend:
-    FusedKernelBackend<TttKernel, 9, 3, 9>
-    + FusedKernelBackend<TttTileKernel, 9, 3, 13>
-    + FusedKernelBackend<TttTileMultiKernel, 9, 3, 13>
-    + FusedKernelBackend<GeluTanhKernel, 1, 1, 1>
-    + FusedKernelBackend<GeluBwdKernel, 1, 1, 1>
+    FusedKernelBackend<TttKernel>
+    + FusedKernelBackend<TttTileKernel>
+    + FusedKernelBackend<TttTileMultiKernel>
+    + FusedKernelBackend<GeluTanhKernel>
+    + FusedKernelBackend<GeluBwdKernel>
 {
 }
 
 #[cfg(feature = "rocm")]
 impl<B> FusedTttBackend for B where
     B: Backend
-        + FusedKernelBackend<TttKernel, 9, 3, 9>
-        + FusedKernelBackend<TttTileKernel, 9, 3, 13>
-        + FusedKernelBackend<TttTileMultiKernel, 9, 3, 13>
-        + FusedKernelBackend<TttStreamingKernel, 9, 10, 9>
-        + FusedKernelBackend<TttPtrStreamingKernel, 9, 10, 9>
-        + FusedKernelBackend<GeluTanhKernel, 1, 1, 1>
-        + FusedKernelBackend<GeluBwdKernel, 1, 1, 1>
+        + FusedKernelBackend<TttKernel>
+        + FusedKernelBackend<TttTileKernel>
+        + FusedKernelBackend<TttTileMultiKernel>
+        + FusedKernelBackend<TttStreamingKernel>
+        + FusedKernelBackend<TttPtrStreamingKernel>
+        + FusedKernelBackend<GeluTanhKernel>
+        + FusedKernelBackend<GeluBwdKernel>
 {
 }
 
 #[cfg(not(feature = "rocm"))]
 impl<B> FusedTttBackend for B where
     B: Backend
-        + FusedKernelBackend<TttKernel, 9, 3, 9>
-        + FusedKernelBackend<TttTileKernel, 9, 3, 13>
-        + FusedKernelBackend<TttTileMultiKernel, 9, 3, 13>
-        + FusedKernelBackend<GeluTanhKernel, 1, 1, 1>
-        + FusedKernelBackend<GeluBwdKernel, 1, 1, 1>
+        + FusedKernelBackend<TttKernel>
+        + FusedKernelBackend<TttTileKernel>
+        + FusedKernelBackend<TttTileMultiKernel>
+        + FusedKernelBackend<GeluTanhKernel>
+        + FusedKernelBackend<GeluBwdKernel>
 {
 }
 

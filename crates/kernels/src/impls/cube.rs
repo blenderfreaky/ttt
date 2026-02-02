@@ -3,10 +3,9 @@ use burn_cubecl::{BoolElement, CubeBackend, CubeRuntime, FloatElement, IntElemen
 
 use crate::kernel::{FusedKernel, FusedKernelBackend};
 
-impl<K, const N: usize, const M: usize, const S: usize, R, F, I, BT> FusedKernelBackend<K, N, M, S>
-    for CubeBackend<R, F, I, BT>
+impl<K, R, F, I, BT> FusedKernelBackend<K> for CubeBackend<R, F, I, BT>
 where
-    K: FusedKernel<N, M, S>,
+    K: FusedKernel,
     R: CubeRuntime,
     F: FloatElement,
     I: IntElement,

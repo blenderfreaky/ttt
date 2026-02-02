@@ -3,7 +3,7 @@ use ttt_kernels::FusedKernelBackend;
 
 use crate::ttt::{TttInputs, TttKernel};
 
-pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel, 9, 3, 9>>(
+pub fn fused_ttt_forward<B: FusedKernelBackend<TttKernel>>(
     xq: Tensor<B, 4>,
     xk: Tensor<B, 4>,
     xv: Tensor<B, 4>,

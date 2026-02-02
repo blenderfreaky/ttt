@@ -11,18 +11,13 @@ use crate::bundle::TensorBundle;
 
 /// Trait for defining fused CubeCL kernels.
 ///
-/// `N` is the number of inputs, `M` is the number of outputs, `S` is the number
-/// of tensors in the saved state for backward.
-///
-/// The kernel defines what state needs to be saved for backward via `SavedState`.
-/// This can include a subset of inputs and/or forward intermediates.
-pub trait FusedKernel<const N: usize, const M: usize, const S: usize>:
-    'static + Send + Debug + Clone
-{
-    type Inputs<T: Debug + Clone + Send>: TensorBundle<T, N>;
-    type Outputs<T: Debug + Clone + Send>: TensorBundle<T, M>;
+/// The tensor counts are encoded in the `Array` associated types of each bundle,
+/// avoiding const generics on the trait itself.
+pub trait FusedKernel: 'static + Send + Debug + Clone {
+    type Inputs<T: Debug + Clone + Send>: TensorBundle<T>;
+    type Outputs<T: Debug + Clone + Send>: TensorBundle<T>;
     /// State saved from forward pass for backward. Only includes what's actually needed.
-    type SavedState<T: Debug + Clone + Send>: TensorBundle<T, S>;
+    type SavedState<T: Debug + Clone + Send>: TensorBundle<T>;
     type Config: Debug + Clone + Send;
 
     /// Run the forward pass, returning outputs and the state needed for backward.
@@ -45,10 +40,7 @@ pub trait FusedKernel<const N: usize, const M: usize, const S: usize>:
 
 /// Backend trait for a specific kernel.
 /// Allows different backends to implement it.
-pub trait FusedKernelBackend<K, const N: usize, const M: usize, const S: usize>: Backend
-where
-    K: FusedKernel<N, M, S>,
-{
+pub trait FusedKernelBackend<K: FusedKernel>: Backend {
     fn forward(
         inputs: K::Inputs<FloatTensor<Self>>,
         config: K::Config,
