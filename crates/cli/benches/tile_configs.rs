@@ -5,6 +5,8 @@
 //! Usage:
 //!   cargo bench --features rocm --bench tile_configs
 
+use std::time::Duration;
+
 use burn::tensor::Tensor;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use ttt_core::{GpuAutodiffBackend, GpuBackend};
@@ -66,12 +68,12 @@ fn bench_forward<B: FusedTttBackend>(
         device,
     );
     let ln_weight = Tensor::<B, 2>::random(
-        [head_dim],
+        [num_heads, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
     );
     let ln_bias = Tensor::<B, 2>::random(
-        [head_dim],
+        [num_heads, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
     );
@@ -98,6 +100,7 @@ fn bench_forward<B: FusedTttBackend>(
 
     let group_name = format!("fwd_{}x{}", mini_batch_len, head_dim);
     let mut group = c.benchmark_group(&group_name);
+    group.measurement_time(Duration::from_secs(10));
     group.throughput(Throughput::Elements(
         (batch_size * num_heads * mini_batch_len * head_dim) as u64,
     ));
@@ -177,13 +180,13 @@ fn bench_backward(
     )
     .require_grad();
     let ln_weight = Tensor::<GpuAutodiffBackend, 2>::random(
-        [head_dim],
+        [num_heads, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
     )
     .require_grad();
     let ln_bias = Tensor::<GpuAutodiffBackend, 2>::random(
-        [head_dim],
+        [num_heads, head_dim],
         burn::tensor::Distribution::Normal(0.0, 1.0),
         device,
     )
@@ -214,6 +217,7 @@ fn bench_backward(
 
     let group_name = format!("bwd_{}x{}", mini_batch_len, head_dim);
     let mut group = c.benchmark_group(&group_name);
+    group.measurement_time(Duration::from_secs(10));
     group.throughput(Throughput::Elements(
         (batch_size * num_heads * mini_batch_len * head_dim) as u64,
     ));
@@ -249,27 +253,13 @@ fn bench_tile_configs(c: &mut Criterion) {
     let thread_counts = [4, 8, 16, 32, 64, 128, 256];
 
     for (mini_batch_len, head_dim) in tile_sizes {
-        println!("\nTesting tile {}x{}", mini_batch_len, head_dim);
         for threads in thread_counts {
-            if threads > mini_batch_len * head_dim / 4 {
+            if !FusedTttConfig::is_config_supported(mini_batch_len, head_dim, threads) {
                 continue;
             }
 
-            print!("  fwd threads={:3}... ", threads);
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                bench_forward::<GpuBackend>(c, mini_batch_len, head_dim, threads, &device);
-            })) {
-                Ok(_) => println!("✓"),
-                Err(_) => println!("✗ (panicked)"),
-            }
-
-            print!("  bwd threads={:3}... ", threads);
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                bench_backward(c, mini_batch_len, head_dim, threads, &device);
-            })) {
-                Ok(_) => println!("✓"),
-                Err(_) => println!("✗ (panicked)"),
-            }
+            bench_forward::<GpuBackend>(c, mini_batch_len, head_dim, threads, &device);
+            bench_backward(c, mini_batch_len, head_dim, threads, &device);
         }
     }
 }

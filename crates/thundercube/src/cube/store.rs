@@ -4,7 +4,7 @@ use crate::{
     cube::swizzle,
     prelude::*,
     tiles::Dim,
-    util::{transpose_4, write_into_line},
+    util::{cast_line, transpose_4, write_into_line},
 };
 
 /// Cooperatively stores per-thread register tiles into shared memory.
@@ -13,15 +13,20 @@ use crate::{
 /// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
 /// layout for bank-conflict-free access.
 ///
+/// Supports heterogeneous types: FRt (register) can differ from FSt (shared memory).
+/// When types differ, values are cast element-wise. When equal, cast optimizes away.
+///
 /// Threads with UNIT_POS >= num_sub_tiles are safely skipped.
 ///
 /// # Type Parameters
+/// * `FRt` - Register tile element type
+/// * `FSt` - Shared memory tile element type
 /// * `R, C` - Register tile dimensions
 /// * `SR, SC` - Shared memory tile dimensions (must be multiples of R, C)
 #[cube]
-pub fn store_rt_to_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
-    rt_mem: &Rt<F, R, C>,
-    s_mem: &mut St<F, SR, SC>,
+pub fn store_rt_to_st<FRt: Float, FSt: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
+    rt_mem: &Rt<FRt, R, C>,
+    s_mem: &mut St<FSt, SR, SC>,
 ) {
     let tiles_per_row = SC::VALUE / C::VALUE;
     let tiles_per_col = SR::VALUE / R::VALUE;
@@ -52,7 +57,7 @@ pub fn store_rt_to_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
                 let s_idx = s_row * s_stride + phys_col;
 
                 let rt_idx = row * num_c_vecs + cv;
-                s_mem.data[s_idx] = rt_mem.data[rt_idx];
+                s_mem.data[s_idx] = cast_line(rt_mem.data[rt_idx]);
             }
         }
     }

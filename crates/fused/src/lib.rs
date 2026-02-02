@@ -278,4 +278,16 @@ impl FusedTttConfig {
     pub fn epsilon(&self) -> f32 {
         self.epsilon_scaled as f32 * EPSILON_SCALE_INV
     }
+
+    /// Check if this tile configuration is supported by the fused kernel.
+    #[must_use]
+    pub fn is_supported(&self) -> bool {
+        Self::is_config_supported(self.mini_batch_len, self.head_dim, self.threads)
+    }
+
+    /// Check if a (mini_batch_len, head_dim, threads) configuration is supported.
+    #[must_use]
+    pub fn is_config_supported(mini_batch_len: usize, head_dim: usize, threads: usize) -> bool {
+        linear_fused_tile::is_tile_config_supported(mini_batch_len, head_dim, threads)
+    }
 }

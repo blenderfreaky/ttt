@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::time::Duration;
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use pollster::block_on;
@@ -177,7 +179,9 @@ fn bench_st_mul_col<F: Float, R: Dim, C: Dim>(
     store_st_direct(&st, output, 0, 0, 0);
 }
 
-/// Macro for RT row/col broadcast benchmarks
+/// Macro for RT row/col broadcast benchmarks.
+/// Uses single thread (CubeDim::new_1d(1)) to isolate register-tile operation performance
+/// without shared memory or thread coordination overhead.
 macro_rules! bench_rt_broadcast_impl {
     ($c:expr, $group_name:expr, $kernel:ident, $rows:ty, $cols:ty, $vec_dim:ty) => {{
         let client = client();
@@ -280,6 +284,8 @@ macro_rules! bench_st_broadcast_impl {
 
 fn bench_rt_row_broadcast(c: &mut Criterion) {
     let mut group = c.benchmark_group("rt_row_broadcast");
+    // Ensure we measure kernel performance, not launch overhead (BENCH_ITERS handles this internally)
+    group.measurement_time(Duration::from_secs(10));
 
     // add_row
     bench_rt_broadcast_impl!(group, "add_row", bench_rt_add_row, D4, D4, D4);
@@ -298,6 +304,7 @@ fn bench_rt_row_broadcast(c: &mut Criterion) {
 
 fn bench_rt_col_broadcast(c: &mut Criterion) {
     let mut group = c.benchmark_group("rt_col_broadcast");
+    group.measurement_time(Duration::from_secs(10));
 
     // add_col
     bench_rt_broadcast_impl!(group, "add_col", bench_rt_add_col, D4, D4, D4);
@@ -316,6 +323,7 @@ fn bench_rt_col_broadcast(c: &mut Criterion) {
 
 fn bench_st_row_broadcast(c: &mut Criterion) {
     let mut group = c.benchmark_group("st_row_broadcast");
+    group.measurement_time(Duration::from_secs(10));
 
     // add_row
     bench_st_broadcast_impl!(group, "add_row", bench_st_add_row, D8, D8, D8, 4);
@@ -332,6 +340,7 @@ fn bench_st_row_broadcast(c: &mut Criterion) {
 
 fn bench_st_col_broadcast(c: &mut Criterion) {
     let mut group = c.benchmark_group("st_col_broadcast");
+    group.measurement_time(Duration::from_secs(10));
 
     // add_col
     bench_st_broadcast_impl!(group, "add_col", bench_st_add_col, D8, D8, D8, 4);
@@ -348,6 +357,7 @@ fn bench_st_col_broadcast(c: &mut Criterion) {
 
 fn bench_asymmetric_broadcast(c: &mut Criterion) {
     let mut group = c.benchmark_group("asymmetric_broadcast");
+    group.measurement_time(Duration::from_secs(10));
 
     // Test asymmetric tiles for row broadcast
     bench_rt_broadcast_impl!(group, "add_row", bench_rt_add_row, D8, D16, D16);

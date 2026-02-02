@@ -1,6 +1,6 @@
 use cubecl::prelude::*;
 
-use crate::{cube::swizzle, prelude::*, tiles::Dim, util::transpose_4};
+use crate::{cube::swizzle, prelude::*, tiles::Dim, util::{cast_line, transpose_4}};
 
 /// Cooperatively loads from shared memory into per-thread register tiles.
 ///
@@ -8,15 +8,20 @@ use crate::{cube::swizzle, prelude::*, tiles::Dim, util::transpose_4};
 /// Threads are mapped to sub-tiles in row-major order. The St uses a swizzled
 /// layout for bank-conflict-free access.
 ///
+/// Supports heterogeneous types: FSt can differ from FRt.
+/// When types differ, values are cast element-wise. When equal, cast optimizes away.
+///
 /// Threads with UNIT_POS >= num_sub_tiles are safely skipped (Rt unchanged).
 ///
 /// # Type Parameters
+/// * `FSt` - Shared memory tile element type
+/// * `FRt` - Register tile element type
 /// * `R, C` - Register tile dimensions
 /// * `SR, SC` - Shared memory tile dimensions (must be multiples of R, C)
 #[cube]
-pub fn load_rt_from_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
-    s_mem: &St<F, SR, SC>,
-    rt_mem: &mut Rt<F, R, C>,
+pub fn load_rt_from_st<FSt: Float, FRt: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
+    s_mem: &St<FSt, SR, SC>,
+    rt_mem: &mut Rt<FRt, R, C>,
 ) {
     let tiles_per_row = SC::VALUE / C::VALUE;
     let tiles_per_col = SR::VALUE / R::VALUE;
@@ -47,7 +52,7 @@ pub fn load_rt_from_st<F: Float, R: Dim, C: Dim, SR: Dim, SC: Dim>(
                 let s_idx = s_row * s_stride + phys_col;
 
                 let rt_idx = row * num_c_vecs + cv;
-                rt_mem.data[rt_idx] = s_mem.data[s_idx];
+                rt_mem.data[rt_idx] = cast_line(s_mem.data[s_idx]);
             }
         }
     }

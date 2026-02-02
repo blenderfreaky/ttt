@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::time::Duration;
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use pollster::block_on;
@@ -161,7 +163,9 @@ fn bench_div<F: Float, R: Dim, C: Dim>(
     rt_a.copy_to_array(output);
 }
 
-/// Macro to run unary element-wise benchmarks
+/// Macro to run unary element-wise benchmarks.
+/// Uses single thread (CubeDim::new_1d(1)) to isolate register-tile operation performance
+/// without shared memory or thread coordination overhead.
 macro_rules! bench_unary_impl {
     ($c:expr, $group_name:expr, $kernel:ident, $rows:ty, $cols:ty) => {{
         let client = client();
@@ -248,6 +252,8 @@ macro_rules! bench_binary_impl {
 
 fn bench_unary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("unary_ops");
+    // Ensure we measure kernel performance, not launch overhead (BENCH_ITERS handles this internally)
+    group.measurement_time(Duration::from_secs(10));
 
     // exp
     bench_unary_impl!(group, "exp", bench_exp, D4, D4);
@@ -284,6 +290,7 @@ fn bench_unary_ops(c: &mut Criterion) {
 
 fn bench_binary_ops(c: &mut Criterion) {
     let mut group = c.benchmark_group("binary_ops");
+    group.measurement_time(Duration::from_secs(10));
 
     // add
     bench_binary_impl!(group, "add", bench_add, D4, D4);
@@ -308,6 +315,7 @@ fn bench_binary_ops(c: &mut Criterion) {
 
 fn bench_tile_size_scaling_unary(c: &mut Criterion) {
     let mut group = c.benchmark_group("unary_tile_scaling");
+    group.measurement_time(Duration::from_secs(10));
 
     // Compare gelu across tile sizes (most compute-intensive unary op)
     bench_unary_impl!(group, "gelu", bench_gelu, D4, D4);

@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::time::Duration;
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use pollster::block_on;
@@ -109,6 +111,7 @@ macro_rules! bench_mma_AtB_impl {
         let strides_c = get_strides(&shape_c);
 
         // FLOPs per iteration * number of iterations
+        // Note: Using Throughput::Elements to represent FLOPs (criterion reports as "elements/sec" = FLOP/s)
         let flops = 2 * tile_m * tile_k * tile_n * (BENCH_ITERS as usize);
         let param_str = format!("M{}K{}N{}_T{}", tile_m, tile_k, tile_n, thread_tile);
 
@@ -185,6 +188,7 @@ macro_rules! bench_mma_AB_impl {
         let strides_c = get_strides(&shape_c);
 
         // FLOPs per iteration * number of iterations
+        // Note: Using Throughput::Elements to represent FLOPs (criterion reports as "elements/sec" = FLOP/s)
         let flops = 2 * tile_m * tile_k * tile_n * (BENCH_ITERS as usize);
         let param_str = format!("M{}K{}N{}_T{}", tile_m, tile_k, tile_n, thread_tile);
 
@@ -233,6 +237,8 @@ macro_rules! bench_mma_AB_impl {
 
 fn bench_mma_AtB_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("mma_AtB");
+    // Ensure we measure kernel performance, not launch overhead (BENCH_ITERS handles this internally)
+    group.measurement_time(Duration::from_secs(10));
 
     // Small tiles (4x4)
     bench_mma_AtB_impl!(group, "mma_AtB", D4, D4, D4, D4);
@@ -260,6 +266,7 @@ fn bench_mma_AtB_tile_sizes(c: &mut Criterion) {
 
 fn bench_mma_AB_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("mma_AB");
+    group.measurement_time(Duration::from_secs(10));
 
     // Small tiles
     bench_mma_AB_impl!(group, "mma_AB", D4, D4, D4, D4);
@@ -287,6 +294,7 @@ fn bench_mma_AB_tile_sizes(c: &mut Criterion) {
 
 fn bench_k_dimension_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("mma_K_scaling");
+    group.measurement_time(Duration::from_secs(10));
 
     // Test how K dimension affects performance with fixed M=N=16
     bench_mma_AtB_impl!(group, "mma_AtB_K", D16, D4, D16, D4);
@@ -299,6 +307,7 @@ fn bench_k_dimension_scaling(c: &mut Criterion) {
 
 fn bench_tile_size_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("mma_tile_scaling");
+    group.measurement_time(Duration::from_secs(10));
 
     // Test square tiles with K=8 fixed
     bench_mma_AtB_impl!(group, "mma_AtB_scale", D4, D8, D4, D4);

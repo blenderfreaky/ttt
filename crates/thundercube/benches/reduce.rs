@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::time::Duration;
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use pollster::block_on;
@@ -143,7 +145,9 @@ fn bench_st_sum_cols_cube<F: Float, R: Dim, C: Dim>(
     }
 }
 
-/// Macro for RT reduction benchmarks
+/// Macro for RT reduction benchmarks.
+/// Uses single thread (CubeDim::new_1d(1)) to isolate register-tile operation performance
+/// without shared memory or thread coordination overhead.
 macro_rules! bench_rt_reduce_impl {
     ($c:expr, $group_name:expr, $kernel:ident, $rows:ty, $cols:ty, $out_dim:ty) => {{
         let client = client();
@@ -233,6 +237,8 @@ macro_rules! bench_st_reduce_impl {
 
 fn bench_rt_reductions(c: &mut Criterion) {
     let mut group = c.benchmark_group("rt_reductions");
+    // Ensure we measure kernel performance, not launch overhead (BENCH_ITERS handles this internally)
+    group.measurement_time(Duration::from_secs(10));
 
     // sum_rows (reduce across columns, output has R elements)
     bench_rt_reduce_impl!(group, "sum_rows", bench_rt_sum_rows, D4, D4, D4);
@@ -251,6 +257,7 @@ fn bench_rt_reductions(c: &mut Criterion) {
 
 fn bench_st_reductions(c: &mut Criterion) {
     let mut group = c.benchmark_group("st_reductions");
+    group.measurement_time(Duration::from_secs(10));
 
     // Note: ST reductions use plane_reduce, which requires threads >= PLANE_DIM (32)
     // sum_rows
@@ -272,6 +279,7 @@ fn bench_st_reductions(c: &mut Criterion) {
 
 fn bench_asymmetric_reductions(c: &mut Criterion) {
     let mut group = c.benchmark_group("asymmetric_reductions");
+    group.measurement_time(Duration::from_secs(10));
 
     // Asymmetric tiles for RT reductions
     // sum_rows: output dim = R
@@ -291,6 +299,7 @@ fn bench_asymmetric_reductions(c: &mut Criterion) {
 
 fn bench_thread_scaling_reductions(c: &mut Criterion) {
     let mut group = c.benchmark_group("reduction_thread_scaling");
+    group.measurement_time(Duration::from_secs(10));
 
     // Test 16x16 ST reduction with different thread counts
     for threads in [32u32, 64, 128] {

@@ -81,6 +81,22 @@ macro_rules! supported_tile_configs {
 // Note: macro_rules! macros are automatically available to submodules
 // defined after the macro in the same module
 
+/// Check if a tile configuration is supported.
+macro_rules! is_config_supported_inner {
+    (
+        $mini_batch_len:expr, $head_dim:expr, $threads:expr;
+        $(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?
+    ) => {
+        matches!(($mini_batch_len, $head_dim, $threads), $(($s, $h, $t))|*)
+    };
+}
+
+/// Check if a (mini_batch_len, head_dim, threads) tile configuration is supported.
+#[must_use]
+pub fn is_tile_config_supported(mini_batch_len: usize, head_dim: usize, threads: usize) -> bool {
+    supported_tile_configs!(is_config_supported_inner!(mini_batch_len, head_dim, threads;))
+}
+
 /// Unified tile dispatch macro.
 /// Args: kernel_ident, client, cube_count, mini_batch_len, head_dim, threads, ...rest
 /// The client is passed to CubeDim::new for inferring max supported dimensions.

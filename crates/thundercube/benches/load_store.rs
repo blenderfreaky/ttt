@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::time::Duration;
+
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use cubecl::prelude::*;
 use pollster::block_on;
@@ -141,6 +143,8 @@ macro_rules! bench_load_store_impl {
 
 fn bench_load_direct_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("load_direct");
+    // Ensure we measure kernel performance, not launch overhead (BENCH_ITERS handles this internally)
+    group.measurement_time(Duration::from_secs(10));
 
     // Square tiles
     bench_load_store_impl!(group, "load_direct", bench_load_direct, D4, D4, 1);
@@ -160,6 +164,7 @@ fn bench_load_direct_tile_sizes(c: &mut Criterion) {
 
 fn bench_load_transpose_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("load_transpose");
+    group.measurement_time(Duration::from_secs(10));
 
     bench_load_store_impl!(group, "load_transpose", bench_load_transpose, D4, D4, 1);
     bench_load_store_impl!(group, "load_transpose", bench_load_transpose, D8, D8, 4);
@@ -172,6 +177,7 @@ fn bench_load_transpose_tile_sizes(c: &mut Criterion) {
 
 fn bench_store_direct_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("store_direct");
+    group.measurement_time(Duration::from_secs(10));
 
     bench_load_store_impl!(group, "store_direct", bench_store_direct, D4, D4, 1);
     bench_load_store_impl!(group, "store_direct", bench_store_direct, D8, D8, 4);
@@ -184,6 +190,7 @@ fn bench_store_direct_tile_sizes(c: &mut Criterion) {
 
 fn bench_store_transpose_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("store_transpose");
+    group.measurement_time(Duration::from_secs(10));
 
     bench_load_store_impl!(group, "store_transpose", bench_store_transpose, D4, D4, 1);
     bench_load_store_impl!(group, "store_transpose", bench_store_transpose, D8, D8, 4);
@@ -217,6 +224,7 @@ fn bench_store_transpose_tile_sizes(c: &mut Criterion) {
 
 fn bench_round_trip_transpose_tile_sizes(c: &mut Criterion) {
     let mut group = c.benchmark_group("round_trip_transpose");
+    group.measurement_time(Duration::from_secs(10));
 
     bench_load_store_impl!(group, "round_trip", bench_round_trip_transpose, D4, D4, 1);
     bench_load_store_impl!(group, "round_trip", bench_round_trip_transpose, D8, D8, 4);
@@ -250,6 +258,7 @@ fn bench_round_trip_transpose_tile_sizes(c: &mut Criterion) {
 
 fn bench_thread_count_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("thread_scaling");
+    group.measurement_time(Duration::from_secs(10));
 
     // Test 32x32 tiles with different thread counts
     for num_threads in [1u32, 4, 16, 32, 64, 128] {
