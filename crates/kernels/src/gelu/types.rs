@@ -2,12 +2,12 @@ use crate::bundle::tensor_bundle;
 
 tensor_bundle! {
     /// Input for GELU forward kernel.
-    pub struct GeluInput[1] { input }
+    pub struct GeluInput { input }
 }
 
 tensor_bundle! {
     /// Output from GELU forward kernel.
-    pub struct GeluOutput[1] { output }
+    pub struct GeluOutput { output }
 }
 
 /// Marker type for the GELU tanh approximation forward kernel.

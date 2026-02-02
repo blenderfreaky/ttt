@@ -35,7 +35,7 @@ use crate::{
 tensor_bundle! {
     /// Saved state for backward pass.
     /// Contains 6 saved inputs + 7 forward intermediates = 13 tensors.
-    pub struct TttSavedState[13] {
+    pub struct TttSavedState {
         // Saved inputs (subset needed for backward)
         xq, xk, weight_init, token_eta, ttt_lr_eta, ln_weight,
         // Forward intermediates

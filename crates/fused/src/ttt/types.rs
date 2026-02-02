@@ -2,14 +2,14 @@ use ttt_kernels::tensor_bundle;
 
 tensor_bundle! {
     /// Input tensors for the TTT fused kernel.
-    pub struct TttInputs[9] {
+    pub struct TttInputs {
         xq, xk, xv, weight, bias, token_eta, ttt_lr_eta, ln_weight, ln_bias
     }
 }
 
 tensor_bundle! {
     /// Output tensors from the TTT fused kernel.
-    pub struct TttOutputs[3] { output, weight, bias }
+    pub struct TttOutputs { output, weight, bias }
 }
 
 /// Marker type for the TTT fused kernel.

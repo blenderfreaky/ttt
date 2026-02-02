@@ -17,13 +17,22 @@ pub trait TensorBundle<T: Debug + Clone + Send>: Sized + Clone + Send + Debug {
     fn from_array(arr: Self::Array) -> Self;
 }
 
+/// Helper macro to replace a token with an expression (used for counting).
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __replace_expr {
+    ($_t:tt, $sub:expr) => {
+        $sub
+    };
+}
+
 /// Declares a tensor bundle struct with automatic TensorBundle implementation.
 ///
 /// # Example
 /// ```ignore
 /// tensor_bundle! {
 ///     /// My bundle of tensors
-///     pub struct MyInputs[3] { xq, xk, xv }
+///     pub struct MyInputs { xq, xk, xv }
 ///     scalars { epsilon: f32 = 0.0 }
 /// }
 /// ```
@@ -37,7 +46,7 @@ pub trait TensorBundle<T: Debug + Clone + Send>: Sized + Clone + Send + Debug {
 macro_rules! tensor_bundle {
     (
         $(#[$meta:meta])*
-        $vis:vis struct $name:ident [$n:literal] { $first_field:ident $(, $field:ident)* $(,)? }
+        $vis:vis struct $name:ident { $first_field:ident $(, $field:ident)* $(,)? }
         $(scalars { $($scalar:ident : $scalar_ty:ty = $scalar_default:expr),* $(,)? })?
     ) => {
         $(#[$meta])*
@@ -51,9 +60,9 @@ macro_rules! tensor_bundle {
         }
 
         impl<T: std::fmt::Debug + Clone + Send> $crate::TensorBundle<T> for $name<T> {
-            type Array = [T; $n];
+            type Array = [T; 1usize $(+ $crate::__replace_expr!($field, 1usize))*];
             type Mapped<U: std::fmt::Debug + Clone + Send> = $name<U>;
-            type ArrayMapped<U> = [U; $n];
+            type ArrayMapped<U> = [U; 1usize $(+ $crate::__replace_expr!($field, 1usize))*];
 
             fn map<U: std::fmt::Debug + Clone + Send>(self, mut f: impl FnMut(T) -> U) -> $name<U> {
                 $name {
@@ -63,11 +72,11 @@ macro_rules! tensor_bundle {
                 }
             }
 
-            fn into_array(self) -> [T; $n] {
+            fn into_array(self) -> [T; 1usize $(+ $crate::__replace_expr!($field, 1usize))*] {
                 [self.$first_field $(, self.$field)*]
             }
 
-            fn from_array(arr: [T; $n]) -> Self {
+            fn from_array(arr: [T; 1usize $(+ $crate::__replace_expr!($field, 1usize))*]) -> Self {
                 let [$first_field $(, $field)*] = arr;
                 $name {
                     $first_field,
