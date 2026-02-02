@@ -3,30 +3,39 @@
 use cubecl::prelude::*;
 use thundercube::prelude::*;
 
-// Shared memory tiles (St)
-pub type CsFTile<P: ParamsTrait> = St<P::E, P::CS, P::F>;
-pub type FCsTile<P: ParamsTrait> = St<P::E, P::F, P::CS>;
-pub type CsCsTile<P: ParamsTrait> = St<P::E, P::CS, P::CS>;
-pub type FFTile<P: ParamsTrait> = St<P::E, P::F, P::F>;
+// Shared memory tiles (St) - use EVal (value type)
+pub type StCsF<P: ParamsTrait> = St<P::EVal, P::CS, P::F>;
+pub type StFCs<P: ParamsTrait> = St<P::EVal, P::F, P::CS>;
+pub type StCsCs<P: ParamsTrait> = St<P::EVal, P::CS, P::CS>;
+pub type StFF<P: ParamsTrait> = St<P::EVal, P::F, P::F>;
 
-// Shared memory vectors (Sv)
-pub type CsVec<P: ParamsTrait> = Sv<P::E, P::CS>;
-pub type FVec<P: ParamsTrait> = Sv<P::E, P::F>;
+// Shared memory vectors (Sv) - use EVal
+pub type SvCs<P: ParamsTrait> = Sv<P::EVal, P::CS>;
+pub type SvF<P: ParamsTrait> = Sv<P::EVal, P::F>;
 
-// Register tiles (Rt)
-pub type CsCsReg<P: ParamsTrait> = Rt<P::E, P::CS_Reg, P::CS_Reg>;
-pub type CsFReg<P: ParamsTrait> = Rt<P::E, P::CS_Reg, P::F_Reg>;
-pub type FFReg<P: ParamsTrait> = Rt<P::E, P::F_Reg, P::F_Reg>;
+// Register tiles (Rt) - use EAcc (accumulator type)
+pub type RtCsCs<P: ParamsTrait> = Rt<P::EAcc, P::CS_Reg, P::CS_Reg>;
+pub type RtCsF<P: ParamsTrait> = Rt<P::EAcc, P::CS_Reg, P::F_Reg>;
+pub type RtFF<P: ParamsTrait> = Rt<P::EAcc, P::F_Reg, P::F_Reg>;
 
-// Register vectors (Rv)
-pub type CsRegVec<P: ParamsTrait> = Rv<P::E, P::CS_Reg>;
-pub type FRegVec<P: ParamsTrait> = Rv<P::E, P::F_Reg>;
-pub type CsRegBig<P: ParamsTrait> = Rv<P::E, P::CS>;
-pub type FRegBig<P: ParamsTrait> = Rv<P::E, P::F>;
+// Register vectors (Rv) - thread-local size, EAcc
+pub type RvCs<P: ParamsTrait> = Rv<P::EAcc, P::CS_Reg>;
+pub type RvF<P: ParamsTrait> = Rv<P::EAcc, P::F_Reg>;
+
+// Register vectors broadcast (Rvb) - full size, EAcc for computation
+pub type RvbCsA<P: ParamsTrait> = Rv<P::EAcc, P::CS>;
+pub type RvbFA<P: ParamsTrait> = Rv<P::EAcc, P::F>;
+
+// Register vectors broadcast (Rvb) - full size, EVal for parameters
+pub type RvbCsV<P: ParamsTrait> = Rv<P::EVal, P::CS>;
+pub type RvbFV<P: ParamsTrait> = Rv<P::EVal, P::F>;
 
 #[cube]
 pub trait ParamsTrait: Send + Sync + 'static {
-    type E: Float;
+    /// Value type for shared memory and I/O (e.g., f16 for reduced memory)
+    type EVal: Float;
+    /// Accumulator type for registers (e.g., f32 for precision)
+    type EAcc: Float;
     type CS: Dim;
     type F: Dim;
 
@@ -34,77 +43,94 @@ pub trait ParamsTrait: Send + Sync + 'static {
     type F_Reg: Dim;
 
     // CubeCL won't let us do default impls
-    fn cs_f_tile() -> CsFTile<Self>;
-    fn f_cs_tile() -> FCsTile<Self>;
-    fn cs_cs_tile() -> CsCsTile<Self>;
-    fn cs_vec() -> CsVec<Self>;
-    fn f_f_tile() -> FFTile<Self>;
-    fn f_vec() -> FVec<Self>;
+    // Shared memory tiles
+    fn st_cs_f() -> StCsF<Self>;
+    fn st_f_cs() -> StFCs<Self>;
+    fn st_cs_cs() -> StCsCs<Self>;
+    fn st_ff() -> StFF<Self>;
 
-    fn cs_cs_reg() -> CsCsReg<Self>;
-    fn cs_f_reg() -> CsFReg<Self>;
-    fn f_f_reg() -> FFReg<Self>;
-    fn cs_reg() -> CsRegVec<Self>;
-    fn f_reg() -> FRegVec<Self>;
+    // Shared memory vectors
+    fn sv_cs() -> SvCs<Self>;
+    fn sv_f() -> SvF<Self>;
 
-    fn cs_reg_big() -> CsRegBig<Self>;
-    fn f_reg_big() -> FRegBig<Self>;
+    // Register tiles
+    fn rt_cs_cs() -> RtCsCs<Self>;
+    fn rt_cs_f() -> RtCsF<Self>;
+    fn rt_ff() -> RtFF<Self>;
+
+    // Register vectors (thread-local)
+    fn rv_cs() -> RvCs<Self>;
+    fn rv_f() -> RvF<Self>;
+
+    // Register vectors broadcast (full size)
+    fn rvb_cs_a() -> RvbCsA<Self>;
+    fn rvb_f_a() -> RvbFA<Self>;
+    fn rvb_cs_v() -> RvbCsV<Self>;
+    fn rvb_f_v() -> RvbFV<Self>;
 }
 
-pub struct Params<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> {
-    _phantom: std::marker::PhantomData<(E, CS, F, CS_Reg, F_Reg)>,
+pub struct Params<EVal: Float, EAcc: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> {
+    _phantom: std::marker::PhantomData<(EVal, EAcc, CS, F, CS_Reg, F_Reg)>,
 }
 
 #[cube]
-impl<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> ParamsTrait
-    for Params<E, CS, F, CS_Reg, F_Reg>
+impl<EVal: Float, EAcc: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> ParamsTrait
+    for Params<EVal, EAcc, CS, F, CS_Reg, F_Reg>
 {
-    type E = E;
+    type EVal = EVal;
+    type EAcc = EAcc;
     type CS = CS;
     type F = F;
     type CS_Reg = CS_Reg;
     type F_Reg = F_Reg;
 
-    fn cs_f_tile() -> CsFTile<Self> {
+    fn st_cs_f() -> StCsF<Self> {
         St::new()
     }
-    fn f_cs_tile() -> FCsTile<Self> {
+    fn st_f_cs() -> StFCs<Self> {
         St::new()
     }
-    fn cs_cs_tile() -> CsCsTile<Self> {
+    fn st_cs_cs() -> StCsCs<Self> {
         St::new()
     }
-    fn cs_vec() -> CsVec<Self> {
+    fn st_ff() -> StFF<Self> {
+        St::new()
+    }
+
+    fn sv_cs() -> SvCs<Self> {
         Sv::new()
     }
-    fn f_f_tile() -> FFTile<Self> {
-        St::new()
-    }
-    fn f_vec() -> FVec<Self> {
+    fn sv_f() -> SvF<Self> {
         Sv::new()
     }
 
-    fn cs_cs_reg() -> CsCsReg<Self> {
+    fn rt_cs_cs() -> RtCsCs<Self> {
         Rt::new()
     }
-    fn cs_f_reg() -> CsFReg<Self> {
+    fn rt_cs_f() -> RtCsF<Self> {
         Rt::new()
     }
-    fn f_f_reg() -> FFReg<Self> {
+    fn rt_ff() -> RtFF<Self> {
         Rt::new()
     }
 
-    fn cs_reg() -> CsRegVec<Self> {
+    fn rv_cs() -> RvCs<Self> {
         Rv::new()
     }
-    fn f_reg() -> FRegVec<Self> {
+    fn rv_f() -> RvF<Self> {
         Rv::new()
     }
 
-    fn cs_reg_big() -> CsRegBig<Self> {
+    fn rvb_cs_a() -> RvbCsA<Self> {
         Rv::new()
     }
-    fn f_reg_big() -> FRegBig<Self> {
+    fn rvb_f_a() -> RvbFA<Self> {
+        Rv::new()
+    }
+    fn rvb_cs_v() -> RvbCsV<Self> {
+        Rv::new()
+    }
+    fn rvb_f_v() -> RvbFV<Self> {
         Rv::new()
     }
 }
@@ -115,9 +141,9 @@ impl<E: Float, CS: Dim, F: Dim, CS_Reg: Dim, F_Reg: Dim> ParamsTrait
 /// When `transposed` is true: builds upper triangular η^T (triu)
 #[cube]
 pub fn build_eta_matrix<P: ParamsTrait>(
-    token_eta: &Tensor<Line<P::E>>,
-    ttt_lr_eta: &Tensor<Line<P::E>>,
-    output: &mut CsCsTile<P>,
+    token_eta: &Tensor<Line<P::EVal>>,
+    ttt_lr_eta: &Tensor<Line<P::EVal>>,
+    output: &mut StCsCs<P>,
     ttt_lr_eta_idx: usize,
     #[comptime] transposed: bool,
 ) {
@@ -125,11 +151,11 @@ pub fn build_eta_matrix<P: ParamsTrait>(
     let tile_row = (UNIT_POS as usize) / tiles_per_row;
     let tile_col = (UNIT_POS as usize) % tiles_per_row;
 
-    let mut eta_reg = P::cs_cs_reg();
+    let mut eta_reg = P::rt_cs_cs();
     eta_reg.zero();
 
-    let mut row_vec = P::cs_reg();
-    let mut col_vec = P::cs_reg();
+    let mut row_vec = P::rv_cs();
+    let mut col_vec = P::rv_cs();
 
     if comptime!(transposed) {
         // η^T[i,j] = ttt_lr_eta[i] * token_eta[j]
@@ -170,12 +196,12 @@ pub fn build_eta_matrix<P: ParamsTrait>(
 /// When `transposed` is true: builds upper triangular attn^T (triu)
 #[cube]
 pub fn build_attn_matrix<P: ParamsTrait>(
-    q_smem: &FCsTile<P>,
-    k_smem: &FCsTile<P>,
-    output: &mut CsCsTile<P>,
+    q_smem: &StFCs<P>,
+    k_smem: &StFCs<P>,
+    output: &mut StCsCs<P>,
     #[comptime] transposed: bool,
 ) {
-    let mut attn_reg = P::cs_cs_reg();
+    let mut attn_reg = P::rt_cs_cs();
     attn_reg.zero();
 
     if comptime!(transposed) {
@@ -209,15 +235,15 @@ pub fn build_attn_matrix<P: ParamsTrait>(
 /// product in registers before storing to shared memory. Saves one CS×CS tile.
 #[cube]
 pub fn build_eta_attn_fused<P: ParamsTrait>(
-    q_smem: &FCsTile<P>,
-    k_smem: &FCsTile<P>,
-    token_eta: &Tensor<Line<P::E>>,
-    ttt_lr_eta: &Tensor<Line<P::E>>,
-    output: &mut CsCsTile<P>,
+    q_smem: &StFCs<P>,
+    k_smem: &StFCs<P>,
+    token_eta: &Tensor<Line<P::EVal>>,
+    ttt_lr_eta: &Tensor<Line<P::EVal>>,
+    output: &mut StCsCs<P>,
     ttt_lr_eta_idx: usize,
 ) {
     // Compute attn = q^T @ k in registers
-    let mut attn_reg = P::cs_cs_reg();
+    let mut attn_reg = P::rt_cs_cs();
     attn_reg.zero();
     cube::mma_AtB(&mut attn_reg, q_smem, k_smem);
 
@@ -229,8 +255,8 @@ pub fn build_eta_attn_fused<P: ParamsTrait>(
     let tile_col = (UNIT_POS as usize) % tiles_per_row;
 
     // Load eta components: η[i,j] = token_eta[i] * ttt_lr_eta[j]
-    let mut row_vec = P::cs_reg();
-    let mut col_vec = P::cs_reg();
+    let mut row_vec = P::rv_cs();
+    let mut col_vec = P::rv_cs();
     cube::broadcast::load_rv_direct(token_eta, &mut row_vec, tile_row * P::CS_Reg::VALUE);
     cube::broadcast::load_rv_direct(
         ttt_lr_eta,
@@ -239,7 +265,7 @@ pub fn build_eta_attn_fused<P: ParamsTrait>(
     );
 
     // Build eta in registers and multiply with attn
-    let mut eta_reg = P::cs_cs_reg();
+    let mut eta_reg = P::rt_cs_cs();
     eta_reg.zero();
     eta_reg.add_col(&row_vec);
     eta_reg.mul_row(&col_vec);
@@ -260,11 +286,12 @@ pub fn build_eta_attn_fused<P: ParamsTrait>(
 
 // TODO: Move to thundercube and abstract?
 /// Extract the last row of a shared memory tile into a register vector.
+/// Casts from shared memory type (FVal) to register type (FAcc).
 /// Result is broadcast to all.
 #[cube]
 #[must_use]
-pub fn extract_last_row<F: Float, R: Dim, C: Dim>(st: &St<F, R, C>) -> Rv<F, C> {
-    let mut result = Rv::<F, C>::new();
+pub fn extract_last_row<FVal: Float, FAcc: Float, R: Dim, C: Dim>(st: &St<FVal, R, C>) -> Rv<FAcc, C> {
+    let mut result = Rv::<FAcc, C>::new();
     let last_row = R::VALUE - 1;
     let vec_stride = C::LINES;
     let mask = vec_stride - 1;
@@ -273,7 +300,7 @@ pub fn extract_last_row<F: Float, R: Dim, C: Dim>(st: &St<F, R, C>) -> Rv<F, C> 
     for c_line in 0..C::LINES {
         let phys_col = cube::swizzle(last_row, c_line, mask);
         let s_idx = last_row * vec_stride + phys_col;
-        result.data[c_line] = st.data[s_idx];
+        result.data[c_line] = thundercube::util::cast_line(st.data[s_idx]);
     }
     result
 }

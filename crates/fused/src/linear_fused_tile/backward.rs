@@ -34,7 +34,7 @@ use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index
 use super::{
     forward::ForwardIntermediates,
     helpers::{
-        CsCsTile, CsFTile, CsRegBig, FCsTile, FFTile, FRegBig, ParamsTrait, build_attn_matrix,
+        RvbCsV, RvbFV, ParamsTrait, StCsCs, StCsF, StFCs, StFF, build_attn_matrix,
         build_eta_matrix,
     },
 };
@@ -108,9 +108,9 @@ fn atomic_add_rv<F: Float, L: Dim>(
 struct Stage4Outputs<P: ParamsTrait> {
     // grad_z1_bar stored in dedicated tile passed by caller
     // grad_W_z1bar accumulated into grad_L_W_last via temp_f_f tile
-    grad_b_z1bar: FRegBig<P>,
-    grad_ln_weight: FRegBig<P>,
-    grad_ln_bias: FRegBig<P>,
+    grad_b_z1bar: RvbFV<P>,
+    grad_ln_weight: RvbFV<P>,
+    grad_ln_bias: RvbFV<P>,
 }
 
 /// Stage 4: Compute gradients through output layer norm.
@@ -119,19 +119,19 @@ struct Stage4Outputs<P: ParamsTrait> {
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage4_ln<P: ParamsTrait>(
-    grad_output: &CsFTile<P>,
-    x_hat_ln: &CsFTile<P>,
-    std_ln: &CsRegBig<P>,
-    q_smem: &FCsTile<P>,
-    ln_weight: &FRegBig<P>,
-    buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut CsFTile<P>,
-    scratch2: &mut CsFTile<P>,
-    grad_z1_bar_out: &mut CsFTile<P>,
-    temp_f_f: &mut FFTile<P>,
+    grad_output: &StCsF<P>,
+    x_hat_ln: &StCsF<P>,
+    std_ln: &RvbCsV<P>,
+    q_smem: &StFCs<P>,
+    ln_weight: &RvbFV<P>,
+    buf: &mut ReduceBuf<P::EVal>,
+    scratch1: &mut StCsF<P>,
+    scratch2: &mut StCsF<P>,
+    grad_z1_bar_out: &mut StCsF<P>,
+    temp_f_f: &mut StFF<P>,
 ) -> Stage4Outputs<P> {
-    let f_f = P::E::cast_from(P::F::VALUE as f32);
-    let f_inv = P::E::cast_from(1.0f32 / (P::F::VALUE as f32));
+    let f_f = P::EVal::cast_from(P::F::VALUE as f32);
+    let f_inv = P::EVal::cast_from(1.0f32 / (P::F::VALUE as f32));
 
     // grad_ln_weight = sum(grad_output * x_hat_ln)
     scratch1.copy_from(grad_output);
@@ -139,12 +139,12 @@ fn backward_stage4_ln<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut grad_ln_weight = P::f_reg_big();
-    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
+    let mut grad_ln_weight = P::rvb_f_v();
+    cube::reduce_cols::<P::EVal, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
 
     // grad_ln_bias = sum(grad_output)
-    let mut grad_ln_bias = P::f_reg_big();
-    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(grad_output, &mut grad_ln_bias, buf);
+    let mut grad_ln_bias = P::rvb_f_v();
+    cube::reduce_cols::<P::EVal, P::CS, P::F, SumOp>(grad_output, &mut grad_ln_bias, buf);
 
     // grad_x_hat = grad_output * ln_weight
     scratch1.copy_from(grad_output);
@@ -153,7 +153,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     // sum(grad_x_hat) per row
-    let mut sum_gxh = P::cs_reg_big();
+    let mut sum_gxh = P::rvb_cs_v();
     cube::sum_rows(scratch1, &mut sum_gxh, buf);
 
     // sum(grad_x_hat * x_hat) per row
@@ -162,7 +162,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut sum_gxh_xh = P::cs_reg_big();
+    let mut sum_gxh_xh = P::rvb_cs_v();
     cube::sum_rows(scratch2, &mut sum_gxh_xh, buf);
 
     // grad_z1_bar = (grad_x_hat * F - sum_gxh - x_hat * sum_gxh_xh) / (std * F)
@@ -185,7 +185,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
 
     // grad_W_z1bar = XQ^T @ grad_z1_bar
     // Store into temp_f_f (accumulated into grad_W_last after stage 3, which reads it)
-    let mut dW_reg = P::f_f_reg();
+    let mut dW_reg = P::rt_ff();
     dW_reg.zero();
     cube::mma_AB(&mut dW_reg, q_smem, grad_z1_bar_out);
 
@@ -196,8 +196,8 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     // grad_b_z1bar = sum(grad_z1_bar)
-    let mut grad_b_z1bar = P::f_reg_big();
-    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(grad_z1_bar_out, &mut grad_b_z1bar, buf);
+    let mut grad_b_z1bar = P::rvb_f_v();
+    cube::reduce_cols::<P::EVal, P::CS, P::F, SumOp>(grad_z1_bar_out, &mut grad_b_z1bar, buf);
 
     Stage4Outputs::<P> {
         grad_b_z1bar,
@@ -215,13 +215,13 @@ fn backward_stage4_ln<P: ParamsTrait>(
 #[derive(CubeType)]
 struct Stage3Part1Outputs<P: ParamsTrait> {
     /// Intermediate for grad_ttt_lr_eta computation (from weight/bias update term)
-    grad_eta_term1: CsRegBig<P>,
+    grad_eta_term1: RvbCsV<P>,
 }
 
 /// Outputs from stage 3 (final).
 #[derive(CubeType)]
 struct Stage3Outputs<P: ParamsTrait> {
-    grad_ttt_lr_eta: CsRegBig<P>,
+    grad_ttt_lr_eta: RvbCsV<P>,
 }
 
 /// Stage 3 Part 1: Compute gradients that depend on grad_W_last.
@@ -230,26 +230,26 @@ struct Stage3Outputs<P: ParamsTrait> {
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage3_part1<P: ParamsTrait>(
-    grad_z1_bar: &CsFTile<P>,
-    grad_l: &CsFTile<P>,
-    grad_W_last: &FFTile<P>,
-    grad_b_last: &FRegBig<P>,
-    q_smem: &FCsTile<P>,
-    k_smem: &FCsTile<P>,
-    xk_smem: &CsFTile<P>,
-    xq_smem: &CsFTile<P>,
-    token_eta: &Tensor<Line<P::E>>,
-    ttt_lr_eta: &Tensor<Line<P::E>>,
-    last_eta: &CsRegBig<P>,
-    last_token_eta: P::E,
+    grad_z1_bar: &StCsF<P>,
+    grad_l: &StCsF<P>,
+    grad_W_last: &StFF<P>,
+    grad_b_last: &RvbFV<P>,
+    q_smem: &StFCs<P>,
+    k_smem: &StFCs<P>,
+    xk_smem: &StCsF<P>,
+    xq_smem: &StCsF<P>,
+    token_eta: &Tensor<Line<P::EVal>>,
+    ttt_lr_eta: &Tensor<Line<P::EVal>>,
+    last_eta: &RvbCsV<P>,
+    last_token_eta: P::EVal,
     ttt_lr_eta_idx: usize,
-    buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut CsFTile<P>,
-    scratch2: &mut CsFTile<P>,
-    cs_cs_a: &mut CsCsTile<P>,
-    cs_cs_b: &mut CsCsTile<P>,
-    grad_grad_l_out: &mut CsFTile<P>,
-    grad_xk_combined_out: &mut CsFTile<P>,
+    buf: &mut ReduceBuf<P::EVal>,
+    scratch1: &mut StCsF<P>,
+    scratch2: &mut StCsF<P>,
+    cs_cs_a: &mut StCsCs<P>,
+    cs_cs_b: &mut StCsCs<P>,
+    grad_grad_l_out: &mut StCsF<P>,
+    grad_xk_combined_out: &mut StCsF<P>,
 ) -> Stage3Part1Outputs<P> {
     // --- Compute grad_grad_l from three sources ---
 
@@ -260,7 +260,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
     build_attn_matrix::<P>(q_smem, k_smem, cs_cs_b, true);
 
     // Term A: η^T @ grad_z1_bar
-    let mut term_a_reg = P::cs_f_reg();
+    let mut term_a_reg = P::rt_cs_f();
     term_a_reg.zero();
     cube::mma_AB(&mut term_a_reg, cs_cs_a, grad_z1_bar);
 
@@ -275,7 +275,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut term_b_reg = P::cs_f_reg();
+    let mut term_b_reg = P::rt_cs_f();
     term_b_reg.zero();
     cube::mma_AB(&mut term_b_reg, cs_cs_a, grad_z1_bar);
 
@@ -297,7 +297,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut src12_reg = P::cs_f_reg();
+    let mut src12_reg = P::rt_cs_f();
     src12_reg.zero();
     cube::mma_AB(&mut src12_reg, scratch1, grad_W_last);
 
@@ -320,7 +320,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     // --- d_xk (from attn) = d_attn^T @ XQ ---
     // Compute d_attn^T directly: grad_l @ grad_z1_bar^T * η^T
-    let mut d_attn_t_reg = P::cs_cs_reg();
+    let mut d_attn_t_reg = P::rt_cs_cs();
     d_attn_t_reg.zero();
     cube::mma_ABt(&mut d_attn_t_reg, grad_l, grad_z1_bar);
 
@@ -339,7 +339,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut d_xk_attn_reg = P::cs_f_reg();
+    let mut d_xk_attn_reg = P::rt_cs_f();
     d_xk_attn_reg.zero();
     cube::mma_AB(&mut d_xk_attn_reg, cs_cs_b, xq_smem);
 
@@ -352,7 +352,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     // --- grad_xk_mini from weight update term ---
     // grad_l_Last = grad_l @ grad_W_last^T
-    let mut grad_l_last_reg = P::cs_f_reg();
+    let mut grad_l_last_reg = P::rt_cs_f();
     grad_l_last_reg.zero();
     cube::mma_ABt(&mut grad_l_last_reg, grad_l, grad_W_last);
 
@@ -381,7 +381,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut grad_eta_term1 = P::cs_reg_big();
+    let mut grad_eta_term1 = P::rvb_cs_v();
     cube::sum_rows(scratch2, &mut grad_eta_term1, buf);
 
     scratch2.set_row(grad_b_last);
@@ -389,7 +389,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut grad_eta_term2 = P::cs_reg_big();
+    let mut grad_eta_term2 = P::rvb_cs_v();
     cube::sum_rows(scratch2, &mut grad_eta_term2, buf);
 
     grad_eta_term1.add(&grad_eta_term2);
@@ -406,24 +406,24 @@ fn backward_stage3_part1<P: ParamsTrait>(
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage3_part2<P: ParamsTrait>(
-    grad_z1_bar: &CsFTile<P>,
-    grad_l: &CsFTile<P>,
-    q_smem: &FCsTile<P>,
-    k_smem: &FCsTile<P>,
-    xk_smem: &CsFTile<P>,
-    weight_init: &FFTile<P>,
-    token_eta: &Tensor<Line<P::E>>,
-    ttt_lr_eta: &Tensor<Line<P::E>>,
+    grad_z1_bar: &StCsF<P>,
+    grad_l: &StCsF<P>,
+    q_smem: &StFCs<P>,
+    k_smem: &StFCs<P>,
+    xk_smem: &StCsF<P>,
+    weight_init: &StFF<P>,
+    token_eta: &Tensor<Line<P::EVal>>,
+    ttt_lr_eta: &Tensor<Line<P::EVal>>,
     ttt_lr_eta_idx: usize,
-    grad_eta_term1: &CsRegBig<P>,
-    buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut CsFTile<P>,
-    cs_cs_a: &mut CsCsTile<P>,
-    cs_cs_b: &mut CsCsTile<P>,
-    grad_xq_mini_out: &mut CsFTile<P>,
+    grad_eta_term1: &RvbCsV<P>,
+    buf: &mut ReduceBuf<P::EVal>,
+    scratch1: &mut StCsF<P>,
+    cs_cs_a: &mut StCsCs<P>,
+    cs_cs_b: &mut StCsCs<P>,
+    grad_xq_mini_out: &mut StCsF<P>,
 ) -> Stage3Outputs<P> {
     // --- grad_xq_mini = grad_z1_bar @ W_init^T ---
-    let mut grad_xq_reg = P::cs_f_reg();
+    let mut grad_xq_reg = P::rt_cs_f();
     grad_xq_reg.zero();
     cube::mma_ABt(&mut grad_xq_reg, grad_z1_bar, weight_init);
 
@@ -440,7 +440,7 @@ fn backward_stage3_part2<P: ParamsTrait>(
     build_eta_matrix::<P>(token_eta, ttt_lr_eta, cs_cs_a, ttt_lr_eta_idx, false);
 
     // d_attn_base = grad_z1_bar @ grad_l^T into cs_cs_b
-    let mut d_attn_reg = P::cs_cs_reg();
+    let mut d_attn_reg = P::rt_cs_cs();
     d_attn_reg.zero();
     cube::mma_ABt(&mut d_attn_reg, grad_z1_bar, grad_l);
 
@@ -457,7 +457,7 @@ fn backward_stage3_part2<P: ParamsTrait>(
     sync_cube();
 
     // d_xq (from attn) = d_attn @ XK
-    let mut d_xq_attn_reg = P::cs_f_reg();
+    let mut d_xq_attn_reg = P::rt_cs_f();
     d_xq_attn_reg.zero();
     cube::mma_AB(&mut d_xq_attn_reg, cs_cs_b, xk_smem);
 
@@ -476,7 +476,7 @@ fn backward_stage3_part2<P: ParamsTrait>(
     build_attn_matrix::<P>(q_smem, k_smem, cs_cs_a, false); // attn (lower tri)
 
     // d_eta_base = -grad_z1_bar @ grad_l^T (lower tri)
-    let mut d_eta_base_reg = P::cs_cs_reg();
+    let mut d_eta_base_reg = P::rt_cs_cs();
     d_eta_base_reg.zero();
     cube::mma_ABt(&mut d_eta_base_reg, grad_z1_bar, grad_l);
 
@@ -502,7 +502,7 @@ fn backward_stage3_part2<P: ParamsTrait>(
     // d_eta[i,j] contributes to grad_ttt_lr_eta[j] with weight token_eta[i]
     // Manual implementation: multiply each row by token_eta[row], then sum columns
     // Load token_eta into a register vector
-    let mut token_eta_rv = P::cs_reg_big();
+    let mut token_eta_rv = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(token_eta, &mut token_eta_rv, 0);
 
     // Multiply cs_cs_b rows by token_eta (in-place)
@@ -511,8 +511,8 @@ fn backward_stage3_part2<P: ParamsTrait>(
     sync_cube();
 
     // Sum columns to get grad_ttt_lr_eta contribution
-    let mut grad_ttt_lr_eta = P::cs_reg_big();
-    cube::reduce_cols::<P::E, P::CS, P::CS, SumOp>(cs_cs_b, &mut grad_ttt_lr_eta, buf);
+    let mut grad_ttt_lr_eta = P::rvb_cs_v();
+    cube::reduce_cols::<P::EVal, P::CS, P::CS, SumOp>(cs_cs_b, &mut grad_ttt_lr_eta, buf);
 
     grad_ttt_lr_eta.add(grad_eta_term1);
 
@@ -526,29 +526,29 @@ fn backward_stage3_part2<P: ParamsTrait>(
 /// Outputs from stage 2.
 #[derive(CubeType)]
 struct Stage2Outputs<P: ParamsTrait> {
-    grad_ln_weight: FRegBig<P>,
-    grad_ln_bias: FRegBig<P>,
+    grad_ln_weight: RvbFV<P>,
+    grad_ln_bias: RvbFV<P>,
 }
 
 /// Stage 2: Compute second derivative through fused LN+L2 gradient.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage2_ln_l2<P: ParamsTrait>(
-    grad_grad_l: &CsFTile<P>,
-    x_hat_fused: &CsFTile<P>,
-    std_fused: &CsRegBig<P>,
-    grad_output_fused: &CsFTile<P>,
-    grad_x_hat_fused: &CsFTile<P>,
-    grad_l: &CsFTile<P>,
-    ln_weight: &FRegBig<P>,
-    sum_gxh_xh_precomputed: &CsRegBig<P>,
-    buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut CsFTile<P>,
-    scratch2: &mut CsFTile<P>,
-    grad_Z1_out: &mut CsFTile<P>,
-    grad_target_out: &mut CsFTile<P>,
+    grad_grad_l: &StCsF<P>,
+    x_hat_fused: &StCsF<P>,
+    std_fused: &RvbCsV<P>,
+    grad_output_fused: &StCsF<P>,
+    grad_x_hat_fused: &StCsF<P>,
+    grad_l: &StCsF<P>,
+    ln_weight: &RvbFV<P>,
+    sum_gxh_xh_precomputed: &RvbCsV<P>,
+    buf: &mut ReduceBuf<P::EVal>,
+    scratch1: &mut StCsF<P>,
+    scratch2: &mut StCsF<P>,
+    grad_Z1_out: &mut StCsF<P>,
+    grad_target_out: &mut StCsF<P>,
 ) -> Stage2Outputs<P> {
-    let f_inv = P::E::cast_from(1.0f32 / (P::F::VALUE as f32));
+    let f_inv = P::EVal::cast_from(1.0f32 / (P::F::VALUE as f32));
 
     // grad_L_grad_x_hat = (1/std) * grad_grad_l
     //                   + (1/F) * sum(-grad_grad_l / std)
@@ -561,14 +561,14 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut sum1 = P::cs_reg_big();
+    let mut sum1 = P::rvb_cs_v();
     cube::sum_rows(scratch1, &mut sum1, buf);
 
     scratch1.mul(x_hat_fused);
 
     sync_cube();
 
-    let mut sum2 = P::cs_reg_big();
+    let mut sum2 = P::rvb_cs_v();
     cube::sum_rows(scratch1, &mut sum2, buf);
 
     // Build grad_L_grad_x_hat in scratch2
@@ -612,12 +612,12 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut grad_ln_weight = P::f_reg_big();
-    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
+    let mut grad_ln_weight = P::rvb_f_v();
+    cube::reduce_cols::<P::EVal, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
 
     // grad_ln_bias = sum(grad_L_y)
-    let mut grad_ln_bias = P::f_reg_big();
-    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(grad_target_out, &mut grad_ln_bias, buf);
+    let mut grad_ln_bias = P::rvb_f_v();
+    cube::reduce_cols::<P::EVal, P::CS, P::F, SumOp>(grad_target_out, &mut grad_ln_bias, buf);
 
     // grad_L_x_hat = grad_L_y * ln_weight
     //              + (1/F) * grad_x_hat * sum2
@@ -665,14 +665,14 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut sum_grad_L_std = P::cs_reg_big();
+    let mut sum_grad_L_std = P::rvb_cs_v();
     cube::sum_rows(scratch1, &mut sum_grad_L_std, buf);
 
     // Compute final grad_Z1:
     // grad_Z1 = grad_L_x_hat / std - (1/F) * sum(grad_L_x_hat) / std + (1/F) * sum(grad_L_std) * x_hat
     // grad_Z1_out currently holds grad_L_x_hat
 
-    let mut sum_grad_L_x_hat = P::cs_reg_big();
+    let mut sum_grad_L_x_hat = P::rvb_cs_v();
     cube::sum_rows(grad_Z1_out, &mut sum_grad_L_x_hat, buf);
 
     grad_Z1_out.div_col(std_fused);
@@ -734,36 +734,36 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage1_assemble<P: ParamsTrait>(
-    grad_output: &CsFTile<P>,
+    grad_output: &StCsF<P>,
     // Stage 4 outputs (grad_W_z1bar accumulated earlier via temp_f_f)
     // Note: grad_z1_bar tile reused for grad_output_fused in stage 2
-    grad_b_z1bar: &FRegBig<P>,
-    grad_ln_weight_s4: &FRegBig<P>,
-    grad_ln_bias_s4: &FRegBig<P>,
+    grad_b_z1bar: &RvbFV<P>,
+    grad_ln_weight_s4: &RvbFV<P>,
+    grad_ln_bias_s4: &RvbFV<P>,
     // Stage 3 outputs
-    grad_xq_mini: &CsFTile<P>,
-    grad_xk_combined: &CsFTile<P>, // grad_xk_mini + grad_xk_attn already combined
-    grad_ttt_lr_eta: &CsRegBig<P>,
+    grad_xq_mini: &StCsF<P>,
+    grad_xk_combined: &StCsF<P>, // grad_xk_mini + grad_xk_attn already combined
+    grad_ttt_lr_eta: &RvbCsV<P>,
     // Stage 2 outputs
-    grad_Z1: &CsFTile<P>,
-    grad_target: &CsFTile<P>,
-    grad_ln_weight_s2: &FRegBig<P>,
-    grad_ln_bias_s2: &FRegBig<P>,
+    grad_Z1: &StCsF<P>,
+    grad_target: &StCsF<P>,
+    grad_ln_weight_s2: &RvbFV<P>,
+    grad_ln_bias_s2: &RvbFV<P>,
     // Inputs
-    k_smem: &FCsTile<P>,
+    k_smem: &StFCs<P>,
     // Temp F×F tile: contains weight_init on entry, overwritten with dW_tile
-    temp_f_f: &mut FFTile<P>,
+    temp_f_f: &mut StFF<P>,
     // Accumulated gradients (in/out)
-    grad_W_last: &mut FFTile<P>,
-    grad_b_last: &mut FRegBig<P>,
-    grad_ln_weight_acc: &mut FRegBig<P>,
-    grad_ln_bias_acc: &mut FRegBig<P>,
+    grad_W_last: &mut StFF<P>,
+    grad_b_last: &mut RvbFV<P>,
+    grad_ln_weight_acc: &mut RvbFV<P>,
+    grad_ln_bias_acc: &mut RvbFV<P>,
     // Output storage
-    grads: &mut GradOutputs<P::E>,
+    grads: &mut GradOutputs<P::EVal>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
-    buf: &mut ReduceBuf<P::E>,
-    scratch1: &mut CsFTile<P>,
+    buf: &mut ReduceBuf<P::EVal>,
+    scratch1: &mut StCsF<P>,
 ) {
     // grad_XQ = grad_output + grad_xq_mini
     scratch1.copy_from(grad_output);
@@ -779,7 +779,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 
     // grad_XK = -grad_target + grad_xk_mini + grad_xk_attn + grad_Z1 @ W_init^T
     // Note: temp_f_f contains weight_init at this point
-    let mut grad_xk_reg = P::cs_f_reg();
+    let mut grad_xk_reg = P::rt_cs_f();
     grad_xk_reg.zero();
     cube::mma_ABt(&mut grad_xk_reg, grad_Z1, temp_f_f);
 
@@ -798,7 +798,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 
     // Accumulate weight gradients
     // grad_W = grad_W_z1bar (already accumulated in stage 4) + XK^T @ grad_Z1
-    let mut dW_reg = P::f_f_reg();
+    let mut dW_reg = P::rt_ff();
     dW_reg.zero();
     cube::mma_AB(&mut dW_reg, k_smem, grad_Z1);
 
@@ -815,8 +815,8 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     sync_cube();
 
     // grad_b = grad_b_z1bar + sum(grad_Z1)
-    let mut grad_b_z1 = P::f_reg_big();
-    cube::reduce_cols::<P::E, P::CS, P::F, SumOp>(grad_Z1, &mut grad_b_z1, buf);
+    let mut grad_b_z1 = P::rvb_f_v();
+    cube::reduce_cols::<P::EVal, P::CS, P::F, SumOp>(grad_Z1, &mut grad_b_z1, buf);
 
     grad_b_last.add(&grad_b_z1);
     grad_b_last.add(grad_b_z1bar);
@@ -860,55 +860,55 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 #[cube]
 #[allow(clippy::too_many_arguments)]
 pub fn fused_ttt_backward_stage<P: ParamsTrait>(
-    saved: &SavedTensors<P::E>,
-    fwd: &ForwardIntermediates<P::E>,
-    grad_L_XQW: &Tensor<Line<P::E>>,
-    grad_L_W_last: &mut FFTile<P>,
-    grad_L_b_last: &mut FRegBig<P>,
-    grad_L_ln_weight_acc: &mut FRegBig<P>,
-    grad_L_ln_bias_acc: &mut FRegBig<P>,
-    grads: &mut GradOutputs<P::E>,
+    saved: &SavedTensors<P::EVal>,
+    fwd: &ForwardIntermediates<P::EVal>,
+    grad_L_XQW: &Tensor<Line<P::EVal>>,
+    grad_L_W_last: &mut StFF<P>,
+    grad_L_b_last: &mut RvbFV<P>,
+    grad_L_ln_weight_acc: &mut RvbFV<P>,
+    grad_L_ln_bias_acc: &mut RvbFV<P>,
+    grads: &mut GradOutputs<P::EVal>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
     #[comptime] _epsilon: f32,
 ) {
-    let mut buf = ReduceBuf::<P::E>::new();
+    let mut buf = ReduceBuf::<P::EVal>::new();
 
     // =========================================================================
     // Tile pool allocation (total 64KB for 16×32)
     // =========================================================================
 
     // Scratch tiles - reused within stages (8KB)
-    let mut scratch1 = P::cs_f_tile();
-    let mut scratch2 = P::cs_f_tile();
+    let mut scratch1 = P::st_cs_f();
+    let mut scratch2 = P::st_cs_f();
 
     // CS×CS tiles - reused across stage 3 computations (8KB)
-    let mut cs_cs_a = P::cs_cs_tile();
-    let mut cs_cs_b = P::cs_cs_tile();
+    let mut cs_cs_a = P::st_cs_cs();
+    let mut cs_cs_b = P::st_cs_cs();
 
     // CS×F tile pool for stage outputs (40KB = 10 tiles)
-    let mut tile_grad_z1_bar = P::cs_f_tile();
-    let mut tile_b = P::cs_f_tile();
-    let mut tile_c = P::cs_f_tile();
+    let mut tile_grad_z1_bar = P::st_cs_f();
+    let mut tile_b = P::st_cs_f();
+    let mut tile_c = P::st_cs_f();
     // tile_grad_xk_combined holds grad_xk_mini + grad_xk_attn (combined to save 1 tile)
-    let mut tile_grad_xk_combined = P::cs_f_tile();
-    let mut tile_e = P::cs_f_tile();
-    let mut tile_f = P::cs_f_tile();
+    let mut tile_grad_xk_combined = P::st_cs_f();
+    let mut tile_e = P::st_cs_f();
+    let mut tile_f = P::st_cs_f();
     // tile_h eliminated: grad_output_fused reuses tile_grad_z1_bar after stage 3 part 2
     // tile_grad_xk_attn eliminated: combined with grad_xk_mini above
-    let mut tile_grad_Z1 = P::cs_f_tile();
-    let mut tile_grad_target = P::cs_f_tile();
+    let mut tile_grad_Z1 = P::st_cs_f();
+    let mut tile_grad_target = P::st_cs_f();
 
     // Shared F×F tile: used for grad_W_z1bar (stage 4), weight_init (stage 3 part 2, stage 1), dW_tile (stage 1)
-    let mut temp_f_f = P::f_f_tile();
+    let mut temp_f_f = P::st_ff();
 
     // =========================================================================
     // Load persistent data
     // =========================================================================
 
     // Q/K transposed (needed by stages 4, 3)
-    let mut q_smem = P::f_cs_tile();
-    let mut k_smem = P::f_cs_tile();
+    let mut q_smem = P::st_f_cs();
+    let mut k_smem = P::st_f_cs();
     cube::load_st_transpose(&saved.xq, &mut q_smem, stage_offset, 0, 0);
     cube::load_st_transpose(&saved.xk, &mut k_smem, stage_offset, 0, 0);
 
@@ -917,7 +917,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // LN weight
     let base_ln = index_2d(&saved.ln_weight, CUBE_POS_Y as usize, 0);
-    let mut ln_weight_rv = P::f_reg_big();
+    let mut ln_weight_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&saved.ln_weight, &mut ln_weight_rv, base_ln);
 
     // Last eta computation
@@ -927,12 +927,12 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let token_eta_line = saved.token_eta[last_line_idx];
     let last_token_eta = token_eta_line[last_elem_in_line];
 
-    let mut last_eta_rv = P::cs_reg_big();
+    let mut last_eta_rv = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(&saved.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta);
 
     // grad_l (needed by stages 3, 2)
-    let mut grad_l_smem = P::cs_f_tile();
+    let mut grad_l_smem = P::st_cs_f();
     cube::load_st_direct(&fwd.grad_l_wrt_Z1, &mut grad_l_smem, stage_offset, 0, 0);
 
     sync_cube();
@@ -950,7 +950,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let grad_output_s4 = tile_c;
 
     // Load std_ln
-    let mut std_ln = P::cs_reg_big();
+    let mut std_ln = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(&fwd.std_ln, &mut std_ln, ttt_lr_eta_idx);
 
     sync_cube();
@@ -1055,7 +1055,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut grad_x_hat_fused = tile_f; // Repurpose tile_f
 
     // Load std_fused
-    let mut std_fused = P::cs_reg_big();
+    let mut std_fused = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(&fwd.std_fused, &mut std_fused, ttt_lr_eta_idx);
 
     // Load x_hat_fused and grad_x_hat_fused
@@ -1076,7 +1076,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut sum_gxh_xh = P::cs_reg_big();
+    let mut sum_gxh_xh = P::rvb_cs_v();
     cube::sum_rows(&scratch1, &mut sum_gxh_xh, &mut buf);
 
     // Load grad_output_fused - reuse tile_grad_z1_bar (no longer needed after stage 3)
@@ -1161,10 +1161,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 /// Fused TTT-Linear backward pass kernel (single mini-batch).
 #[cube(launch)]
 pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
-    saved: &SavedTensors<P::E>,
-    fwd: &ForwardIntermediates<P::E>,
-    grad_output: &Tensor<Line<P::E>>,
-    grads: &mut GradOutputs<P::E>,
+    saved: &SavedTensors<P::EVal>,
+    fwd: &ForwardIntermediates<P::EVal>,
+    grad_output: &Tensor<Line<P::EVal>>,
+    grads: &mut GradOutputs<P::EVal>,
     #[comptime] config: FusedTttConfig,
 ) {
     let batch_idx = CUBE_POS_X as usize;
@@ -1174,17 +1174,17 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
     let base_qkv = index_2d(&saved.xq, batch_idx, head_idx);
     let ttt_lr_eta_idx = index_2d(&saved.ttt_lr_eta, batch_idx, head_idx);
 
-    let mut grad_L_W_last = P::f_f_tile();
-    grad_L_W_last.fill(P::E::new(0.0));
+    let mut grad_L_W_last = P::st_ff();
+    grad_L_W_last.fill(P::EVal::new(0.0));
 
-    let mut grad_L_b_last = P::f_reg_big();
-    grad_L_b_last.fill(P::E::new(0.0));
+    let mut grad_L_b_last = P::rvb_f_v();
+    grad_L_b_last.fill(P::EVal::new(0.0));
 
-    let mut grad_L_ln_weight_acc = P::f_reg_big();
-    grad_L_ln_weight_acc.fill(P::E::new(0.0));
+    let mut grad_L_ln_weight_acc = P::rvb_f_v();
+    grad_L_ln_weight_acc.fill(P::EVal::new(0.0));
 
-    let mut grad_L_ln_bias_acc = P::f_reg_big();
-    grad_L_ln_bias_acc.fill(P::E::new(0.0));
+    let mut grad_L_ln_bias_acc = P::rvb_f_v();
+    grad_L_ln_bias_acc.fill(P::EVal::new(0.0));
 
     sync_cube();
 
@@ -1219,17 +1219,17 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
     // Atomically add LN gradients (unbatched tensors shared across batch dimension)
     // LN tensors have shape [num_heads, head_dim], indexed by head_idx only
     let base_ln = head_idx * P::F::VALUE;
-    atomic_add_rv::<P::E, P::F>(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
-    atomic_add_rv::<P::E, P::F>(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
+    atomic_add_rv::<P::EVal, P::F>(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
+    atomic_add_rv::<P::EVal, P::F>(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
 }
 
 /// Fused TTT-Linear backward pass kernel (multi-stage).
 #[cube(launch)]
 pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
-    saved: &SavedTensors<P::E>,
-    fwd: &ForwardIntermediates<P::E>,
-    grad_output: &Tensor<Line<P::E>>,
-    grads: &mut GradOutputs<P::E>,
+    saved: &SavedTensors<P::EVal>,
+    fwd: &ForwardIntermediates<P::EVal>,
+    grad_output: &Tensor<Line<P::EVal>>,
+    grads: &mut GradOutputs<P::EVal>,
     num_stages: u32,
     #[comptime] config: FusedTttConfig,
 ) {
@@ -1242,17 +1242,17 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     let base_qkv = index_2d(&saved.xq, batch_idx, head_idx);
     let base_ttt_lr_eta = index_2d(&saved.ttt_lr_eta, batch_idx, head_idx);
 
-    let mut grad_L_W_last = P::f_f_tile();
-    grad_L_W_last.fill(P::E::new(0.0));
+    let mut grad_L_W_last = P::st_ff();
+    grad_L_W_last.fill(P::EVal::new(0.0));
 
-    let mut grad_L_b_last = P::f_reg_big();
-    grad_L_b_last.fill(P::E::new(0.0));
+    let mut grad_L_b_last = P::rvb_f_v();
+    grad_L_b_last.fill(P::EVal::new(0.0));
 
-    let mut grad_L_ln_weight_acc = P::f_reg_big();
-    grad_L_ln_weight_acc.fill(P::E::new(0.0));
+    let mut grad_L_ln_weight_acc = P::rvb_f_v();
+    grad_L_ln_weight_acc.fill(P::EVal::new(0.0));
 
-    let mut grad_L_ln_bias_acc = P::f_reg_big();
-    grad_L_ln_bias_acc.fill(P::E::new(0.0));
+    let mut grad_L_ln_bias_acc = P::rvb_f_v();
+    grad_L_ln_bias_acc.fill(P::EVal::new(0.0));
 
     sync_cube();
 
@@ -1295,6 +1295,6 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     // Atomically add LN gradients (unbatched tensors shared across batch dimension)
     // LN tensors have shape [num_heads, head_dim], indexed by head_idx only
     let base_ln = head_idx * P::F::VALUE;
-    atomic_add_rv::<P::E, P::F>(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
-    atomic_add_rv::<P::E, P::F>(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
+    atomic_add_rv::<P::EVal, P::F>(&grad_L_ln_weight_acc, &mut grads.grad_ln_weight, base_ln);
+    atomic_add_rv::<P::EVal, P::F>(&grad_L_ln_bias_acc, &mut grads.grad_ln_bias, base_ln);
 }

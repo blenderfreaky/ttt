@@ -71,10 +71,10 @@ pub const BUF_ETA: usize = 5;
 #[cube]
 #[allow(unused_variables)]
 fn load_from_pointers<P: ParamsTrait>(
-    xq_buf: &mut Array<Line<P::E>>,
-    xk_buf: &mut Array<Line<P::E>>,
-    xv_buf: &mut Array<Line<P::E>>,
-    eta_buf: &mut Array<Line<P::E>>,
+    xq_buf: &mut Array<Line<P::EVal>>,
+    xk_buf: &mut Array<Line<P::EVal>>,
+    xv_buf: &mut Array<Line<P::EVal>>,
+    eta_buf: &mut Array<Line<P::EVal>>,
     #[comptime] qkv_count: usize,
     #[comptime] eta_count: usize,
 ) {
@@ -127,7 +127,7 @@ const uint32 eta_off = cube_idx * {eta}u;
 /// Inject HIP code to store from buffer_9 (xq_buf) to output pointer.
 #[cube]
 #[allow(unused_variables)]
-fn store_to_output<P: ParamsTrait>(xq_buf: &Array<Line<P::E>>, #[comptime] count: usize) {
+fn store_to_output<P: ParamsTrait>(xq_buf: &Array<Line<P::EVal>>, #[comptime] count: usize) {
     use cubecl::intrinsic;
     intrinsic!(|scope| {
         scope.register(cubecl::ir::NonSemantic::Comment {
@@ -281,16 +281,16 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     // Control array [batch * heads] - mutable for atomic ops
     control: &mut Tensor<Atomic<u32>>,
     // Array buffers for pointer-based loading (get predictable buffer_N names)
-    xq_buf: &mut Array<Line<P::E>>,
-    xk_buf: &mut Array<Line<P::E>>,
-    xv_buf: &mut Array<Line<P::E>>,
-    eta_buf: &mut Array<Line<P::E>>,
+    xq_buf: &mut Array<Line<P::EVal>>,
+    xk_buf: &mut Array<Line<P::EVal>>,
+    xv_buf: &mut Array<Line<P::EVal>>,
+    eta_buf: &mut Array<Line<P::EVal>>,
     // Inputs struct (scratch tensors for xq/xk/xv/ttt_lr_eta, constants for others)
-    inputs: &mut Inputs<P::E>,
+    inputs: &mut Inputs<P::EVal>,
     // Outputs struct (output tensor, weight_out, bias_out)
-    outputs: &mut Outputs<P::E>,
+    outputs: &mut Outputs<P::EVal>,
     // Forward intermediates (for backward pass compatibility)
-    fwd_intermediates: &mut ForwardIntermediates<P::E>,
+    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     #[comptime] config: FusedTttConfig,
     #[comptime] debug: bool,
 ) {
@@ -315,21 +315,21 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     let eta_lines = comptime!(mini_batch_len / LINE_SIZE);
 
     // Initialize weight in shared memory from inputs.weight
-    let mut weight_smem = P::f_f_tile();
+    let mut weight_smem = P::st_ff();
     let weight_offset = (batch_idx * num_heads + head_idx) * head_dim * head_dim / LINE_SIZE;
     cube::load_st_direct(&inputs.weight, &mut weight_smem, weight_offset, 0, 0);
 
     sync_cube();
 
     // Initialize bias in registers from inputs.bias
-    let mut bias_rv = P::f_reg_big();
+    let mut bias_rv = P::rvb_f_v();
     let bias_offset = (batch_idx * num_heads + head_idx) * head_dim / LINE_SIZE;
     cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, bias_offset);
 
     // Load layer norm params
     let ln_offset = head_idx * head_dim / LINE_SIZE;
-    let mut ln_weight_rv = P::f_reg_big();
-    let mut ln_bias_rv = P::f_reg_big();
+    let mut ln_weight_rv = P::rvb_f_v();
+    let mut ln_bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, ln_offset);
     cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, ln_offset);
 

@@ -75,12 +75,12 @@ pub struct StreamingBuffers<F: Float> {
 #[cube(launch)]
 pub fn fused_ttt_streaming_kernel<P: ParamsTrait>(
     // Input/output streaming buffers
-    inputs: &Inputs<P::E>,
-    outputs: &mut Outputs<P::E>,
+    inputs: &Inputs<P::EVal>,
+    outputs: &mut Outputs<P::EVal>,
     // Control array for synchronization [status, stage_idx, shutdown, reserved] per cube
     control: &mut Array<u32>,
     // Forward intermediates storage
-    fwd_intermediates: &mut ForwardIntermediates<P::E>,
+    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     #[comptime] config: StreamingKernelConfig,
 ) {
     let batch_idx = CUBE_POS_X as usize;
@@ -114,19 +114,19 @@ pub fn fused_ttt_streaming_kernel<P: ParamsTrait>(
     let base_eta = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
 
     // Initialize weight in shared memory from inputs.weight
-    let mut weight_smem = P::f_f_tile();
+    let mut weight_smem = P::st_ff();
     cube::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
 
     sync_cube();
 
     // Initialize bias in register vector from inputs.bias
-    let mut bias_rv = P::f_reg_big();
+    let mut bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
     // Load layer norm params (constant across all stages)
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-    let mut ln_weight_rv = P::f_reg_big();
-    let mut ln_bias_rv = P::f_reg_big();
+    let mut ln_weight_rv = P::rvb_f_v();
+    let mut ln_bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
     cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 

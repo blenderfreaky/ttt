@@ -4,7 +4,7 @@ use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
 use super::{
-    helpers::{FFTile, FRegBig, ParamsTrait, build_eta_attn_fused, build_eta_matrix},
+    helpers::{StFF, RvbFV, ParamsTrait, build_eta_attn_fused, build_eta_matrix},
     layer_norm::{
         layer_norm_forward_stream_intermediates, layer_norm_l2_grad_stream_intermediates,
     },
@@ -60,7 +60,7 @@ pub struct ForwardIntermediates<F: Float> {
 /// * `outputs` - Output tensor (indexed by stage_offset)
 /// * `fwd_intermediates` - Output tensors for forward intermediates (for backward pass)
 /// * `weight_smem` - Weight matrix in shared memory [F, F], updated in place
-/// * `bias_rv` - Bias vector in registers [F], updated in place
+/// * `bias_rv` - Bias vector in registers [F], updated in place (EVal for tensor I/O)
 /// * `ln_weight_rv` - Layer norm weight [F]
 /// * `ln_bias_rv` - Layer norm bias [F]
 /// * `stage_offset` - Offset into qkv/output for this mini-batch (in elements)
@@ -69,28 +69,28 @@ pub struct ForwardIntermediates<F: Float> {
 #[cube]
 #[allow(clippy::too_many_arguments)]
 pub fn fused_ttt_forward_stage<P: ParamsTrait>(
-    inputs: &Inputs<P::E>,
-    outputs: &mut Outputs<P::E>,
-    fwd_intermediates: &mut ForwardIntermediates<P::E>,
-    weight_smem: &mut FFTile<P>,
-    bias_rv: &mut FRegBig<P>,
-    ln_weight_rv: &FRegBig<P>,
-    ln_bias_rv: &FRegBig<P>,
+    inputs: &Inputs<P::EVal>,
+    outputs: &mut Outputs<P::EVal>,
+    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
+    weight_smem: &mut StFF<P>,
+    bias_rv: &mut RvbFV<P>,
+    ln_weight_rv: &RvbFV<P>,
+    ln_bias_rv: &RvbFV<P>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
     #[comptime] epsilon: f32,
 ) {
     // Scratch tiles - allocated per stage call
-    let mut q_smem = P::f_cs_tile();
-    let mut k_smem = P::f_cs_tile();
-    let mut k_direct_smem = P::cs_f_tile();
-    let mut v_direct_smem = P::cs_f_tile();
-    let mut z1_smem = P::cs_f_tile();
-    let mut temp_cs_f_smem = P::cs_f_tile();
-    let mut eta_matrix_smem = P::cs_cs_tile();
+    let mut q_smem = P::st_f_cs();
+    let mut k_smem = P::st_f_cs();
+    let mut k_direct_smem = P::st_cs_f();
+    let mut v_direct_smem = P::st_cs_f();
+    let mut z1_smem = P::st_cs_f();
+    let mut temp_cs_f_smem = P::st_cs_f();
+    let mut eta_matrix_smem = P::st_cs_cs();
     // Note: attn_smem removed - eta*attn is computed fused in build_eta_attn_fused
     // Note: x_hat_ln_smem removed - all LN intermediates streamed directly to global
-    let mut reduce_buf = ReduceBuf::<P::E>::new();
+    let mut reduce_buf = ReduceBuf::<P::EVal>::new();
 
     // Load QKV for this stage
     cube::load_st_transpose(&inputs.xq, &mut q_smem, stage_offset, 0, 0);
@@ -101,20 +101,20 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 1: z1 = xk @ W + b
-    let mut z1_reg = P::cs_f_reg();
+    let mut z1_reg = P::rt_cs_f();
     z1_reg.zero();
     cube::mma_AtB(&mut z1_reg, &k_smem, weight_smem);
 
     sync_cube();
 
-    // Add bias (need to broadcast from full bias_rv to the thread's portion)
+    // Add bias (need to broadcast from full bias_rv to the thread's portion, casting EVal -> EAcc)
     let threads_n = P::F::VALUE / P::F_Reg::VALUE;
     let thread_n = (UNIT_POS as usize) % threads_n;
-    let mut bias_reg = P::f_reg();
+    let mut bias_reg = P::rv_f();
     #[unroll]
     for i in 0..P::F_Reg::LINES {
         let src_idx = thread_n * P::F_Reg::LINES + i;
-        bias_reg.data[i] = bias_rv.data[src_idx];
+        bias_reg.data[i] = thundercube::util::cast_line(bias_rv.data[src_idx]);
     }
     z1_reg.add_row(&bias_reg);
 
@@ -130,7 +130,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     // Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
     // Streams intermediates (x_hat_fused, grad_output_fused, grad_x_hat_fused) directly to global
     // Use k_direct_smem as scratch (dead after line 131)
-    let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::E, P::CS, P::F>(
+    let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::EVal, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
         ln_weight_rv,
@@ -174,7 +174,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     );
 
     // Step 5: eta @ grad (compute before eta_matrix is overwritten)
-    let mut eta_grad_reg = P::cs_f_reg();
+    let mut eta_grad_reg = P::rt_cs_f();
     eta_grad_reg.zero();
     cube::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
 
@@ -193,14 +193,14 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     );
 
     // (eta * attn) @ grad
-    let mut eta_attn_grad_reg = P::cs_f_reg();
+    let mut eta_attn_grad_reg = P::rt_cs_f();
     eta_attn_grad_reg.zero();
     cube::mma_AB(&mut eta_attn_grad_reg, &eta_matrix_smem, &z1_smem);
 
     sync_cube();
 
     // z1_bar = xq @ W
-    let mut z1_bar_reg = P::cs_f_reg();
+    let mut z1_bar_reg = P::rt_cs_f();
     z1_bar_reg.zero();
     cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_smem);
 
@@ -222,7 +222,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     // Step 8: layer_norm + add xq
     // Streams x_hat_ln directly to global memory
-    let std_ln_rv = layer_norm_forward_stream_intermediates::<P::E, P::CS, P::F>(
+    let std_ln_rv = layer_norm_forward_stream_intermediates::<P::EVal, P::CS, P::F>(
         &mut temp_cs_f_smem,
         ln_weight_rv,
         ln_bias_rv,
@@ -262,7 +262,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let last_token_eta_scalar = token_eta_line[last_elem_in_line];
 
     // Load ttt_lr_eta and scale by token_eta[last]
-    let mut last_eta_rv = P::cs_reg_big();
+    let mut last_eta_rv = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta_scalar);
 
@@ -277,14 +277,14 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Compute weight_update = scaled_xk^T @ grad = q_smem @ z1_smem = [F, CS] @ [CS, F] = [F, F]
-    let mut weight_update_reg = P::f_f_reg();
+    let mut weight_update_reg = P::rt_ff();
     weight_update_reg.zero();
     cube::mma_AB(&mut weight_update_reg, &q_smem, &z1_smem);
 
     sync_cube();
 
     // Update weight in place: weight -= weight_update
-    let mut weight_reg = P::f_f_reg();
+    let mut weight_reg = P::rt_ff();
     cube::load_rt_from_st(weight_smem, &mut weight_reg);
     weight_reg.sub(&weight_update_reg);
     cube::store_rt_to_st(&weight_reg, weight_smem);
@@ -300,8 +300,8 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut bias_update_rv = P::f_reg_big();
-    cube::reduce_cols_plane::<P::E, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
+    let mut bias_update_rv = P::rvb_f_v();
+    cube::reduce_cols_plane::<P::EVal, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
 
     // Update bias in place
     bias_rv.sub(&bias_update_rv);
@@ -325,9 +325,9 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 /// 10. bias_out = bias - sum_rows(last_eta_col * grad)
 #[cube(launch)]
 pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
-    inputs: &Inputs<P::E>,
-    outputs: &mut Outputs<P::E>,
-    fwd_intermediates: &mut ForwardIntermediates<P::E>,
+    inputs: &Inputs<P::EVal>,
+    outputs: &mut Outputs<P::EVal>,
+    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     #[comptime] config: FusedTttConfig,
 ) {
     let batch_idx = CUBE_POS_X as usize;
@@ -341,19 +341,19 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     let ttt_lr_eta_idx = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
 
     // Initialize weight in shared memory
-    let mut weight_smem = P::f_f_tile();
+    let mut weight_smem = P::st_ff();
     cube::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
 
     sync_cube();
 
-    // Initialize bias in register vector
-    let mut bias_rv = P::f_reg_big();
+    // Initialize bias in register vector (EVal for tensor I/O)
+    let mut bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
-    // Load layer norm params
+    // Load layer norm params (EVal to match St types in layer_norm functions)
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-    let mut ln_weight_rv = P::f_reg_big();
-    let mut ln_bias_rv = P::f_reg_big();
+    let mut ln_weight_rv = P::rvb_f_v();
+    let mut ln_bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
     cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
@@ -391,9 +391,9 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 /// Output tensor should have the same shape.
 #[cube(launch)]
 pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
-    inputs: &Inputs<P::E>,
-    outputs: &mut Outputs<P::E>,
-    fwd_intermediates: &mut ForwardIntermediates<P::E>,
+    inputs: &Inputs<P::EVal>,
+    outputs: &mut Outputs<P::EVal>,
+    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     num_stages: u32,
     #[comptime] config: FusedTttConfig,
 ) {
@@ -413,19 +413,19 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     let ttt_lr_eta_idx = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
 
     // Initialize weight in shared memory
-    let mut weight_smem = P::f_f_tile();
+    let mut weight_smem = P::st_ff();
     cube::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
 
     sync_cube();
 
-    // Initialize bias in register vector
-    let mut bias_rv = P::f_reg_big();
+    // Initialize bias in register vector (EVal for tensor I/O)
+    let mut bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
-    // Load layer norm params (shared across all stages)
+    // Load layer norm params (EVal to match St types in layer_norm functions)
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-    let mut ln_weight_rv = P::f_reg_big();
-    let mut ln_bias_rv = P::f_reg_big();
+    let mut ln_weight_rv = P::rvb_f_v();
+    let mut ln_bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
     cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
