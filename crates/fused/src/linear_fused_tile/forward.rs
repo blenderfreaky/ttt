@@ -4,7 +4,7 @@ use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
 
 use super::{
-    helpers::{StFF, RvbFV, ParamsTrait, build_eta_attn_fused, build_eta_matrix},
+    helpers::{ParamsTrait, RvbFV, StFF, build_eta_attn_fused, build_eta_matrix},
     layer_norm::{
         layer_norm_forward_stream_intermediates, layer_norm_l2_grad_stream_intermediates,
     },
@@ -90,7 +90,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut eta_matrix_smem = P::st_cs_cs();
     // Note: attn_smem removed - eta*attn is computed fused in build_eta_attn_fused
     // Note: x_hat_ln_smem removed - all LN intermediates streamed directly to global
-    let mut reduce_buf = ReduceBuf::<P::EVal>::new();
+    let mut reduce_buf = ReduceBuf::<P::EAcc>::new();
 
     // Load QKV for this stage
     cube::load_st_transpose(&inputs.xq, &mut q_smem, stage_offset, 0, 0);
@@ -130,7 +130,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     // Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
     // Streams intermediates (x_hat_fused, grad_output_fused, grad_x_hat_fused) directly to global
     // Use k_direct_smem as scratch (dead after line 131)
-    let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::EVal, P::CS, P::F>(
+    let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::EVal, P::EAcc, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
         ln_weight_rv,
@@ -222,7 +222,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     // Step 8: layer_norm + add xq
     // Streams x_hat_ln directly to global memory
-    let std_ln_rv = layer_norm_forward_stream_intermediates::<P::EVal, P::CS, P::F>(
+    let std_ln_rv = layer_norm_forward_stream_intermediates::<P::EVal, P::EAcc, P::CS, P::F>(
         &mut temp_cs_f_smem,
         ln_weight_rv,
         ln_bias_rv,
@@ -300,11 +300,16 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    let mut bias_update_rv = P::rvb_f_v();
-    cube::reduce_cols_plane::<P::EVal, P::CS, P::F, SumOp>(&temp_cs_f_smem, &mut bias_update_rv);
+    let mut bias_update_rv = P::rvb_f_a();
+    cube::reduce_cols::<P::EVal, P::EAcc, P::CS, P::F, SumOp>(
+        &temp_cs_f_smem,
+        &mut bias_update_rv,
+        &mut reduce_buf,
+    );
 
     // Update bias in place
-    bias_rv.sub(&bias_update_rv);
+    let bias_update_val = bias_update_rv.cast::<P::EVal>();
+    bias_rv.sub(&bias_update_val);
 }
 
 /// Fused TTT-Linear forward pass kernel (single mini-batch).

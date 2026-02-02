@@ -114,7 +114,7 @@ fn bench_st_sum_rows_cube<F: Float, R: Dim, C: Dim>(
 
     #[unroll]
     for _ in 0..iters {
-        sum_rows::<F, R, C>(&st, &mut result, &mut buf);
+        sum_rows::<F, F, R, C>(&st, &mut result, &mut buf);
     }
 
     if UNIT_POS == 0 {
@@ -137,7 +137,7 @@ fn bench_st_sum_cols_cube<F: Float, R: Dim, C: Dim>(
 
     #[unroll]
     for _ in 0..iters {
-        sum_cols::<F, R, C>(&st, &mut result, &mut buf);
+        sum_cols::<F, F, R, C>(&st, &mut result, &mut buf);
     }
 
     if UNIT_POS == 0 {

@@ -187,13 +187,14 @@ pub struct InputsData {
 }
 
 /// Extract inputs as raw data from a TTTInputsInner.
+/// Converts to f32 regardless of backend element type.
 pub fn inputs_to_data<B: Backend>(inputs: &TTTInputsInner<B>) -> InputsData {
     InputsData {
-        xq: inputs.qkv.xq.to_data().to_vec().unwrap(),
-        xk: inputs.qkv.xk.to_data().to_vec().unwrap(),
-        xv: inputs.qkv.xv.to_data().to_vec().unwrap(),
-        token_eta: inputs.token_eta.to_data().to_vec().unwrap(),
-        ttt_lr_eta: inputs.ttt_lr_eta.to_data().to_vec().unwrap(),
+        xq: inputs.qkv.xq.to_data().convert::<f32>().to_vec().unwrap(),
+        xk: inputs.qkv.xk.to_data().convert::<f32>().to_vec().unwrap(),
+        xv: inputs.qkv.xv.to_data().convert::<f32>().to_vec().unwrap(),
+        token_eta: inputs.token_eta.to_data().convert::<f32>().to_vec().unwrap(),
+        ttt_lr_eta: inputs.ttt_lr_eta.to_data().convert::<f32>().to_vec().unwrap(),
     }
 }
 
@@ -419,9 +420,10 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .grad(&grads_tested)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
-            &xq_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+            &xq_ref.grad(&grads_ref).unwrap().to_data().convert::<f32>().to_vec().unwrap(),
             rtol,
             atol,
             &format!("{iter_name} grad_xq"),
@@ -431,9 +433,10 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .grad(&grads_tested)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
-            &xk_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+            &xk_ref.grad(&grads_ref).unwrap().to_data().convert::<f32>().to_vec().unwrap(),
             rtol,
             atol,
             &format!("{iter_name} grad_xk"),
@@ -443,9 +446,10 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .grad(&grads_tested)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
-            &xv_ref.grad(&grads_ref).unwrap().to_data().to_vec().unwrap(),
+            &xv_ref.grad(&grads_ref).unwrap().to_data().convert::<f32>().to_vec().unwrap(),
             rtol,
             atol,
             &format!("{iter_name} grad_xv"),
@@ -455,12 +459,14 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .grad(&grads_tested)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
             &ttt_lr_eta_ref
                 .grad(&grads_ref)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
             rtol,
@@ -474,12 +480,14 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .grad(&grads_tested)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
             &weight_ref
                 .grad(&grads_ref)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
             rtol,
@@ -491,12 +499,14 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .grad(&grads_tested)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
             &bias_ref
                 .grad(&grads_ref)
                 .unwrap()
                 .to_data()
+                .convert::<f32>()
                 .to_vec()
                 .unwrap(),
             rtol,
@@ -604,23 +614,23 @@ pub fn test_vs_ttt_linear<B, T, S, Transform, RunRef, RunTested>(
             name.to_string()
         };
         assert_data_close(
-            &output_tested.to_data().to_vec().unwrap(),
-            &output_ref.to_data().to_vec().unwrap(),
+            &output_tested.to_data().convert::<f32>().to_vec().unwrap(),
+            &output_ref.to_data().convert::<f32>().to_vec().unwrap(),
             rtol,
             atol,
             &format!("{iter_name} output"),
         );
         let tested_state = state_tested.as_ref();
         assert_data_close(
-            &tested_state.weight.to_data().to_vec().unwrap(),
-            &state_ref.weight.to_data().to_vec().unwrap(),
+            &tested_state.weight.to_data().convert::<f32>().to_vec().unwrap(),
+            &state_ref.weight.to_data().convert::<f32>().to_vec().unwrap(),
             rtol,
             atol,
             &format!("{iter_name} weight"),
         );
         assert_data_close(
-            &tested_state.bias.to_data().to_vec().unwrap(),
-            &state_ref.bias.to_data().to_vec().unwrap(),
+            &tested_state.bias.to_data().convert::<f32>().to_vec().unwrap(),
+            &state_ref.bias.to_data().convert::<f32>().to_vec().unwrap(),
             rtol,
             atol,
             &format!("{iter_name} bias"),

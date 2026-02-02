@@ -290,4 +290,8 @@ impl FusedTttConfig {
     pub fn is_config_supported(mini_batch_len: usize, head_dim: usize, threads: usize) -> bool {
         linear_fused_tile::is_tile_config_supported(mini_batch_len, head_dim, threads)
     }
+
+    /// All supported tile configurations as (mini_batch_len, head_dim, threads) tuples.
+    pub const SUPPORTED_CONFIGS: &[(usize, usize, usize)] =
+        linear_fused_tile::SUPPORTED_TILE_CONFIGS;
 }

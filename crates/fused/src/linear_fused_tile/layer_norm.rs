@@ -39,30 +39,33 @@ impl_reduction_ops! {
 /// - `x` contains x_hat (normalized, zero mean, unit variance)
 /// - returned `std` contains the standard deviation per row
 #[cube]
-fn normalize_to_x_hat<F: Float, R: Dim, C: Dim>(
-    x: &mut St<F, R, C>,
-    buf: &mut ReduceBuf<F>,
+fn normalize_to_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    x: &mut St<FVal, R, C>,
+    buf: &mut ReduceBuf<FAcc>,
     #[comptime] epsilon: f32,
-) -> Rv<F, R> {
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+) -> Rv<FVal, R> {
+    let c_inv = FAcc::cast_from(1.0f32 / (C::VALUE as f32));
 
     // mean = sum_rows(x) / C
-    let mut mean = Rv::<F, R>::new();
-    cube::sum_rows(x, &mut mean, buf);
-    mean.mul_scalar(c_inv);
+    let mut mean_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(x, &mut mean_acc, buf);
+    mean_acc.mul_scalar(c_inv);
+    let mean = mean_acc.cast::<FVal>();
 
     // x -= mean
     x.sub_col(&mean);
     sync_cube();
 
     // var = sum_rows(x^2) / C
-    let mut std = Rv::<F, R>::new();
-    cube::reduce_rows::<F, R, C, SumSqOp>(x, &mut std, buf);
-    std.mul_scalar(c_inv);
+    let mut std_acc = Rv::<FAcc, R>::new();
+    cube::reduce_rows::<FVal, FAcc, R, C, SumSqOp>(x, &mut std_acc, buf);
+    std_acc.mul_scalar(c_inv);
 
     // std = sqrt(var + epsilon)
-    std.add_scalar(F::cast_from(epsilon));
-    std.sqrt();
+    std_acc.add_scalar(FAcc::cast_from(epsilon));
+    std_acc.sqrt();
+
+    let std = std_acc.cast::<FVal>();
 
     // x /= std -> x_hat
     x.div_col(&std);
@@ -84,28 +87,30 @@ fn normalize_to_x_hat<F: Float, R: Dim, C: Dim>(
 /// * `std` - Standard deviation per row [R]
 /// * `temp` - Scratch tile [R, C]
 #[cube]
-fn compute_grad_x_from_grad_x_hat<F: Float, R: Dim, C: Dim>(
-    grad_x_hat: &St<F, R, C>,
-    x_hat: &mut St<F, R, C>,
-    std: &Rv<F, R>,
-    temp: &mut St<F, R, C>,
-    buf: &mut ReduceBuf<F>,
+fn compute_grad_x_from_grad_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    grad_x_hat: &St<FVal, R, C>,
+    x_hat: &mut St<FVal, R, C>,
+    std: &Rv<FVal, R>,
+    temp: &mut St<FVal, R, C>,
+    buf: &mut ReduceBuf<FAcc>,
 ) {
-    let c_f = F::cast_from(C::VALUE as f32);
-    let c_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+    let c_f = FVal::cast_from(C::VALUE as f32);
+    let c_inv = FVal::cast_from(1.0f32 / (C::VALUE as f32));
 
     // Step 1: Compute sums (need both grad_x_hat and x_hat)
     // sum_grad_x_hat = sum(grad_x_hat) per row
-    let mut sum_grad_x_hat = Rv::<F, R>::new();
-    cube::sum_rows(grad_x_hat, &mut sum_grad_x_hat, buf);
+    let mut sum_grad_x_hat_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(grad_x_hat, &mut sum_grad_x_hat_acc, buf);
+    let sum_grad_x_hat = sum_grad_x_hat_acc.cast::<FVal>();
 
     // sum_grad_x_hat_x_hat = sum(grad_x_hat * x_hat) per row
     temp.copy_from(grad_x_hat);
     temp.mul(x_hat);
     sync_cube();
 
-    let mut sum_grad_x_hat_x_hat = Rv::<F, R>::new();
-    cube::sum_rows(temp, &mut sum_grad_x_hat_x_hat, buf);
+    let mut sum_grad_x_hat_x_hat_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(temp, &mut sum_grad_x_hat_x_hat_acc, buf);
+    let sum_grad_x_hat_x_hat = sum_grad_x_hat_x_hat_acc.cast::<FVal>();
 
     // Step 2: Compute x_hat * sum_grad_x_hat_x_hat (last use of x_hat!)
     temp.copy_from(x_hat);
@@ -143,15 +148,15 @@ fn compute_grad_x_from_grad_x_hat<F: Float, R: Dim, C: Dim>(
 /// * `ln_bias` - Layer norm bias vector [C]
 /// * `epsilon` - Small constant for numerical stability
 #[cube]
-pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
-    x: &mut St<F, R, C>,
-    ln_weight: &Rv<F, C>,
-    ln_bias: &Rv<F, C>,
-    buf: &mut ReduceBuf<F>,
+pub fn layer_norm_forward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    x: &mut St<FVal, R, C>,
+    ln_weight: &Rv<FVal, C>,
+    ln_bias: &Rv<FVal, C>,
+    buf: &mut ReduceBuf<FAcc>,
     #[comptime] epsilon: f32,
 ) {
     // Normalize: x -> x_hat = (x - mean) / std
-    let _std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
+    let _std = normalize_to_x_hat::<FVal, FAcc, R, C>(x, buf, epsilon);
 
     // Apply affine: x = weight * x_hat + bias
     x.mul_row(ln_weight);
@@ -168,17 +173,17 @@ pub fn layer_norm_forward<F: Float, R: Dim, C: Dim>(
 /// * `std_out` - Output vector [R], will contain std per row
 /// * `epsilon` - Small constant for numerical stability
 #[cube]
-pub fn layer_norm_forward_with_intermediates<F: Float, R: Dim, C: Dim>(
-    x: &mut St<F, R, C>,
-    ln_weight: &Rv<F, C>,
-    ln_bias: &Rv<F, C>,
-    output: &mut St<F, R, C>,
-    std_out: &mut Rv<F, R>,
-    buf: &mut ReduceBuf<F>,
+pub fn layer_norm_forward_with_intermediates<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    x: &mut St<FVal, R, C>,
+    ln_weight: &Rv<FVal, C>,
+    ln_bias: &Rv<FVal, C>,
+    output: &mut St<FVal, R, C>,
+    std_out: &mut Rv<FVal, R>,
+    buf: &mut ReduceBuf<FAcc>,
     #[comptime] epsilon: f32,
 ) {
     // Normalize: x -> x_hat, save std
-    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
+    let std = normalize_to_x_hat::<FVal, FAcc, R, C>(x, buf, epsilon);
     std_out.set(&std);
 
     // output = weight * x_hat + bias
@@ -200,17 +205,17 @@ pub fn layer_norm_forward_with_intermediates<F: Float, R: Dim, C: Dim>(
 /// * `temp` - Scratch tile [R, C] for intermediate computations
 /// * `epsilon` - Small constant for numerical stability
 #[cube]
-pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
-    x: &mut St<F, R, C>,
-    target: &St<F, R, C>,
-    ln_weight: &Rv<F, C>,
-    ln_bias: &Rv<F, C>,
-    temp: &mut St<F, R, C>,
-    buf: &mut ReduceBuf<F>,
+pub fn layer_norm_l2_grad<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    x: &mut St<FVal, R, C>,
+    target: &St<FVal, R, C>,
+    ln_weight: &Rv<FVal, C>,
+    ln_bias: &Rv<FVal, C>,
+    temp: &mut St<FVal, R, C>,
+    buf: &mut ReduceBuf<FAcc>,
     #[comptime] epsilon: f32,
 ) {
     // Normalize: x -> x_hat
-    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
+    let std = normalize_to_x_hat::<FVal, FAcc, R, C>(x, buf, epsilon);
 
     // Compute y = weight * x_hat + bias, then dl_dout = y - target
     temp.copy_from(x);
@@ -223,8 +228,8 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     // Compute grad_x from grad_x_hat (writes result directly to x)
-    let mut scratch = St::<F, R, C>::new();
-    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x, &std, &mut scratch, buf);
+    let mut scratch = St::<FVal, R, C>::new();
+    compute_grad_x_from_grad_x_hat::<FVal, FAcc, R, C>(temp, x, &std, &mut scratch, buf);
 
     sync_cube();
 }
@@ -245,23 +250,23 @@ pub fn layer_norm_l2_grad<F: Float, R: Dim, C: Dim>(
 /// `scratch` is an external scratch tile (caller can pass a dead tile).
 #[cube]
 #[allow(clippy::too_many_arguments)]
-pub fn layer_norm_l2_grad_stream_intermediates<F: Float, R: Dim, C: Dim>(
-    x: &mut St<F, R, C>,
-    target: &St<F, R, C>,
-    ln_weight: &Rv<F, C>,
-    ln_bias: &Rv<F, C>,
-    temp: &mut St<F, R, C>,
-    scratch: &mut St<F, R, C>,
-    buf: &mut ReduceBuf<F>,
+pub fn layer_norm_l2_grad_stream_intermediates<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    x: &mut St<FVal, R, C>,
+    target: &St<FVal, R, C>,
+    ln_weight: &Rv<FVal, C>,
+    ln_bias: &Rv<FVal, C>,
+    temp: &mut St<FVal, R, C>,
+    scratch: &mut St<FVal, R, C>,
+    buf: &mut ReduceBuf<FAcc>,
     // Global tensor outputs (stored directly, no smem intermediates)
-    x_hat_global: &mut Tensor<Line<F>>,
-    grad_output_global: &mut Tensor<Line<F>>,
-    grad_x_hat_global: &mut Tensor<Line<F>>,
+    x_hat_global: &mut Tensor<Line<FVal>>,
+    grad_output_global: &mut Tensor<Line<FVal>>,
+    grad_x_hat_global: &mut Tensor<Line<FVal>>,
     store_offset: usize,
     #[comptime] epsilon: f32,
-) -> Rv<F, R> {
+) -> Rv<FVal, R> {
     // Normalize: x -> x_hat
-    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
+    let std = normalize_to_x_hat::<FVal, FAcc, R, C>(x, buf, epsilon);
 
     // Store x_hat directly to global (x still contains x_hat for subsequent use)
     cube::store_st_direct(x, x_hat_global, store_offset, 0, 0);
@@ -286,7 +291,7 @@ pub fn layer_norm_l2_grad_stream_intermediates<F: Float, R: Dim, C: Dim>(
     cube::store_st_direct(temp, grad_x_hat_global, store_offset, 0, 0);
 
     // Compute grad_x from grad_x_hat (writes result directly to x)
-    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, x, &std, scratch, buf);
+    compute_grad_x_from_grad_x_hat::<FVal, FAcc, R, C>(temp, x, &std, scratch, buf);
 
     sync_cube();
 
@@ -300,17 +305,17 @@ pub fn layer_norm_l2_grad_stream_intermediates<F: Float, R: Dim, C: Dim>(
 /// - std: standard deviation per row [R]
 #[cube]
 #[allow(clippy::too_many_arguments)]
-pub fn layer_norm_forward_save_intermediates<F: Float, R: Dim, C: Dim>(
-    x: &mut St<F, R, C>,
-    ln_weight: &Rv<F, C>,
-    ln_bias: &Rv<F, C>,
-    buf: &mut ReduceBuf<F>,
-    x_hat_out: &mut St<F, R, C>,
-    std_out: &mut Rv<F, R>,
+pub fn layer_norm_forward_save_intermediates<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    x: &mut St<FVal, R, C>,
+    ln_weight: &Rv<FVal, C>,
+    ln_bias: &Rv<FVal, C>,
+    buf: &mut ReduceBuf<FAcc>,
+    x_hat_out: &mut St<FVal, R, C>,
+    std_out: &mut Rv<FVal, R>,
     #[comptime] epsilon: f32,
 ) {
     // Normalize: x -> x_hat, save std
-    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
+    let std = normalize_to_x_hat::<FVal, FAcc, R, C>(x, buf, epsilon);
     std_out.set(&std);
 
     // Save x_hat for backward
@@ -327,17 +332,17 @@ pub fn layer_norm_forward_save_intermediates<F: Float, R: Dim, C: Dim>(
 /// buffering in shared memory. Returns std for the caller to store.
 #[cube]
 #[allow(clippy::too_many_arguments)]
-pub fn layer_norm_forward_stream_intermediates<F: Float, R: Dim, C: Dim>(
-    x: &mut St<F, R, C>,
-    ln_weight: &Rv<F, C>,
-    ln_bias: &Rv<F, C>,
-    buf: &mut ReduceBuf<F>,
-    x_hat_global: &mut Tensor<Line<F>>,
+pub fn layer_norm_forward_stream_intermediates<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    x: &mut St<FVal, R, C>,
+    ln_weight: &Rv<FVal, C>,
+    ln_bias: &Rv<FVal, C>,
+    buf: &mut ReduceBuf<FAcc>,
+    x_hat_global: &mut Tensor<Line<FVal>>,
     store_offset: usize,
     #[comptime] epsilon: f32,
-) -> Rv<F, R> {
+) -> Rv<FVal, R> {
     // Normalize: x -> x_hat
-    let std = normalize_to_x_hat::<F, R, C>(x, buf, epsilon);
+    let std = normalize_to_x_hat::<FVal, FAcc, R, C>(x, buf, epsilon);
 
     // Store x_hat directly to global (x still contains x_hat for affine transform)
     cube::store_st_direct(x, x_hat_global, store_offset, 0, 0);
@@ -364,25 +369,25 @@ pub fn layer_norm_forward_stream_intermediates<F: Float, R: Dim, C: Dim>(
 /// - grad_ln_bias: gradient w.r.t. bias [C]
 #[cube]
 #[allow(clippy::too_many_arguments)]
-pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
-    grad_output: &St<F, R, C>,
-    x_hat: &St<F, R, C>,
-    std: &Rv<F, R>,
-    ln_weight: &Rv<F, C>,
-    temp: &mut St<F, R, C>,
-    grad_x: &mut St<F, R, C>,
-    grad_ln_weight: &mut Rv<F, C>,
-    grad_ln_bias: &mut Rv<F, C>,
-    buf: &mut ReduceBuf<F>,
+pub fn layer_norm_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    grad_output: &St<FVal, R, C>,
+    x_hat: &St<FVal, R, C>,
+    std: &Rv<FVal, R>,
+    ln_weight: &Rv<FVal, C>,
+    temp: &mut St<FVal, R, C>,
+    grad_x: &mut St<FVal, R, C>,
+    grad_ln_weight: &mut Rv<FAcc, C>,
+    grad_ln_bias: &mut Rv<FAcc, C>,
+    buf: &mut ReduceBuf<FAcc>,
 ) {
     // grad_ln_bias = sum(grad_output)
-    cube::reduce_cols::<F, R, C, SumOp>(grad_output, grad_ln_bias, buf);
+    cube::reduce_cols::<FVal, FAcc, R, C, SumOp>(grad_output, grad_ln_bias, buf);
 
     // grad_ln_weight = sum(grad_output * x_hat)
     temp.copy_from(grad_output);
     temp.mul(x_hat);
     sync_cube();
-    cube::reduce_cols::<F, R, C, SumOp>(temp, grad_ln_weight, buf);
+    cube::reduce_cols::<FVal, FAcc, R, C, SumOp>(temp, grad_ln_weight, buf);
 
     // grad_x_hat = grad_output * weight
     temp.copy_from(grad_output);
@@ -394,8 +399,8 @@ pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
     grad_x.copy_from(x_hat);
     sync_cube();
 
-    let mut scratch = St::<F, R, C>::new();
-    compute_grad_x_from_grad_x_hat::<F, R, C>(temp, grad_x, std, &mut scratch, buf);
+    let mut scratch = St::<FVal, R, C>::new();
+    compute_grad_x_from_grad_x_hat::<FVal, FAcc, R, C>(temp, grad_x, std, &mut scratch, buf);
 }
 
 /// Backward through the fused layer norm + L2 gradient computation.
@@ -425,28 +430,28 @@ pub fn layer_norm_backward<F: Float, R: Dim, C: Dim>(
 /// * `grad_L_ln_bias` - Output: gradient w.r.t. ln_bias [C]
 #[cube]
 #[allow(clippy::too_many_arguments)]
-pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
+pub fn layer_norm_l2_grad_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
     // Upstream gradient
-    grad_L_grad_l: &St<F, R, C>,
+    grad_L_grad_l: &St<FVal, R, C>,
     // Saved from forward
-    x_hat: &St<F, R, C>,
-    std: &Rv<F, R>,
-    grad_output: &St<F, R, C>, // y - target from forward
-    grad_x_hat: &St<F, R, C>,  // grad_output * ln_weight from forward
-    ln_weight: &Rv<F, C>,
+    x_hat: &St<FVal, R, C>,
+    std: &Rv<FVal, R>,
+    grad_output: &St<FVal, R, C>, // y - target from forward
+    grad_x_hat: &St<FVal, R, C>,  // grad_output * ln_weight from forward
+    ln_weight: &Rv<FVal, C>,
     // Temp storage
-    temp1: &mut St<F, R, C>,
-    temp2: &mut St<F, R, C>,
+    temp1: &mut St<FVal, R, C>,
+    temp2: &mut St<FVal, R, C>,
     // Outputs (shared memory)
-    grad_L_Z1: &mut St<F, R, C>,
-    grad_L_target: &mut St<F, R, C>,
-    // Outputs (register vectors)
-    grad_L_ln_weight: &mut Rv<F, C>,
-    grad_L_ln_bias: &mut Rv<F, C>,
-    buf: &mut ReduceBuf<F>,
+    grad_L_Z1: &mut St<FVal, R, C>,
+    grad_L_target: &mut St<FVal, R, C>,
+    // Outputs
+    grad_L_ln_weight: &mut Rv<FAcc, C>,
+    grad_L_ln_bias: &mut Rv<FAcc, C>,
+    buf: &mut ReduceBuf<FAcc>,
 ) {
-    let f_f = F::cast_from(C::VALUE as f32);
-    let f_inv = F::cast_from(1.0f32 / (C::VALUE as f32));
+    let f_f = FVal::cast_from(C::VALUE as f32);
+    let f_inv = FVal::cast_from(1.0f32 / (C::VALUE as f32));
 
     // From Triton reference:
     // grad_L_grad_x_hat = (1/std) * grad_L_grad_l
@@ -461,16 +466,18 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
     sync_cube();
 
     // sum1 = sum(-grad_L_grad_l / std) per row
-    let mut sum1 = Rv::<F, R>::new();
-    cube::sum_rows(temp1, &mut sum1, buf);
+    let mut sum1_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(temp1, &mut sum1_acc, buf);
+    let sum1 = sum1_acc.cast::<FVal>();
 
     // sum2 = sum(-grad_L_grad_l / std * x_hat) per row
     temp1.mul(x_hat);
 
     sync_cube();
 
-    let mut sum2 = Rv::<F, R>::new();
-    cube::sum_rows(temp1, &mut sum2, buf);
+    let mut sum2_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(temp1, &mut sum2_acc, buf);
+    let sum2 = sum2_acc.cast::<FVal>();
 
     // grad_L_grad_x_hat = (1/std) * grad_L_grad_l + (1/F) * sum1 + (1/F) * x_hat * sum2
     // temp1 = (1/std) * grad_L_grad_l
@@ -521,10 +528,10 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    cube::reduce_cols::<F, R, C, SumOp>(grad_L_Z1, grad_L_ln_weight, buf);
+    cube::reduce_cols::<FVal, FAcc, R, C, SumOp>(grad_L_Z1, grad_L_ln_weight, buf);
 
     // grad_L_ln_bias = sum(grad_L_y) = sum(temp2)
-    cube::reduce_cols::<F, R, C, SumOp>(temp2, grad_L_ln_bias, buf);
+    cube::reduce_cols::<FVal, FAcc, R, C, SumOp>(temp2, grad_L_ln_bias, buf);
 
     // grad_L_x_hat = grad_L_y * ln_weight
     //              + (1/F) * grad_x_hat * sum(-grad_L_grad_l / std * x_hat)
@@ -542,8 +549,9 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    let mut sum_gxh_xh = Rv::<F, R>::new();
-    cube::sum_rows(temp2, &mut sum_gxh_xh, buf);
+    let mut sum_gxh_xh_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(temp2, &mut sum_gxh_xh_acc, buf);
+    let sum_gxh_xh = sum_gxh_xh_acc.cast::<FVal>();
 
     // Term 2: (1/F) * grad_x_hat * sum2 (sum2 = sum(-grad_L_grad_l / std * x_hat))
     temp2.copy_from(grad_x_hat);
@@ -575,8 +583,9 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
     // grad_l = (grad_x_hat * F - sum(grad_x_hat) - x_hat * sum(grad_x_hat * x_hat)) / (std * F)
 
     // Compute sum(grad_x_hat) per row
-    let mut sum_gxh = Rv::<F, R>::new();
-    cube::sum_rows(grad_x_hat, &mut sum_gxh, buf);
+    let mut sum_gxh_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(grad_x_hat, &mut sum_gxh_acc, buf);
+    let sum_gxh = sum_gxh_acc.cast::<FVal>();
 
     // grad_l = (grad_x_hat * F - sum_gxh - x_hat * sum_gxh_xh) / (std * F)
     temp2.copy_from(grad_x_hat);
@@ -622,14 +631,16 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
     // Now grad_L_Z1 = grad_L_std
 
     // Compute sum(grad_L_std) per row
-    let mut sum_grad_L_std = Rv::<F, R>::new();
-    cube::sum_rows(grad_L_Z1, &mut sum_grad_L_std, buf);
+    let mut sum_grad_L_std_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(grad_L_Z1, &mut sum_grad_L_std_acc, buf);
+    let sum_grad_L_std = sum_grad_L_std_acc.cast::<FVal>();
 
     // Final: grad_L_Z1 = grad_L_x_hat / std - (1/F) * sum(grad_L_x_hat) / std + (1/F) * sum(grad_L_std) * x_hat
 
     // sum(grad_L_x_hat) per row - temp1 still has grad_L_x_hat
-    let mut sum_grad_L_x_hat = Rv::<F, R>::new();
-    cube::sum_rows(temp1, &mut sum_grad_L_x_hat, buf);
+    let mut sum_grad_L_x_hat_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(temp1, &mut sum_grad_L_x_hat_acc, buf);
+    let sum_grad_L_x_hat = sum_grad_L_x_hat_acc.cast::<FVal>();
 
     // grad_L_Z1 = temp1 / std
     grad_L_Z1.copy_from(temp1);
@@ -665,15 +676,17 @@ pub fn layer_norm_l2_grad_backward<F: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    let mut sum1_recomputed = Rv::<F, R>::new();
-    cube::sum_rows(temp1, &mut sum1_recomputed, buf);
+    let mut sum1_recomputed_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(temp1, &mut sum1_recomputed_acc, buf);
+    let sum1_recomputed = sum1_recomputed_acc.cast::<FVal>();
 
     temp1.mul(x_hat);
 
     sync_cube();
 
-    let mut sum2_recomputed = Rv::<F, R>::new();
-    cube::sum_rows(temp1, &mut sum2_recomputed, buf);
+    let mut sum2_recomputed_acc = Rv::<FAcc, R>::new();
+    cube::sum_rows::<FVal, FAcc, R, C>(temp1, &mut sum2_recomputed_acc, buf);
+    let sum2_recomputed = sum2_recomputed_acc.cast::<FVal>();
 
     // grad_L_grad_x_hat = (1/std) * grad_L_grad_l + (1/F) * sum1 + (1/F) * x_hat * sum2
     temp1.copy_from(grad_L_grad_l);
@@ -737,7 +750,7 @@ mod tests {
         sync_cube();
 
         // Run layer norm forward
-        layer_norm_forward::<F, D8, D32>(&mut x, &weight, &bias, &mut buf, EPSILON);
+        layer_norm_forward::<F, F, D8, D32>(&mut x, &weight, &bias, &mut buf, EPSILON);
 
         sync_cube();
 
@@ -770,7 +783,7 @@ mod tests {
         sync_cube();
 
         // Run layer norm + L2 grad
-        layer_norm_l2_grad::<F, D8, D32>(
+        layer_norm_l2_grad::<F, F, D8, D32>(
             &mut x, &tgt, &weight, &bias, &mut temp, &mut buf, EPSILON,
         );
 
@@ -801,7 +814,7 @@ mod tests {
 
         // Compute row means: sum across columns, divide by C
         let mut mean = Rv::<F, D8>::new();
-        cube::sum_rows(&x, &mut mean, &mut buf);
+        cube::sum_rows::<F, F, D8, D32>(&x, &mut mean, &mut buf);
         mean.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Output is just the row means (broadcast to full row width)
@@ -825,7 +838,7 @@ mod tests {
 
         // Step 1: mean = sum_rows(x) / C
         let mut mean = Rv::<F, D8>::new();
-        cube::sum_rows(&x, &mut mean, &mut buf);
+        cube::sum_rows::<F, F, D8, D32>(&x, &mut mean, &mut buf);
         mean.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Step 2: x -= mean
@@ -847,7 +860,7 @@ mod tests {
 
         // Compute sum of squares per row
         let mut sum_sq = Rv::<F, D8>::new();
-        cube::reduce_rows::<F, D8, D32, SumSqOp>(&x, &mut sum_sq, &mut buf);
+        cube::reduce_rows::<F, F, D8, D32, SumSqOp>(&x, &mut sum_sq, &mut buf);
 
         // Output the sum of squares
         if UNIT_POS == 0 {
@@ -868,7 +881,7 @@ mod tests {
 
         // Step 1: mean = sum_rows(x) / C
         let mut mean = Rv::<F, D8>::new();
-        cube::sum_rows(&x, &mut mean, &mut buf);
+        cube::sum_rows::<F, F, D8, D32>(&x, &mut mean, &mut buf);
         mean.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Step 2: x -= mean
@@ -877,7 +890,7 @@ mod tests {
 
         // Step 3: var = sum_rows(x^2) / C
         let mut std = Rv::<F, D8>::new();
-        cube::reduce_rows::<F, D8, D32, SumSqOp>(&x, &mut std, &mut buf);
+        cube::reduce_rows::<F, F, D8, D32, SumSqOp>(&x, &mut std, &mut buf);
         std.mul_scalar(F::cast_from(1.0f32 / 32.0f32));
 
         // Step 4: std = sqrt(var + epsilon)

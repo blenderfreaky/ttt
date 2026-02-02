@@ -81,6 +81,16 @@ impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
             array[i] = self.data[i];
         }
     }
+
+    /// Cast to a different floating-point type.
+    pub fn cast<FOut: Float>(&self) -> Rt<FOut, R, C> {
+        let mut result = Rt::<FOut, R, C>::new();
+        #[unroll(self.len <= UNROLL_LIMIT)]
+        for i in 0..self.len {
+            result.data[i] = Line::cast_from(self.data[i]);
+        }
+        result
+    }
 }
 
 /// Matrix-specific methods (require C: Dim, i.e., C != D1).

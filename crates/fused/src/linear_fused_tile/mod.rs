@@ -91,6 +91,17 @@ macro_rules! is_config_supported_inner {
     };
 }
 
+/// Generate array of supported configs.
+macro_rules! supported_configs_array {
+    ($(($s:literal, $h:literal, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty)),* $(,)?) => {
+        &[$(($s, $h, $t)),*]
+    };
+}
+
+/// All supported tile configurations as (mini_batch_len, head_dim, threads) tuples.
+pub const SUPPORTED_TILE_CONFIGS: &[(usize, usize, usize)] =
+    supported_tile_configs!(supported_configs_array!());
+
 /// Check if a (mini_batch_len, head_dim, threads) tile configuration is supported.
 #[must_use]
 pub fn is_tile_config_supported(mini_batch_len: usize, head_dim: usize, threads: usize) -> bool {

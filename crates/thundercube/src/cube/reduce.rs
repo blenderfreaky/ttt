@@ -34,11 +34,11 @@ impl<F: Float> Default for ReduceBuf<F> {
 /// All threads in the plane participate, each handling strided rows.
 /// Result is broadcast to all threads.
 ///
-/// St<F, R, C> -> Rv<F, C>
+/// St<FIn, R, C> -> Rv<FAcc, C>
 #[cube]
-pub fn reduce_cols_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
-    s_mem: &St<F, R, C>,
-    result: &mut Rv<F, C>,
+pub fn reduce_cols_plane<FIn: Float, FAcc: Float, R: Dim, C: Dim, O: ReductionOp<FAcc>>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, C>,
 ) {
     let tid = UNIT_POS as usize;
     let num_threads = PLANE_DIM as usize;
@@ -53,10 +53,12 @@ pub fn reduce_cols_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
         for r in range_stepped(tid, R::VALUE, num_threads) {
             let phys_col = swizzle(r, c_line, mask);
             let s_idx = r * vec_stride + phys_col;
-            acc = O::combine(acc, s_mem.data[s_idx]);
+            // Cast input line from FIn to FAcc for accumulation
+            let in_line: Line<FAcc> = Line::cast_from(s_mem.data[s_idx]);
+            acc = O::combine(acc, in_line);
         }
         // Combine across threads in plane, broadcast result
-        result.data[c_line] = plane_reduce_line::<F, O>(acc);
+        result.data[c_line] = plane_reduce_line::<FAcc, O>(acc);
     }
 }
 
@@ -64,11 +66,11 @@ pub fn reduce_cols_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 /// All threads in the plane participate, each handling strided columns.
 /// Result is broadcast to all threads.
 ///
-/// St<F, R, C> -> Rv<F, R>
+/// St<FIn, R, C> -> Rv<FAcc, R>
 #[cube]
-pub fn reduce_rows_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
-    s_mem: &St<F, R, C>,
-    result: &mut Rv<F, R>,
+pub fn reduce_rows_plane<FIn: Float, FAcc: Float, R: Dim, C: Dim, O: ReductionOp<FAcc>>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, R>,
 ) {
     let tid = UNIT_POS as usize;
     let num_threads = PLANE_DIM as usize;
@@ -78,7 +80,7 @@ pub fn reduce_rows_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 
     #[unroll(R::LINES <= UNROLL_LIMIT)]
     for r_line in 0..R::LINES {
-        let mut out_line = Line::<F>::empty(LINE_SIZE);
+        let mut out_line = Line::<FAcc>::empty(LINE_SIZE);
 
         #[unroll]
         for i in 0..LINE_SIZE {
@@ -89,7 +91,8 @@ pub fn reduce_rows_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
             for c_line in range_stepped(tid, C::LINES, num_threads) {
                 let phys_col = swizzle(r, c_line, mask);
                 let s_idx = r * vec_stride + phys_col;
-                acc = O::combine(acc, s_mem.data[s_idx]);
+                let in_line: Line<FAcc> = Line::cast_from(s_mem.data[s_idx]);
+                acc = O::combine(acc, in_line);
             }
             let local_scalar = O::finalize(acc);
 
@@ -102,14 +105,20 @@ pub fn reduce_rows_plane<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 
 /// Convenience function: sum St across rows (reduce cols)
 #[cube]
-pub fn sum_cols_plane<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, C>) {
-    reduce_cols_plane::<F, R, C, SumOp>(s_mem, result)
+pub fn sum_cols_plane<FIn: Float, FAcc: Float, R: Dim, C: Dim>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, C>,
+) {
+    reduce_cols_plane::<FIn, FAcc, R, C, SumOp>(s_mem, result)
 }
 
 /// Convenience function: sum St across columns (reduce rows)
 #[cube]
-pub fn sum_rows_plane<F: Float, R: Dim, C: Dim>(s_mem: &St<F, R, C>, result: &mut Rv<F, R>) {
-    reduce_rows_plane::<F, R, C, SumOp>(s_mem, result)
+pub fn sum_rows_plane<FIn: Float, FAcc: Float, R: Dim, C: Dim>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, R>,
+) {
+    reduce_rows_plane::<FIn, FAcc, R, C, SumOp>(s_mem, result)
 }
 
 // =============================================================================
@@ -153,12 +162,12 @@ fn reduce_across_planes<F: Float, O: ReductionOp<F>>(val: F, buf: &mut ReduceBuf
 /// Cooperatively reduces St across rows (producing one value per column),
 /// reducing across ALL planes in the cube.
 ///
-/// St<F, R, C> -> Rv<F, C>
+/// St<FIn, R, C> -> Rv<FAcc, C>
 #[cube]
-pub fn reduce_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
-    s_mem: &St<F, R, C>,
-    result: &mut Rv<F, C>,
-    buf: &mut ReduceBuf<F>,
+pub fn reduce_cols<FIn: Float, FAcc: Float, R: Dim, C: Dim, O: ReductionOp<FAcc>>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, C>,
+    buf: &mut ReduceBuf<FAcc>,
 ) {
     let tid = UNIT_POS as usize;
     let num_threads = PLANE_DIM as usize;
@@ -173,16 +182,18 @@ pub fn reduce_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
         for r in range_stepped(tid, R::VALUE, num_threads) {
             let phys_col = swizzle(r, c_line, mask);
             let s_idx = r * vec_stride + phys_col;
-            acc = O::combine(acc, s_mem.data[s_idx]);
+            // Cast input line from FIn to FAcc for accumulation
+            let in_line: Line<FAcc> = Line::cast_from(s_mem.data[s_idx]);
+            acc = O::combine(acc, in_line);
         }
         // Combine across threads in plane
-        let plane_partial = plane_reduce_line::<F, O>(acc);
+        let plane_partial = plane_reduce_line::<FAcc, O>(acc);
 
         // Stage 2: Reduce across planes for each lane
-        let mut out_line = Line::<F>::empty(LINE_SIZE);
+        let mut out_line = Line::<FAcc>::empty(LINE_SIZE);
         #[unroll]
         for i in 0..LINE_SIZE {
-            out_line[i] = reduce_across_planes::<F, O>(plane_partial[i], buf);
+            out_line[i] = reduce_across_planes::<FAcc, O>(plane_partial[i], buf);
         }
         result.data[c_line] = out_line;
     }
@@ -191,12 +202,12 @@ pub fn reduce_cols<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 /// Cooperatively reduces St across columns (producing one value per row),
 /// reducing across ALL planes in the cube.
 ///
-/// St<F, R, C> -> Rv<F, R>
+/// St<FIn, R, C> -> Rv<FAcc, R>
 #[cube]
-pub fn reduce_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
-    s_mem: &St<F, R, C>,
-    result: &mut Rv<F, R>,
-    buf: &mut ReduceBuf<F>,
+pub fn reduce_rows<FIn: Float, FAcc: Float, R: Dim, C: Dim, O: ReductionOp<FAcc>>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, R>,
+    buf: &mut ReduceBuf<FAcc>,
 ) {
     let tid = UNIT_POS as usize;
     let num_threads = PLANE_DIM as usize;
@@ -206,7 +217,7 @@ pub fn reduce_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
 
     #[unroll(R::LINES <= UNROLL_LIMIT)]
     for r_line in 0..R::LINES {
-        let mut out_line = Line::<F>::empty(LINE_SIZE);
+        let mut out_line = Line::<FAcc>::empty(LINE_SIZE);
 
         #[unroll]
         for i in 0..LINE_SIZE {
@@ -217,7 +228,9 @@ pub fn reduce_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
             for c_line in range_stepped(tid, C::LINES, num_threads) {
                 let phys_col = swizzle(r, c_line, mask);
                 let s_idx = r * vec_stride + phys_col;
-                acc = O::combine(acc, s_mem.data[s_idx]);
+                // Cast input line from FIn to FAcc for accumulation
+                let in_line: Line<FAcc> = Line::cast_from(s_mem.data[s_idx]);
+                acc = O::combine(acc, in_line);
             }
             let local_scalar = O::finalize(acc);
 
@@ -225,30 +238,30 @@ pub fn reduce_rows<F: Float, R: Dim, C: Dim, O: ReductionOp<F>>(
             let plane_partial = O::plane_reduce(local_scalar);
 
             // Stage 2: Reduce across planes
-            out_line[i] = reduce_across_planes::<F, O>(plane_partial, buf);
+            out_line[i] = reduce_across_planes::<FAcc, O>(plane_partial, buf);
         }
         result.data[r_line] = out_line;
     }
 }
 
-/// Convenience function: sum St across rows (reduce cols) across full cube
+/// Convenience function: sum St across rows (reduce cols) across full cube.
 #[cube]
-pub fn sum_cols<F: Float, R: Dim, C: Dim>(
-    s_mem: &St<F, R, C>,
-    result: &mut Rv<F, C>,
-    buf: &mut ReduceBuf<F>,
+pub fn sum_cols<FIn: Float, FAcc: Float, R: Dim, C: Dim>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, C>,
+    buf: &mut ReduceBuf<FAcc>,
 ) {
-    reduce_cols::<F, R, C, SumOp>(s_mem, result, buf)
+    reduce_cols::<FIn, FAcc, R, C, SumOp>(s_mem, result, buf)
 }
 
-/// Convenience function: sum St across columns (reduce rows) across full cube
+/// Convenience function: sum St across columns (reduce rows) across full cube.
 #[cube]
-pub fn sum_rows<F: Float, R: Dim, C: Dim>(
-    s_mem: &St<F, R, C>,
-    result: &mut Rv<F, R>,
-    buf: &mut ReduceBuf<F>,
+pub fn sum_rows<FIn: Float, FAcc: Float, R: Dim, C: Dim>(
+    s_mem: &St<FIn, R, C>,
+    result: &mut Rv<FAcc, R>,
+    buf: &mut ReduceBuf<FAcc>,
 ) {
-    reduce_rows::<F, R, C, SumOp>(s_mem, result, buf)
+    reduce_rows::<FIn, FAcc, R, C, SumOp>(s_mem, result, buf)
 }
 
 #[cfg(test)]
@@ -285,7 +298,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_rows_plane::<F, D8, D8>(&st, &mut result);
+        sum_rows_plane::<F, F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
@@ -317,7 +330,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_cols_plane::<F, D8, D8>(&st, &mut result);
+        sum_cols_plane::<F, F, D8, D8>(&st, &mut result);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
@@ -350,7 +363,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_rows::<F, D8, D8>(&st, &mut result, &mut reduce_buf);
+        sum_rows::<F, F, D8, D8>(&st, &mut result, &mut reduce_buf);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
@@ -383,7 +396,7 @@ mod tests {
         sync_cube();
 
         let mut result = Rv::<F, D8>::new();
-        sum_cols::<F, D8, D8>(&st, &mut result, &mut reduce_buf);
+        sum_cols::<F, F, D8, D8>(&st, &mut result, &mut reduce_buf);
 
         // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {

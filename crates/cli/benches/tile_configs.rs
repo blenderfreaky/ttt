@@ -258,8 +258,13 @@ fn bench_tile_configs(c: &mut Criterion) {
                 continue;
             }
 
-            bench_forward::<GpuBackend>(c, mini_batch_len, head_dim, threads, &device);
-            bench_backward(c, mini_batch_len, head_dim, threads, &device);
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                bench_forward::<GpuBackend>(c, mini_batch_len, head_dim, threads, &device);
+            }));
+
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                bench_backward(c, mini_batch_len, head_dim, threads, &device);
+            }));
         }
     }
 }

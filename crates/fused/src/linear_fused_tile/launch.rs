@@ -2,8 +2,9 @@
 
 use std::fmt::Debug;
 
+use burn_backend::Element;
 use burn_cubecl::{
-    CubeRuntime, FloatElement, kernel::into_contiguous, ops::numeric::zeros_client,
+    CubeRuntime, FloatElement, kernel::cast, kernel::into_contiguous, ops::numeric::zeros_client,
     tensor::CubeTensor,
 };
 use cubecl::prelude::*;
@@ -373,17 +374,18 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
 
     // LN gradients are unbatched (atomic accumulation across batches)
     // Must be zero-initialized since kernel uses atomic adds
+    // NOTE: These use f32 because HIP/ROCm doesn't support bf16 atomics
     let grad_ln_weight = zeros_client::<R>(
         saved.ln_weight.client.clone(),
         saved.ln_weight.device.clone(),
         [num_heads, head_dim].into(),
-        F::dtype(),
+        f32::dtype(),
     );
     let grad_ln_bias = zeros_client::<R>(
         saved.ln_bias.client.clone(),
         saved.ln_bias.device.clone(),
         [num_heads, head_dim].into(),
-        F::dtype(),
+        f32::dtype(),
     );
 
     let config = FusedTttConfig::new(seq_len, head_dim, epsilon, threads);
@@ -418,6 +420,10 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         grad_ln_bias.as_handle_ref(),
         config,
     );
+
+    // These are in f32 (see above), so we need to cast them back
+    let grad_ln_weight = cast(grad_ln_weight, F::dtype());
+    let grad_ln_bias = cast(grad_ln_bias, F::dtype());
 
     TttGradInputs {
         grad_xq,
@@ -573,17 +579,18 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
 
     // LN gradients are unbatched (atomic accumulation across batches)
     // Must be zero-initialized since kernel uses atomic adds
+    // NOTE: These use f32 because HIP/ROCm doesn't support bf16 atomics
     let grad_ln_weight = zeros_client::<R>(
         saved.ln_weight.client.clone(),
         saved.ln_weight.device.clone(),
         [num_heads, head_dim].into(),
-        F::dtype(),
+        f32::dtype(),
     );
     let grad_ln_bias = zeros_client::<R>(
         saved.ln_bias.client.clone(),
         saved.ln_bias.device.clone(),
         [num_heads, head_dim].into(),
-        F::dtype(),
+        f32::dtype(),
     );
 
     let config = FusedTttConfig::new(mini_batch_len, head_dim, epsilon, threads);
@@ -619,6 +626,10 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         config,
         num_stages,
     );
+
+    // These are in f32 (see above), so we need to cast them back
+    let grad_ln_weight = cast(grad_ln_weight, F::dtype());
+    let grad_ln_bias = cast(grad_ln_bias, F::dtype());
 
     TttGradInputs {
         grad_xq,
