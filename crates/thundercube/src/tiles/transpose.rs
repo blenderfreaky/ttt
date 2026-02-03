@@ -56,7 +56,7 @@ pub fn transpose_ops(rows: usize, cols: usize) -> Vec<u64> {
             }
 
             if cycle.len() == 1 {
-                // Fixed point - no op needed (diagonal elements)
+                // Fixed point (diagonal element)
             } else {
                 // Multi-element cycle: shift backwards, save last element
                 // For cycle [a, b, c, d] meaning a→b→c→d→a:

@@ -175,8 +175,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 6: Build (eta * attn) fused directly into eta_matrix
-    // This computes: eta_matrix[i,j] = token_eta[i] * ttt_lr_eta[j] * (q[i] · k[j])
-    // Eliminates need for separate attn_smem tile
+    // eta_matrix[i,j] = token_eta[i] * ttt_lr_eta[j] * (q[i] · k[j])
     build_eta_attn_fused::<P>(
         &q_smem,
         &k_smem,

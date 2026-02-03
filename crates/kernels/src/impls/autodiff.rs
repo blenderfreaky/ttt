@@ -118,10 +118,8 @@ where
         TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; M]>,
     K::SavedState<B::FloatTensorPrimitive>:
         TensorBundle<B::FloatTensorPrimitive, Array = [B::FloatTensorPrimitive; S]>,
-    K::Inputs<FloatTensor<Self>>:
-        TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; N]>,
-    K::Outputs<FloatTensor<Self>>:
-        TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; M]>,
+    K::Inputs<FloatTensor<Self>>: TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; N]>,
+    K::Outputs<FloatTensor<Self>>: TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; M]>,
     K::SavedState<FloatTensor<Self>>:
         TensorBundle<FloatTensor<Self>, Array = [FloatTensor<Self>; S]>,
 {

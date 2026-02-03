@@ -997,7 +997,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    // Now that stage 3 part 1 is done reading grad_L_W_last, accumulate grad_W_z1bar from temp_f_f
     grad_L_W_last.add(&temp_f_f);
 
     sync_cube();

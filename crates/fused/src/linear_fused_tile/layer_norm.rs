@@ -501,7 +501,7 @@ pub fn layer_norm_l2_grad_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    // Now temp1 = grad_L_grad_x_hat
+    // temp1 = grad_L_grad_x_hat
 
     // grad_L_y = ln_weight * grad_L_grad_x_hat
     temp2.copy_from(temp1);
@@ -575,7 +575,7 @@ pub fn layer_norm_l2_grad_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    // Now temp1 = grad_L_x_hat
+    // temp1 = grad_L_x_hat
 
     // We need to compute grad_l for the std gradient
     // grad_l = (grad_x_hat * F - sum(grad_x_hat) - x_hat * sum(grad_x_hat * x_hat)) / (std * F)
@@ -626,7 +626,7 @@ pub fn layer_norm_l2_grad_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    // Now grad_L_Z1 = grad_L_std
+    // grad_L_Z1 = grad_L_std
 
     // Compute sum(grad_L_std) per row
     let mut sum_grad_L_std_acc = Rv::<FAcc, R>::new();
