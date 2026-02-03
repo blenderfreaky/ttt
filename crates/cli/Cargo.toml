@@ -3,6 +3,8 @@ name = "ttt"
 version.workspace = true
 edition.workspace = true
 
+default-run = "ttt"
+
 [dependencies]
 ttt-kernels = { workspace = true }
 ttt-core = { workspace = true }
@@ -10,7 +12,14 @@ ttt-fused = { workspace = true }
 ttt-layer = { workspace = true }
 ttt-data = { workspace = true }
 ttt-training = { workspace = true }
-burn = { workspace = true, features = ["train", "tui", "metrics", "autodiff", "cubecl", "fusion"] }
+burn = { workspace = true, features = [
+    "train",
+    "tui",
+    "metrics",
+    "autodiff",
+    "cubecl",
+    "fusion",
+] }
 clap.workspace = true
 clap_complete.workspace = true
 glob.workspace = true
@@ -28,6 +37,10 @@ paste.workspace = true
 [[bin]]
 name = "ttt"
 path = "src/main.rs"
+
+[[bin]]
+name = "ttt-bench"
+path = "src/bench.rs"
 
 [[bench]]
 name = "ttt_benchmark"

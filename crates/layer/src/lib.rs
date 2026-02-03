@@ -48,34 +48,34 @@ pub use ttt_core::TTTLayerType;
 /// ```
 #[macro_export]
 macro_rules! dispatch_ttt_layer_type {
-    ($f:ident :: < $backend:ident, $ty:expr, $($other:ty),+ > ($($args:expr),* $(,)?)) => {
+    ($f:ident :: < $backend:ident, $ty:tt $(, $other:ty)* > ($($args:expr),* $(,)?)) => {
         match $ty {
             $crate::TTTLayerType::Linear => {
-                $f::<$backend, ttt_core::TTTLinear<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_core::TTTLinear<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::LinearAdam => {
-                $f::<$backend, ttt_core::TTTLinearAdam<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_core::TTTLinearAdam<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::MLP => {
-                $f::<$backend, ttt_core::TTTMLP<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_core::TTTMLP<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::MLP2 => {
-                $f::<$backend, ttt_core::TTTMLP2<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_core::TTTMLP2<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::MLP3 => {
-                $f::<$backend, ttt_core::TTTMLP3<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_core::TTTMLP3<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::MLP4 => {
-                $f::<$backend, ttt_core::TTTMLP4<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_core::TTTMLP4<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::FusedLinear => {
-                $f::<$backend, ttt_fused::FusedLinear<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_fused::FusedLinear<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::FusedTileLinear => {
-                $f::<$backend, ttt_fused::FusedTile<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_fused::FusedTile<$backend> $(, $other)*>($($args),*)
             }
             $crate::TTTLayerType::FusedTileMultiLinear => {
-                $f::<$backend, ttt_fused::FusedTileMulti<$backend>, $($other),+>($($args),*)
+                $f::<$backend, ttt_fused::FusedTileMulti<$backend> $(, $other)*>($($args),*)
             }
         }
     };
