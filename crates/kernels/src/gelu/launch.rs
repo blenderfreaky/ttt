@@ -25,8 +25,6 @@ fn empty_like<R: CubeRuntime, F: FloatElement>(template: &CubeTensor<R>) -> Cube
     )
 }
 
-// GELU tanh forward kernel
-// SavedState = Inputs (just need input for backward)
 impl FusedKernel for GeluTanhKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
@@ -65,7 +63,6 @@ impl FusedKernel for GeluTanhKernel {
     }
 }
 
-// GELU backward derivative forward kernel (computes gelu'(x))
 impl FusedKernel for GeluBwdKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
@@ -108,7 +105,6 @@ impl FusedKernel for GeluBwdKernel {
     }
 }
 
-// GELU tanh backward kernel (for second-order gradients)
 impl FusedKernel for GeluTanhBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
@@ -119,7 +115,6 @@ impl FusedKernel for GeluTanhBackwardKernel {
         inputs: GeluInput<CubeTensor<R>>,
         _config: (),
     ) -> (GeluOutput<CubeTensor<R>>, GeluInput<CubeTensor<R>>) {
-        // This is gelu_bwd(x) - same as GeluBwdKernel
         let input = into_contiguous(inputs.input);
         let output = empty_like::<R, F>(&input);
 
@@ -152,7 +147,6 @@ impl FusedKernel for GeluTanhBackwardKernel {
     }
 }
 
-// GELU tanh backward-backward kernel (third-order not supported)
 impl FusedKernel for GeluTanhBackwardBackwardKernel {
     type Inputs<T: Debug + Clone + Send> = GeluInput<T>;
     type Outputs<T: Debug + Clone + Send> = GeluOutput<T>;
@@ -169,8 +163,6 @@ impl FusedKernel for GeluTanhBackwardBackwardKernel {
         launch_gelu_tanh_backward_backward::<R, F>(
             &input.client,
             input.as_handle_ref(),
-            // For forward of backward_backward, we use ones as grad_output
-            // This shouldn't be called directly - it's for the autodiff system
             output.as_handle_ref(),
             output.as_handle_ref(),
         );

@@ -105,8 +105,6 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinear<B> {
         inputs: &TTTInputsInner<B>,
         range: Range<usize>,
     ) -> Tensor<B, 4> {
-        // For reference:
-        // qkv: [batch_size, num_heads, seq_len, head_dim]
         let inputs = inputs.slice_seq(range);
 
         let qkv = inputs.qkv;

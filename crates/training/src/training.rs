@@ -94,7 +94,6 @@ fn run_training<
             Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
-    // Store untrained model for debugging purposes (skip when resuming)
     if resume_epoch.is_none() {
         DefaultRecorder::new()
             .record(
@@ -104,7 +103,6 @@ fn run_training<
             .unwrap();
     }
 
-    println!("Creating data loaders...");
     let dataloader_train = DataLoaderBuilder::new(batcher.clone())
         .batch_size(config.batch_size)
         .num_workers(config.num_workers)
@@ -114,20 +112,13 @@ fn run_training<
         .batch_size(config.batch_size)
         .num_workers(config.num_workers)
         .build(SamplerDataset::new(dataset_test, config.test_samples));
-    println!("Data loaders created successfully");
 
-    println!("Initializing optimizer...");
     let optim = config.optimizer.init();
-    println!("Optimizer initialized");
 
     let hidden_size = config.ttt_config.hidden_size;
     let warmup_steps = config.warmup_steps;
     let learning_rate = config.learning_rate;
 
-    println!("Initializing learning rate scheduler...");
-    println!(
-        "Using Noam scheduler with {warmup_steps} warmup steps, model size {hidden_size}, learning rate factor {learning_rate}"
-    );
     let lr_scheduler = NoamLrSchedulerConfig::new(learning_rate)
         .with_warmup_steps(warmup_steps.max(1))
         .with_model_size(hidden_size)
@@ -203,9 +194,7 @@ fn train_with_inner<
         pad_token: tokenizer.pad_token(),
     };
 
-    println!("Initializing model...");
     let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
-    println!("Model initialized successfully");
 
     let pad_token = tokenizer.pad_token();
     run_training(
@@ -283,9 +272,7 @@ fn train_with_inner_pretokenized<
         pad_token,
     };
 
-    println!("Initializing model...");
     let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
-    println!("Model initialized successfully");
 
     run_training(
         model,

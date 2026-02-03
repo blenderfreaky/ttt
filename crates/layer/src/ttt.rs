@@ -18,9 +18,9 @@ use ttt_core::{
 use ttt_fused::FusedTttBackend;
 use ttt_kernels::gelu_tanh;
 
-/// Permute Q/K dimensions to match JAX/EasyLM rotary embedding implementation.
-/// This reorders the head dimension to match how EasyLM computes rotary embeddings.
-/// Reference: https://github.com/young-geng/EasyLM/blob/981a2ed9630f44258a94b6f44dff2b7bd203ae8d/EasyLM/models/llama/convert_hf_to_easylm.py#L33
+/// Permute Q/K dimensions to match JAX/EasyLM rotary embedding format.
+/// Required for byte-for-byte compatibility with the reference implementation.
+/// Reference: https://github.com/young-geng/EasyLM/blob/981a2ed/EasyLM/models/llama/convert_hf_to_easylm.py#L33
 fn permute_qk<B: Backend>(x: Tensor<B, 4>) -> Tensor<B, 4> {
     let [batch_size, num_heads, seq_len, head_dim] = x.shape().dims();
     // [B, H, L, D] -> [B, H, L, D//2, 2] -> transpose(3,4) -> [B, H, L, 2, D//2] -> [B, H, L, D]
@@ -48,12 +48,13 @@ pub struct TTT<B: Backend> {
     pub o_proj: Linear<B>,
     pub q_conv: Conv1d<B>,
     pub k_conv: Conv1d<B>,
-    // Per-head learning rate weights
-    pub learnable_ttt_lr_weight: Tensor<B, 3>, // [num_heads, token_size, 1]
-    pub learnable_ttt_lr_bias: Tensor<B, 2>,   // [num_heads, 1]
-    // Base token_idx: 1/k for k=1..mini_batch_size (position-based scale factor)
+    /// Per-head learning rate weight: `[num_heads, token_size, 1]`
+    pub learnable_ttt_lr_weight: Tensor<B, 3>,
+    /// Per-head learning rate bias: `[num_heads, 1]`
+    pub learnable_ttt_lr_bias: Tensor<B, 2>,
+    /// Base token eta: `1/k` for `k=1..mini_batch_size`. `[mini_batch_size]`
     pub token_idx: Tensor<B, 1>,
-    // Learnable offset to token_idx
+    /// Learnable offset added to `token_idx`. `[mini_batch_size]`
     pub learnable_token_idx: Tensor<B, 1>,
     pub post_norm: LayerNorm<B>,
     pub config: Ignored<Arc<TTTConfig>>,
@@ -95,17 +96,14 @@ impl TTTConfigExt for TTTConfig {
 
         let learnable_ttt_lr_bias = Tensor::zeros([self.num_heads, 1], device);
 
-        // Base token_idx: 1/k for k=1,2,...,mini_batch_size (position-based scale factor)
         let token_idx = Tensor::arange(1..(self.mini_batch_size as i64 + 1), device)
             .float()
             .recip();
 
-        // Learnable offset to token_idx, initialized to zeros
         let learnable_token_idx = Tensor::zeros([self.mini_batch_size], device);
 
         TTT {
             q_proj: linear(self.token_size, self.hidden_size, false),
-            // When share_qk=false, use separate K projection; when true, K shares Q projection
             k_proj: if self.share_qk {
                 None
             } else {
@@ -120,12 +118,10 @@ impl TTTConfigExt for TTTConfig {
             o_proj: linear(self.hidden_size, self.token_size, false),
             q_conv: conv(self.hidden_size),
             k_conv: conv(self.hidden_size),
-            // Per-head learning rate weights
             learnable_ttt_lr_weight,
             learnable_ttt_lr_bias,
             token_idx,
             learnable_token_idx,
-            // Post-norm operates on hidden_size dimension (output of inner model)
             post_norm: LayerNormConfig::new(self.hidden_size)
                 .with_epsilon(1e-6)
                 .init(device),
@@ -151,15 +147,11 @@ impl<B: FusedTttBackend> TTT<B> {
 
         let xv = self.v_proj.forward(x.clone());
 
-        // When share_qk=true: use shared projection + separate convs for Q and K
-        // When share_qk=false: use separate projections for Q and K
         let (xq, xk) = if let Some(k_proj) = &self.k_proj {
-            // share_qk=false: separate projections
             let xq = self.q_proj.forward(x.clone());
             let xk = k_proj.forward(x);
             (xq, xk)
         } else {
-            // share_qk=true: shared projection + separate convs
             let xqk = self.q_proj.forward(x);
             self.conv_qk(xqk)
         };
@@ -232,16 +224,11 @@ impl<B: FusedTttBackend> TTT<B> {
         let conv_q_bias = self.q_conv.bias.as_ref().map(burn::module::Param::val);
         let conv_k_bias = self.k_conv.bias.as_ref().map(burn::module::Param::val);
 
-        // Since causal_conv has groups=dim, this means that conv(q concat k) == conv(q) concat conv(k)
-        // So we could merge these here into one convolution call
-
-        // Transpose from [batch, seq_len, hidden_size] to [batch, hidden_size, seq_len] for causal_conv1d_fn
         let xqk_transposed = xqk.permute([0, 2, 1]);
 
         let xq_transposed = causal_conv1d_fn(xqk_transposed.clone(), conv_q_weight, conv_q_bias);
         let xk_transposed = causal_conv1d_fn(xqk_transposed, conv_k_weight, conv_k_bias);
 
-        // Transpose back to [batch, seq_len, hidden_size]
         let xq = xq_transposed.permute([0, 2, 1]);
         let xk = xk_transposed.permute([0, 2, 1]);
 

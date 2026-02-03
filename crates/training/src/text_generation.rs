@@ -184,7 +184,6 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inne
 
         let (top_k_values, top_k_indices) = logits.topk_with_indices(k, 1);
 
-        // As in sample_multinomial, we use gumbal-max here.
         let uniform =
             Tensor::<B, 2>::random([batch_size, k], Distribution::Uniform(1e-10, 1.0), device);
         let gumbel_noise = uniform.log().neg().log().neg();

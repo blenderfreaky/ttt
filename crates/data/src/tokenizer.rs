@@ -66,7 +66,6 @@ impl Tokenizer {
         eos_token: Option<&str>,
         bos_token: Option<&str>,
     ) -> Self {
-        // Try specialized tokens first, generic fallbacks last
         let eos_candidates = ["<eos>", "</s>", "[EOS]", "<|endoftext|>"];
         let bos_candidates = ["<bos>", "<s>", "[BOS]", "<|endoftext|>"];
         let pad_candidates = ["<pad>", "[PAD]", "</s>", "<|endoftext|>"];

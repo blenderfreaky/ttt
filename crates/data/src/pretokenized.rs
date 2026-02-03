@@ -67,7 +67,7 @@ where
     };
     writer.write_all(bytemuck::bytes_of(&header))?;
 
-    // Process in chunks to balance parallelism with memory usage
+    // Chunk size balances memory (all tokens in chunk held in memory) vs parallelism overhead
     const CHUNK_SIZE: usize = 10000;
     let total_len = dataset.len();
     let progress = AtomicUsize::new(0);
@@ -90,7 +90,6 @@ where
                     padded[i] = tok as u32;
                 }
 
-                // Update progress counter
                 let completed = progress.fetch_add(1, Ordering::Relaxed) + 1;
                 if completed % 10000 == 0 {
                     println!("Pre-tokenized {completed}/{total_len} sequences");
@@ -100,7 +99,7 @@ where
             })
             .collect();
 
-        // Write chunk sequentially (maintains order)
+        // Sequential write preserves dataset ordering (parallel tokenization doesn't guarantee order)
         for tokens in &tokenized_chunk {
             writer.write_all(bytemuck::cast_slice(tokens))?;
         }

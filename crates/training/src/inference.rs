@@ -31,7 +31,6 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
 
         let tokenizer = Arc::new(tokenizer);
 
-        // vocab_size is already set in the saved config
         let model_config = TTTTextGenerationConfig {
             ttt_config: config.ttt_config,
             pad_token: tokenizer.pad_token(),

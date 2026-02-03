@@ -25,8 +25,8 @@ macro_rules! supported_tile_configs {
             // Base configs
             // (mini_batch, head_dim, threads, CS, F, CSR, FR)
             //
-            // Note: Larger tiles (16x128, 32x64, 64x64) exceed GPU shared memory limits
-            // and have been removed. Shared memory usage is approximately:
+            // Larger tiles (16x128, 32x64, 64x64) exceed GPU shared memory limits.
+            // Shared memory usage is approximately:
             //   2*(F*CS) + 4*(CS*F) + (CS*CS) + (F*F) elements
             // Most GPUs have 48-64KB shared memory limit per block.
             ( 8,  32,  64, D8,  D32,  D4, D4),    // max(2², 2×8, 8²) = 64, ~10KB smem
@@ -45,8 +45,8 @@ macro_rules! supported_tile_configs {
             // Base configs
             // (mini_batch, head_dim, threads, CS, F, CSR, FR)
             //
-            // Note: Larger tiles (16x128, 32x64, 64x64) exceed GPU shared memory limits
-            // and have been removed. Shared memory usage is approximately:
+            // Larger tiles (16x128, 32x64, 64x64) exceed GPU shared memory limits.
+            // Shared memory usage is approximately:
             //   2*(F*CS) + 4*(CS*F) + (CS*CS) + (F*F) elements
             // Most GPUs have 48-64KB shared memory limit per block.
             ( 8,  32,  64, D8,  D32,  D4, D4),    // max(2², 2×8, 8²) = 64, ~10KB smem

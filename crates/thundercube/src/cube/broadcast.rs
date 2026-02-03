@@ -69,7 +69,6 @@ pub fn store_rv_direct<FRv: Float, FTensor: Float, L: Dim>(
     g_mem: &mut Tensor<Line<FTensor>>,
     base_offset: usize,
 ) {
-    // Only one thread needs to write (all have same data)
     if UNIT_POS == 0 {
         #[unroll(L::LINES <= UNROLL_LIMIT)]
         for i in 0..L::LINES {

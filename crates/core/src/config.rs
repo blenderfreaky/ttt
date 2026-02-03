@@ -60,7 +60,6 @@ pub struct TTTConfig {
     #[config(default = 2048)]
     pub token_size: usize,
     /// The size of key, value, etc. across all heads.
-    /// In source it seems to be equal to token_size
     #[config(default = 2048)]
     pub hidden_size: usize,
     /// The number of TTT heads.

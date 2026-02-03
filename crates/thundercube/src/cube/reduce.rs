@@ -300,7 +300,6 @@ mod tests {
         let mut result = Rv::<F, D8>::new();
         sum_rows_plane::<F, F, D8, D8>(&st, &mut result);
 
-        // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
             result.copy_to_array(output);
         }
@@ -332,7 +331,6 @@ mod tests {
         let mut result = Rv::<F, D8>::new();
         sum_cols_plane::<F, F, D8, D8>(&st, &mut result);
 
-        // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
             result.copy_to_array(output);
         }
@@ -365,7 +363,6 @@ mod tests {
         let mut result = Rv::<F, D8>::new();
         sum_rows::<F, F, D8, D8>(&st, &mut result, &mut reduce_buf);
 
-        // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
             result.copy_to_array(output);
         }
@@ -398,7 +395,6 @@ mod tests {
         let mut result = Rv::<F, D8>::new();
         sum_cols::<F, F, D8, D8>(&st, &mut result, &mut reduce_buf);
 
-        // Only first thread writes output (all have same result)
         if UNIT_POS == 0 {
             result.copy_to_array(output);
         }

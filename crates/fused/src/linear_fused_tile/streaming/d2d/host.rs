@@ -710,7 +710,6 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         // Set READY flag for all cubes (write full control block like working example)
         for cube in 0..self.config.num_cubes() {
             let base = cube * CTRL_ARRAY_SIZE;
-            // Write [READY=1, DONE=0, SHUTDOWN=0] like the working example
             self.stream.write(ctrl_ptr, base, &[1u32, 0, 0]);
         }
         trace!("[HOST] READY set, polling DONE...");
@@ -730,7 +729,6 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         }
 
         trace!("[HOST] all cubes done, clearing DONE flags");
-        // Reset control flags to idle (write all 3 like working example)
         for cube in 0..self.config.num_cubes() {
             let base = cube * CTRL_ARRAY_SIZE;
             self.stream.write(ctrl_ptr, base, &[0u32, 0, 0]);
@@ -841,7 +839,6 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         // Format: [READY=0, DONE=0, SHUTDOWN=1] for each cube
         for cube in 0..self.config.num_cubes() {
             let base = cube * CTRL_ARRAY_SIZE;
-            // Write entire control block at once like the working example
             self.stream.write(ctrl_ptr, base, &[0u32, 0, 1]);
         }
 

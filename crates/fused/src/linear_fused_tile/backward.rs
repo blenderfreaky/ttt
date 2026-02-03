@@ -752,8 +752,6 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 #[allow(clippy::too_many_arguments)]
 fn backward_stage1_assemble<P: ParamsTrait>(
     grad_output: &StCsF<P>,
-    // Stage 4 outputs (grad_W_z1bar accumulated earlier via temp_f_f)
-    // Note: grad_z1_bar tile reused for grad_output_fused in stage 2
     grad_b_z1bar: &RvbFA<P>,
     grad_ln_weight_s4: &RvbFA<P>,
     grad_ln_bias_s4: &RvbFA<P>,
@@ -813,21 +811,18 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 
     cube::store_st_direct(scratch1, &mut grads.grad_xk, stage_offset, 0, 0);
 
-    // Accumulate weight gradients
-    // grad_W = grad_W_z1bar (already accumulated in stage 4) + XK^T @ grad_Z1
+    // Accumulate weight gradients: grad_W = grad_W_z1bar + XK^T @ grad_Z1
     let mut dW_reg = P::rt_ff();
     dW_reg.zero();
     cube::mma_AB(&mut dW_reg, k_smem, grad_Z1);
 
     sync_cube();
 
-    // Reuse temp_f_f tile (was used for grad_W_z1bar in stage 4)
     cube::store_rt_to_st(&dW_reg, temp_f_f);
 
     sync_cube();
 
     grad_W_last.add(temp_f_f);
-    // Note: grad_W_z1bar already accumulated into grad_W_last in stage 4
 
     sync_cube();
 
@@ -916,8 +911,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut tile_grad_xk_combined = P::st_cs_f();
     let mut tile_e = P::st_cs_f();
     let mut tile_f = P::st_cs_f();
-    // tile_h eliminated: grad_output_fused reuses tile_grad_z1_bar after stage 3 part 2
-    // tile_grad_xk_attn eliminated: combined with grad_xk_mini above
     let mut tile_grad_Z1 = P::st_cs_f();
     let mut tile_grad_target = P::st_cs_f();
 
@@ -1102,7 +1095,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::F>(&scratch1, &mut sum_gxh_xh_acc, &mut buf);
     let sum_gxh_xh = sum_gxh_xh_acc.cast::<P::EVal>();
 
-    // Load grad_output_fused - reuse tile_grad_z1_bar (no longer needed after stage 3)
     let mut grad_output_fused = tile_grad_z1_bar;
     cube::load_st_direct(
         &fwd.grad_output_fused,
@@ -1145,8 +1137,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     backward_stage1_assemble::<P>(
         &grad_output_s1,
-        // Stage 4 outputs (grad_W_z1bar already accumulated via temp_f_f)
-        // Note: tile_grad_z1_bar reused for grad_output_fused in stage 2
         &stage4_out.grad_b_z1bar,
         &stage4_out.grad_ln_weight,
         &stage4_out.grad_ln_bias,

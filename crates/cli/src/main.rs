@@ -348,9 +348,7 @@ fn main() {
                 let mut config = TTTTrainingConfig::load(&config_path)
                     .unwrap_or_else(|e| panic!("Failed to load config from {config_path}: {e}"));
 
-                // Allow --epochs to override for training additional epochs
                 if args.epochs != 10 {
-                    // 10 is the default
                     config.num_epochs = args.epochs;
                 }
 

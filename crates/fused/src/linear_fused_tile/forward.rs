@@ -88,8 +88,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut z1_smem = P::st_cs_f();
     let mut temp_cs_f_smem = P::st_cs_f();
     let mut eta_matrix_smem = P::st_cs_cs();
-    // Note: attn_smem removed - eta*attn is computed fused in build_eta_attn_fused
-    // Note: x_hat_ln_smem removed - all LN intermediates streamed directly to global
     let mut reduce_buf = ReduceBuf::<P::EAcc>::new();
 
     // Load QKV for this stage

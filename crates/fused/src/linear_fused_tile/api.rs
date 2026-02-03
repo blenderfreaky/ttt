@@ -7,7 +7,6 @@ use super::launch::{TttTileKernel, TttTileMultiKernel};
 use crate::{FusedTttBackend, FusedTttConfig, ttt::TttInputs};
 
 pub fn default_threads(mini_batch_len: usize, head_dim: usize) -> usize {
-    // Note: 16x128, 32x64, 64x64 removed due to GPU shared memory limits
     match (mini_batch_len, head_dim) {
         (8, 32) => 64,
         (8, 64) => 64,

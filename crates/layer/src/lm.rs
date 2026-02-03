@@ -66,8 +66,6 @@ impl TTTConfigModelExt for TTTConfig {
             .collect();
         let norm = RmsNormConfig::new(self.hidden_size).init(device);
 
-        // When tie_word_embeddings=false, use separate lm_head (more performant)
-        // When tie_word_embeddings=true, lm_head is None and we use tied embedding weights
         let lm_head = if self.tie_word_embeddings {
             None
         } else {
@@ -141,16 +139,11 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
 
         hidden_states = self.norm.forward(hidden_states);
 
-        // Output projection: use lm_head if available (more performant), otherwise tied embedding weights
         hidden_states = if let Some(lm_head) = &self.lm_head {
-            // Separate lm_head: single optimized kernel call
             lm_head.forward(hidden_states)
         } else {
-            // Tied embedding weights: matmul with transposed embedding
-            // Embedding weight is [vocab_size, hidden_size], we need [1, hidden_size, vocab_size] for matmul
-            let weight = self.embedding.weight.val(); // [vocab_size, hidden_size]
-            let weight = weight.unsqueeze_dim::<3>(0); // [1, vocab_size, hidden_size]
-            let weight = weight.transpose(); // [1, hidden_size, vocab_size]
+            let weight = self.embedding.weight.val();
+            let weight = weight.unsqueeze_dim::<3>(0).transpose();
             hidden_states.matmul(weight)
         };
 
