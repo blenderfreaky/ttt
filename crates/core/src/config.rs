@@ -40,6 +40,8 @@ pub enum TTTLayerType {
     FusedLinear,
     FusedTileLinear,
     FusedTileMultiLinear,
+    StreamingLinear,
+    PtrStreamingLinear,
 }
 
 #[derive(Config, Debug, PartialEq)]

@@ -181,7 +181,7 @@ mod forward;
 mod helpers;
 mod launch;
 pub mod layer_norm;
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", feature = "streaming"))]
 pub mod streaming;
 mod wrapper;
 
@@ -203,7 +203,7 @@ pub use layer_norm::{
     layer_norm_forward_stream_intermediates, layer_norm_forward_with_intermediates,
     layer_norm_l2_grad, layer_norm_l2_grad_backward, layer_norm_l2_grad_stream_intermediates,
 };
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", feature = "streaming"))]
 pub use streaming::{
     CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN, PTR_CTRL_ARRAY_SIZE, PTR_TABLE_SIZE,
     PtrStreamingConfig, PtrStreamingKernelConfig, PtrStreamingTensors, STATUS_DONE, STATUS_IDLE,

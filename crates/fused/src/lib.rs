@@ -24,7 +24,6 @@
     clippy::type_complexity,
     clippy::format_push_string
 )]
-
 //! TTT Fused Kernels
 //!
 //! This crate provides fused GPU kernel implementations for TTT:
@@ -32,6 +31,10 @@
 //! - `TttTileKernel` - tiled TTT kernel (single-stage)
 //! - `TttTileMultiKernel` - multi-stage tiled kernel
 //! - Streaming kernels (ROCm only)
+
+// Compile-time check: streaming requires rocm
+#[cfg(all(feature = "streaming", not(feature = "rocm")))]
+compile_error!("The 'streaming' feature requires the 'rocm' feature to be enabled. Streaming kernels are ROCm-only.");
 
 use std::marker::PhantomData;
 
@@ -45,7 +48,7 @@ pub mod ttt;
 
 // Re-export commonly used items from ttt module
 pub use linear_fused::fused_ttt_forward;
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", feature = "streaming"))]
 pub use linear_fused_tile::{TttPtrStreamingKernel, TttStreamingKernel};
 // Re-export kernel types from linear_fused_tile
 pub use linear_fused_tile::{TttTileKernel, TttTileMultiKernel};
@@ -89,11 +92,11 @@ pub type FusedTile<B> = Fused<B, ttt_core::TTTLinear<B>, TileKernel>;
 pub type FusedTileMulti<B> = Fused<B, ttt_core::TTTLinear<B>, TileMultiKernel>;
 
 /// Streaming tiled fused TTT-Linear kernel.
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", feature = "streaming"))]
 pub type FusedTileStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, StreamingKernel>;
 
 /// Pointer-based streaming TTT-Linear kernel.
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", feature = "streaming"))]
 pub type FusedPtrStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, PtrStreamingKernel>;
 
 // ============================================================================
@@ -101,7 +104,7 @@ pub type FusedPtrStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, PtrStreamingKer
 // ============================================================================
 
 /// Unified backend trait for fused TTT kernels.
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", feature = "streaming"))]
 pub trait FusedTttBackend:
     FusedKernelBackend<TttKernel>
     + FusedKernelBackend<TttTileKernel>
@@ -113,7 +116,7 @@ pub trait FusedTttBackend:
 {
 }
 
-#[cfg(not(feature = "rocm"))]
+#[cfg(not(all(feature = "rocm", feature = "streaming")))]
 pub trait FusedTttBackend:
     FusedKernelBackend<TttKernel>
     + FusedKernelBackend<TttTileKernel>
@@ -123,7 +126,7 @@ pub trait FusedTttBackend:
 {
 }
 
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", feature = "streaming"))]
 impl<B> FusedTttBackend for B where
     B: Backend
         + FusedKernelBackend<TttKernel>
@@ -136,7 +139,7 @@ impl<B> FusedTttBackend for B where
 {
 }
 
-#[cfg(not(feature = "rocm"))]
+#[cfg(not(all(feature = "rocm", feature = "streaming")))]
 impl<B> FusedTttBackend for B where
     B: Backend
         + FusedKernelBackend<TttKernel>

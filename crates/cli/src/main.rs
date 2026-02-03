@@ -110,6 +110,14 @@ enum InnerModel {
     FusedLinear,
     /// Fused linear (tile-based CubeCL impl)
     FusedTileLinear,
+    /// Fused linear (multi-stage tile-based CubeCL impl)
+    FusedTileMultiLinear,
+    /// Streaming fused linear (ROCm only, requires --features streaming)
+    #[cfg(feature = "streaming")]
+    StreamingLinear,
+    /// Pointer-based streaming fused linear (ROCm only, requires --features streaming)
+    #[cfg(feature = "streaming")]
+    PtrStreamingLinear,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, Default)]
@@ -260,6 +268,11 @@ impl InnerModel {
             InnerModel::Mlp4 => TTTLayerType::MLP4,
             InnerModel::FusedLinear => TTTLayerType::FusedLinear,
             InnerModel::FusedTileLinear => TTTLayerType::FusedTileLinear,
+            InnerModel::FusedTileMultiLinear => TTTLayerType::FusedTileMultiLinear,
+            #[cfg(feature = "streaming")]
+            InnerModel::StreamingLinear => TTTLayerType::StreamingLinear,
+            #[cfg(feature = "streaming")]
+            InnerModel::PtrStreamingLinear => TTTLayerType::PtrStreamingLinear,
         }
     }
 }
