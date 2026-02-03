@@ -78,15 +78,15 @@ macro_rules! dispatch_ttt_layer_type {
                 $f::<$backend, ttt_fused::FusedTileMulti<$backend> $(, $other)*>($($args),*)
             }
             #[cfg(feature = "streaming")]
-            $crate::TTTLayerType::StreamingLinear => {
-                $f::<$backend, ttt_fused::FusedTileStreaming<$backend> $(, $other)*>($($args),*)
+            $crate::TTTLayerType::D2dStreamingLinear => {
+                $f::<$backend, ttt_fused::FusedTileD2dStreaming<$backend> $(, $other)*>($($args),*)
             }
             #[cfg(feature = "streaming")]
             $crate::TTTLayerType::PtrStreamingLinear => {
                 $f::<$backend, ttt_fused::FusedPtrStreaming<$backend> $(, $other)*>($($args),*)
             }
             #[cfg(not(feature = "streaming"))]
-            $crate::TTTLayerType::StreamingLinear | $crate::TTTLayerType::PtrStreamingLinear => {
+            $crate::TTTLayerType::D2dStreamingLinear | $crate::TTTLayerType::PtrStreamingLinear => {
                 panic!("Streaming kernels require the 'streaming' feature to be enabled")
             }
         }

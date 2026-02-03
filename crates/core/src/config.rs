@@ -40,7 +40,7 @@ pub enum TTTLayerType {
     FusedLinear,
     FusedTileLinear,
     FusedTileMultiLinear,
-    StreamingLinear,
+    D2dStreamingLinear,
     PtrStreamingLinear,
 }
 

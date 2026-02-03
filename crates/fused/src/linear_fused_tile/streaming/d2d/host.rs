@@ -1,9 +1,9 @@
 //! Host-side state management for the streaming TTT kernel.
 //!
 //! This module provides:
-//! - `TttStreamingState` - manages a running persistent kernel
+//! - `TttD2dStreamingState` - manages a running persistent kernel
 //! - Global registry for looking up streaming states by key
-//! - `StreamingConfig` - configuration including stream key
+//! - `D2dStreamingConfig` - configuration including stream key
 
 use std::{
     collections::HashMap,
@@ -26,7 +26,8 @@ use super::{
         helpers::Params,
     },
     kernel::{
-        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, StreamingKernelConfig, fused_ttt_streaming_kernel,
+        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, D2dStreamingKernelConfig,
+        fused_ttt_d2d_streaming_kernel,
     },
 };
 use crate::FusedTttConfig;
@@ -45,7 +46,7 @@ impl StreamKey {
 
 /// Configuration for the streaming kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StreamingConfig {
+pub struct D2dStreamingConfig {
     /// Unique identifier for this streaming session
     pub stream_id: u64,
     /// Batch size
@@ -64,7 +65,7 @@ pub struct StreamingConfig {
     pub debug: bool,
 }
 
-impl StreamingConfig {
+impl D2dStreamingConfig {
     pub fn new(
         stream_id: u64,
         batch_size: usize,
@@ -96,8 +97,8 @@ impl StreamingConfig {
         self.epsilon_scaled as f32 * 1e-9
     }
 
-    pub fn kernel_config(&self) -> StreamingKernelConfig {
-        StreamingKernelConfig::new(
+    pub fn kernel_config(&self) -> D2dStreamingKernelConfig {
+        D2dStreamingKernelConfig::new(
             FusedTttConfig::new(
                 self.mini_batch_len,
                 self.head_dim,
@@ -164,7 +165,7 @@ impl StreamingConfig {
 }
 
 /// GPU buffer tensors for the streaming kernel.
-pub struct StreamingBufferTensors<R: CubeRuntime> {
+pub struct D2dStreamingBufferTensors<R: CubeRuntime> {
     // Input/output buffers (single mini-batch sized)
     pub xq: CubeTensor<R>,
     pub xk: CubeTensor<R>,
@@ -206,10 +207,10 @@ use super::super::super::next_persistent_kernel_stream_id;
 ///
 /// Note: This struct is not Send because AsyncStream contains a raw HIP stream pointer.
 /// It should only be used from the thread that created it.
-pub struct TttStreamingState<R: CubeRuntime> {
-    pub config: StreamingConfig,
+pub struct TttD2dStreamingState<R: CubeRuntime> {
+    pub config: D2dStreamingConfig,
     pub stream: AsyncStream,
-    pub tensors: StreamingBufferTensors<R>,
+    pub tensors: D2dStreamingBufferTensors<R>,
     /// Client for normal operations (D2D copies, reading results, etc.)
     pub client: ComputeClient<R>,
     /// Client with a separate stream for the persistent kernel.
@@ -231,21 +232,21 @@ pub struct TttStreamingState<R: CubeRuntime> {
     cached_result_bias_ptr: GpuPtr<'static, f32>,
 }
 
-// SAFETY: TttStreamingState is only accessed from the same thread via the registry lock.
+// SAFETY: TttD2dStreamingState is only accessed from the same thread via the registry lock.
 // The AsyncStream's raw pointer is only used for HIP API calls which are thread-safe
 // when called from the thread that created the stream.
-unsafe impl<R: CubeRuntime> Send for TttStreamingState<R> {}
+unsafe impl<R: CubeRuntime> Send for TttD2dStreamingState<R> {}
 
 /// Type-erased wrapper for storing in the global registry.
 /// Uses Box<dyn Any> pattern for type erasure.
 struct AnyStreamingState(Box<dyn std::any::Any + Send>);
 
 impl AnyStreamingState {
-    fn new<R: CubeRuntime + 'static>(state: TttStreamingState<R>) -> Self {
+    fn new<R: CubeRuntime + 'static>(state: TttD2dStreamingState<R>) -> Self {
         Self(Box::new(state))
     }
 
-    fn downcast_mut<R: CubeRuntime + 'static>(&mut self) -> Option<&mut TttStreamingState<R>> {
+    fn downcast_mut<R: CubeRuntime + 'static>(&mut self) -> Option<&mut TttD2dStreamingState<R>> {
         self.0.downcast_mut()
     }
 }
@@ -255,8 +256,8 @@ static STREAMING_REGISTRY: LazyLock<Mutex<HashMap<StreamKey, AnyStreamingState>>
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Get or create a streaming state from the global registry.
-pub fn get_or_create_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
-    config: StreamingConfig,
+pub fn get_or_create_d2d_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
+    config: D2dStreamingConfig,
     client: ComputeClient<R>,
     device: R::Device,
     initial_weight: CubeTensor<R>,
@@ -264,13 +265,13 @@ pub fn get_or_create_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
     token_eta: CubeTensor<R>,
     ln_weight: CubeTensor<R>,
     ln_bias: CubeTensor<R>,
-) -> &'static mut TttStreamingState<R> {
+) -> &'static mut TttD2dStreamingState<R> {
     let key = config.key();
 
     let mut registry = STREAMING_REGISTRY.lock().unwrap();
 
     if !registry.contains_key(&key) {
-        let state = TttStreamingState::new::<F>(
+        let state = TttD2dStreamingState::new::<F>(
             config,
             client,
             device,
@@ -285,7 +286,7 @@ pub fn get_or_create_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
 
     // SAFETY: We hold the lock and the state exists
     let state = registry.get_mut(&key).unwrap();
-    let state_ptr = state.downcast_mut::<R>().unwrap() as *mut TttStreamingState<R>;
+    let state_ptr = state.downcast_mut::<R>().unwrap() as *mut TttD2dStreamingState<R>;
 
     // SAFETY: The registry is static and we're returning a reference that
     // will be used within the same forward_launch call
@@ -293,14 +294,14 @@ pub fn get_or_create_streaming_state<R: CubeRuntime + 'static, F: FloatElement>(
 }
 
 /// Remove a streaming state from the registry.
-pub fn remove_streaming_state<R: CubeRuntime + 'static>(
+pub fn remove_d2d_streaming_state<R: CubeRuntime + 'static>(
     stream_id: u64,
-) -> Option<TttStreamingState<R>> {
+) -> Option<TttD2dStreamingState<R>> {
     let key = StreamKey::new(stream_id);
     let mut registry = STREAMING_REGISTRY.lock().unwrap();
     registry.remove(&key).and_then(|any| {
         // Try to downcast and extract
-        match any.0.downcast::<TttStreamingState<R>>() {
+        match any.0.downcast::<TttD2dStreamingState<R>>() {
             Ok(boxed) => Some(*boxed),
             Err(_) => None,
         }
@@ -309,25 +310,25 @@ pub fn remove_streaming_state<R: CubeRuntime + 'static>(
 
 /// Remove a streaming state by ID, triggering its Drop impl for cleanup.
 /// Use this when you don't need the state back - just need to clean up.
-pub fn remove_streaming_state_by_id(stream_id: u64) {
+pub fn remove_d2d_streaming_state_by_id(stream_id: u64) {
     let key = StreamKey::new(stream_id);
     let mut registry = STREAMING_REGISTRY.lock().unwrap();
-    // Remove triggers AnyStreamingState drop -> TttStreamingState::drop() -> signal_shutdown()
+    // Remove triggers AnyStreamingState drop -> TttD2dStreamingState::drop() -> signal_shutdown()
     registry.remove(&key);
 }
 
 /// Shutdown and remove a streaming state, returning final weight/bias.
-pub fn shutdown_streaming_state<R: CubeRuntime + 'static>(
+pub fn shutdown_d2d_streaming_state<R: CubeRuntime + 'static>(
     stream_id: u64,
 ) -> Option<(Vec<f32>, Vec<f32>)> {
-    remove_streaming_state::<R>(stream_id).map(|state| state.shutdown())
+    remove_d2d_streaming_state::<R>(stream_id).map(|state| state.shutdown())
 }
 
-impl<R: CubeRuntime> TttStreamingState<R> {
+impl<R: CubeRuntime> TttD2dStreamingState<R> {
     /// Create a new streaming state and launch the persistent kernel.
     #[allow(clippy::too_many_arguments)]
     pub fn new<F: FloatElement>(
-        config: StreamingConfig,
+        config: D2dStreamingConfig,
         client: ComputeClient<R>,
         device: R::Device,
         initial_weight: CubeTensor<R>,
@@ -416,7 +417,7 @@ impl<R: CubeRuntime> TttStreamingState<R> {
             Shape::from(config.bias_shape()),
         );
 
-        let tensors = StreamingBufferTensors {
+        let tensors = D2dStreamingBufferTensors {
             xq,
             xk,
             xv,
@@ -650,7 +651,7 @@ impl<R: CubeRuntime> TttStreamingState<R> {
         // Dispatch based on tile configuration
         // Use kernel_client which has a separate stream for the persistent kernel
         tile_dispatch!(
-            fused_ttt_streaming_kernel,
+            fused_ttt_d2d_streaming_kernel,
             &self.kernel_client,
             cube_count,
             mini_batch_len,
@@ -937,7 +938,7 @@ impl<R: CubeRuntime> TttStreamingState<R> {
     }
 }
 
-impl<R: CubeRuntime> Drop for TttStreamingState<R> {
+impl<R: CubeRuntime> Drop for TttD2dStreamingState<R> {
     fn drop(&mut self) {
         self.signal_shutdown();
     }

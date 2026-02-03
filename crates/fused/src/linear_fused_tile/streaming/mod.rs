@@ -22,9 +22,9 @@ tensor_bundle! {
 
 // Re-export commonly used items
 pub use d2d::{
-    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN, FusedTileStreamingState,
-    StreamingConfig, StreamingKernelConfig, TttStreamingKernel, TttStreamingState,
-    fused_ttt_streaming_kernel, get_or_create_streaming_state,
+    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN, D2dStreamingConfig,
+    D2dStreamingKernelConfig, FusedTileD2dStreamingState, TttD2dStreamingKernel,
+    TttD2dStreamingState, fused_ttt_d2d_streaming_kernel, get_or_create_d2d_streaming_state,
 };
 pub use ptr::{
     CTRL_ARRAY_SIZE as PTR_CTRL_ARRAY_SIZE, FusedTilePtrStreamingState, PTR_TABLE_SIZE,

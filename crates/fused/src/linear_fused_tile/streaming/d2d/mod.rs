@@ -10,14 +10,15 @@ mod wrapper;
 mod tests;
 
 pub use host::{
-    StreamingBufferTensors, StreamingConfig, TttStreamingState, get_or_create_streaming_state,
-    remove_streaming_state, remove_streaming_state_by_id, shutdown_streaming_state,
+    D2dStreamingBufferTensors, D2dStreamingConfig, TttD2dStreamingState,
+    get_or_create_d2d_streaming_state, remove_d2d_streaming_state,
+    remove_d2d_streaming_state_by_id, shutdown_d2d_streaming_state,
 };
 pub use kernel::{
-    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN, StreamingBuffers,
-    fused_ttt_streaming_kernel,
+    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN, D2dStreamingBuffers,
+    fused_ttt_d2d_streaming_kernel,
 };
 pub use wrapper::{
-    FusedTileStreamingState, StreamHandle, StreamingKernelConfig, TttStreamingKernel,
-    fused_ttt_streaming_forward, next_stream_id,
+    D2dStreamingKernelConfig, FusedTileD2dStreamingState, StreamHandle, TttD2dStreamingKernel,
+    fused_ttt_d2d_streaming_forward, next_stream_id,
 };

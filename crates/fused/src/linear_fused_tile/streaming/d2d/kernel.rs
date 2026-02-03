@@ -24,12 +24,12 @@ use crate::FusedTttConfig;
 
 /// Configuration for streaming kernel with debug flag.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct StreamingKernelConfig {
+pub struct D2dStreamingKernelConfig {
     pub fused: FusedTttConfig,
     pub debug: bool,
 }
 
-impl StreamingKernelConfig {
+impl D2dStreamingKernelConfig {
     pub fn new(fused: FusedTttConfig, debug: bool) -> Self {
         Self { fused, debug }
     }
@@ -47,7 +47,7 @@ pub const CTRL_ARRAY_SIZE: usize = 3;
 /// These buffers are sized for one mini-batch `[batch, heads, mini_batch_len, head_dim]`
 /// and are reused across stages.
 #[derive(CubeType, CubeLaunch)]
-pub struct StreamingBuffers<F: Float> {
+pub struct D2dStreamingBuffers<F: Float> {
     /// Query input [batch, heads, mini_batch_len, head_dim]
     pub xq: Tensor<Line<F>>,
     /// Key input [batch, heads, mini_batch_len, head_dim]
@@ -73,7 +73,7 @@ pub struct StreamingBuffers<F: Float> {
 /// Weight and bias are kept in shared memory between stages.
 /// Forward intermediates are written to global memory with stage-based offsets.
 #[cube(launch)]
-pub fn fused_ttt_streaming_kernel<P: ParamsTrait>(
+pub fn fused_ttt_d2d_streaming_kernel<P: ParamsTrait>(
     // Input/output streaming buffers
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,
@@ -81,7 +81,7 @@ pub fn fused_ttt_streaming_kernel<P: ParamsTrait>(
     control: &mut Array<u32>,
     // Forward intermediates storage
     fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
-    #[comptime] config: StreamingKernelConfig,
+    #[comptime] config: D2dStreamingKernelConfig,
 ) {
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;

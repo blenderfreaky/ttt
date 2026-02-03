@@ -1,6 +1,6 @@
-//! FusedKernel implementation for the streaming TTT-Linear kernel.
+//! FusedKernel implementation for the D2D streaming TTT-Linear kernel.
 //!
-//! This implements the FusedKernel trait for `TttStreamingKernel`, which uses
+//! This implements the FusedKernel trait for `TttD2dStreamingKernel`, which uses
 //! a persistent GPU kernel with a global registry for state management.
 
 use std::{
@@ -23,9 +23,9 @@ use ttt_kernels::kernel::FusedKernel;
 
 use super::{
     super::TttTileOutputs,
-    host::{StreamingConfig, get_or_create_streaming_state, remove_streaming_state_by_id},
+    host::{D2dStreamingConfig, get_or_create_d2d_streaming_state, remove_d2d_streaming_state_by_id},
 };
-use crate::{Fused, FusedTttBackend, StreamingKernel, ttt::TttInputs};
+use crate::{D2dStreamingKernel, Fused, FusedTttBackend, ttt::TttInputs};
 
 /// Inner handle that cleans up the streaming state on drop.
 #[derive(Debug)]
@@ -33,7 +33,7 @@ struct StreamHandleInner(u64);
 
 impl Drop for StreamHandleInner {
     fn drop(&mut self) {
-        remove_streaming_state_by_id(self.0);
+        remove_d2d_streaming_state_by_id(self.0);
     }
 }
 
@@ -51,31 +51,31 @@ impl StreamHandle {
     }
 }
 
-/// State for FusedTileStreaming that wraps TTTLinearState and adds stream_id.
+/// State for FusedTileD2dStreaming that wraps TTTLinearState and adds stream_id.
 #[derive(burn::module::Module, Debug)]
-pub struct FusedTileStreamingState<B: FusedTttBackend> {
+pub struct FusedTileD2dStreamingState<B: FusedTttBackend> {
     /// The underlying linear state (weight and bias)
     pub inner: TTTLinearState<B>,
     /// Handle that cleans up on drop (not a module parameter)
     pub stream_handle: Ignored<StreamHandle>,
 }
 
-impl<B: FusedTttBackend> FusedTileStreamingState<B> {
+impl<B: FusedTttBackend> FusedTileD2dStreamingState<B> {
     pub fn stream_id(&self) -> u64 {
         self.stream_handle.0.id()
     }
 }
 
-impl<B: FusedTttBackend> AsRef<TTTLinearState<B>> for FusedTileStreamingState<B> {
+impl<B: FusedTttBackend> AsRef<TTTLinearState<B>> for FusedTileD2dStreamingState<B> {
     fn as_ref(&self) -> &TTTLinearState<B> {
         &self.inner
     }
 }
 
-/// Configuration for the streaming kernel.
+/// Configuration for the D2D streaming kernel.
 /// Extends FusedTttConfig with a stream_id for registry lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StreamingKernelConfig {
+pub struct D2dStreamingKernelConfig {
     /// Unique stream identifier for registry lookup
     pub stream_id: u64,
     /// Mini-batch sequence length (CS)
@@ -88,7 +88,7 @@ pub struct StreamingKernelConfig {
     pub threads: usize,
 }
 
-impl StreamingKernelConfig {
+impl D2dStreamingKernelConfig {
     pub fn new(
         stream_id: u64,
         mini_batch_len: usize,
@@ -110,24 +110,24 @@ impl StreamingKernelConfig {
     }
 }
 
-/// Marker type for the streaming TTT kernel.
+/// Marker type for the D2D streaming TTT kernel.
 #[derive(Debug, Clone, Copy)]
-pub struct TttStreamingKernel;
+pub struct TttD2dStreamingKernel;
 
-impl FusedKernel for TttStreamingKernel {
+impl FusedKernel for TttD2dStreamingKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttTileOutputs<T>;
     type SavedState<T: Debug + Clone + Send> = TttInputs<T>;
-    type Config = StreamingKernelConfig;
+    type Config = D2dStreamingKernelConfig;
 
     fn forward_launch<R: CubeRuntime + 'static, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
-        config: StreamingKernelConfig,
+        config: D2dStreamingKernelConfig,
     ) -> (TttTileOutputs<CubeTensor<R>>, TttInputs<CubeTensor<R>>) {
         let saved = inputs.clone();
         let [batch_size, num_heads, _seq_len, head_dim] = inputs.xq.shape.dims();
 
-        let streaming_config = StreamingConfig::new(
+        let streaming_config = D2dStreamingConfig::new(
             config.stream_id,
             batch_size,
             num_heads,
@@ -141,7 +141,7 @@ impl FusedKernel for TttStreamingKernel {
         let device = inputs.xq.device.clone();
 
         // Get or create the streaming state from the global registry
-        let state = get_or_create_streaming_state::<R, F>(
+        let state = get_or_create_d2d_streaming_state::<R, F>(
             streaming_config,
             client.clone(),
             device.clone(),
@@ -152,11 +152,11 @@ impl FusedKernel for TttStreamingKernel {
             inputs.ln_bias.clone(),
         );
 
-        trace!("streaming forward_d2d start");
+        trace!("D2D streaming forward_d2d start");
         // Use D2D copy to feed inputs to the streaming kernel (no CPU round-trip)
         let output = state.forward_d2d(&inputs.xq, &inputs.xk, &inputs.xv, &inputs.ttt_lr_eta);
 
-        trace!("streaming forward_d2d complete, cloning output");
+        trace!("D2D streaming forward_d2d complete, cloning output");
         // Clone output tensor since we're returning ownership
         let output = output.clone();
 
@@ -175,7 +175,7 @@ impl FusedKernel for TttStreamingKernel {
             std_ln: state.tensors.std_ln.clone(),
         };
         trace!(
-            "streaming forward complete, output handle stream: {:?}",
+            "D2D streaming forward complete, output handle stream: {:?}",
             result.output.handle.stream
         );
         (result, saved)
@@ -184,9 +184,9 @@ impl FusedKernel for TttStreamingKernel {
     fn backward_launch<R: CubeRuntime, F: FloatElement>(
         _saved: TttInputs<CubeTensor<R>>,
         _grad_outputs: TttTileOutputs<CubeTensor<R>>,
-        _config: StreamingKernelConfig,
+        _config: D2dStreamingKernelConfig,
     ) -> TttInputs<CubeTensor<R>> {
-        panic!("Streaming kernel backward not yet implemented")
+        panic!("D2D streaming kernel backward not yet implemented")
     }
 }
 
@@ -202,12 +202,12 @@ pub fn next_stream_id() -> u64 {
     STREAM_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// High-level API for the streaming TTT-Linear forward pass.
+/// High-level API for the D2D streaming TTT-Linear forward pass.
 ///
 /// This function takes burn Tensors, converts them to CubeTensors,
 /// calls the streaming kernel, and returns burn Tensors.
 #[allow(clippy::too_many_arguments)]
-pub fn fused_ttt_streaming_forward<B: FusedTttBackend>(
+pub fn fused_ttt_d2d_streaming_forward<B: FusedTttBackend>(
     xq: Tensor<B, 4>,
     xk: Tensor<B, 4>,
     xv: Tensor<B, 4>,
@@ -237,9 +237,11 @@ pub fn fused_ttt_streaming_forward<B: FusedTttBackend>(
         ln_bias: ln_bias.into_primitive().tensor(),
     };
 
-    let config = StreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
+    let config =
+        D2dStreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
 
-    let (outputs, _saved) = <B as FusedKernelBackend<TttStreamingKernel>>::forward(inputs, config);
+    let (outputs, _saved) =
+        <B as FusedKernelBackend<TttD2dStreamingKernel>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),
@@ -252,16 +254,16 @@ pub fn fused_ttt_streaming_forward<B: FusedTttBackend>(
 // TTTInnerModel implementation for streaming kernel
 // ============================================================================
 
-/// TTTInnerModel implementation for the streaming fused kernel.
+/// TTTInnerModel implementation for the D2D streaming fused kernel.
 ///
 /// The streaming kernel maintains a persistent GPU kernel that processes
 /// mini-batches incrementally, keeping weight/bias in shared memory between calls.
-impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, StreamingKernel> {
+impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, D2dStreamingKernel> {
     type Config = <TTTLinear<B> as TTTInnerModel<B>>::Config;
-    type State = FusedTileStreamingState<B>;
+    type State = FusedTileD2dStreamingState<B>;
 
     fn name() -> &'static str {
-        "FusedStreamingTTTLinear"
+        "FusedD2dStreamingTTTLinear"
     }
 
     fn new(
@@ -277,7 +279,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, StreamingKe
     }
 
     fn init_state(&self, batch_size: usize) -> Self::State {
-        FusedTileStreamingState {
+        FusedTileD2dStreamingState {
             inner: self.inner.init_state(batch_size),
             stream_handle: Ignored(StreamHandle::new(next_stream_id())),
         }
@@ -305,7 +307,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, StreamingKe
             .threads
             .unwrap_or_else(|| super::super::super::api::default_threads(seq_len, head_dim));
 
-        let (output, weight_updated, bias_updated) = fused_ttt_streaming_forward(
+        let (output, weight_updated, bias_updated) = fused_ttt_d2d_streaming_forward(
             qkv.xq,
             qkv.xk,
             qkv.xv,

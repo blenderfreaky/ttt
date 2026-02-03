@@ -49,7 +49,7 @@ pub mod ttt;
 // Re-export commonly used items from ttt module
 pub use linear_fused::fused_ttt_forward;
 #[cfg(all(feature = "rocm", feature = "streaming"))]
-pub use linear_fused_tile::{TttPtrStreamingKernel, TttStreamingKernel};
+pub use linear_fused_tile::{TttD2dStreamingKernel, TttPtrStreamingKernel};
 // Re-export kernel types from linear_fused_tile
 pub use linear_fused_tile::{TttTileKernel, TttTileMultiKernel};
 pub use ttt::{TttInputs, TttKernel, TttOutputs};
@@ -70,9 +70,9 @@ pub struct TileKernel;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TileMultiKernel;
 
-/// Marker for the streaming tiled fused TTT-Linear kernel.
+/// Marker for the D2D streaming tiled fused TTT-Linear kernel.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct StreamingKernel;
+pub struct D2dStreamingKernel;
 
 /// Marker for the pointer-based streaming TTT-Linear kernel.
 #[derive(Debug, Clone, Copy, Default)]
@@ -91,9 +91,9 @@ pub type FusedTile<B> = Fused<B, ttt_core::TTTLinear<B>, TileKernel>;
 /// Multi-stage tiled fused TTT-Linear kernel.
 pub type FusedTileMulti<B> = Fused<B, ttt_core::TTTLinear<B>, TileMultiKernel>;
 
-/// Streaming tiled fused TTT-Linear kernel.
+/// D2D streaming tiled fused TTT-Linear kernel.
 #[cfg(all(feature = "rocm", feature = "streaming"))]
-pub type FusedTileStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, StreamingKernel>;
+pub type FusedTileD2dStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, D2dStreamingKernel>;
 
 /// Pointer-based streaming TTT-Linear kernel.
 #[cfg(all(feature = "rocm", feature = "streaming"))]
@@ -109,7 +109,7 @@ pub trait FusedTttBackend:
     FusedKernelBackend<TttKernel>
     + FusedKernelBackend<TttTileKernel>
     + FusedKernelBackend<TttTileMultiKernel>
-    + FusedKernelBackend<TttStreamingKernel>
+    + FusedKernelBackend<TttD2dStreamingKernel>
     + FusedKernelBackend<TttPtrStreamingKernel>
     + FusedKernelBackend<GeluTanhKernel>
     + FusedKernelBackend<GeluBwdKernel>
@@ -132,7 +132,7 @@ impl<B> FusedTttBackend for B where
         + FusedKernelBackend<TttKernel>
         + FusedKernelBackend<TttTileKernel>
         + FusedKernelBackend<TttTileMultiKernel>
-        + FusedKernelBackend<TttStreamingKernel>
+        + FusedKernelBackend<TttD2dStreamingKernel>
         + FusedKernelBackend<TttPtrStreamingKernel>
         + FusedKernelBackend<GeluTanhKernel>
         + FusedKernelBackend<GeluBwdKernel>
