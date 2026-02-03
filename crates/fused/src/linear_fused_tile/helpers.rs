@@ -290,7 +290,9 @@ pub fn build_eta_attn_fused<P: ParamsTrait>(
 /// Result is broadcast to all.
 #[cube]
 #[must_use]
-pub fn extract_last_row<FVal: Float, FAcc: Float, R: Dim, C: Dim>(st: &St<FVal, R, C>) -> Rv<FAcc, C> {
+pub fn extract_last_row<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+    st: &St<FVal, R, C>,
+) -> Rv<FAcc, C> {
     let mut result = Rv::<FAcc, C>::new();
     let last_row = R::VALUE - 1;
     let vec_stride = C::LINES;

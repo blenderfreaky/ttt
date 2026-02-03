@@ -4,17 +4,14 @@ use std::fmt::Debug;
 
 use burn_backend::Element;
 use burn_cubecl::{
-    CubeRuntime, FloatElement, kernel::cast, kernel::into_contiguous, ops::numeric::zeros_client,
+    CubeRuntime, FloatElement,
+    kernel::{cast, into_contiguous},
+    ops::numeric::zeros_client,
     tensor::CubeTensor,
 };
 use cubecl::prelude::*;
 use thundercube::prelude::{D4, D8, D16, D32, D64, LINE_SIZE};
-use ttt_kernels::{
-    TensorBundle,
-    kernel::FusedKernel,
-    tensor_bundle,
-    util::empty_like,
-};
+use ttt_kernels::{TensorBundle, kernel::FusedKernel, tensor_bundle, util::empty_like};
 
 use super::{
     backward::{
@@ -858,7 +855,8 @@ impl FusedKernel for TttTileKernel {
             std_ln: saved.std_ln,
         };
 
-        let grad_inputs = backward::<R, F>(saved_tensors, fwd, grad_outputs.output, epsilon, threads);
+        let grad_inputs =
+            backward::<R, F>(saved_tensors, fwd, grad_outputs.output, epsilon, threads);
 
         // TODO: token_eta gradient is currently zeros (not computed by backward kernel)
         let grad_token_eta = empty_like::<R, F>(&grad_inputs.grad_xq, token_eta_shape);

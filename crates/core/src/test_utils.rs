@@ -193,8 +193,18 @@ pub fn inputs_to_data<B: Backend>(inputs: &TTTInputsInner<B>) -> InputsData {
         xq: inputs.qkv.xq.to_data().convert::<f32>().to_vec().unwrap(),
         xk: inputs.qkv.xk.to_data().convert::<f32>().to_vec().unwrap(),
         xv: inputs.qkv.xv.to_data().convert::<f32>().to_vec().unwrap(),
-        token_eta: inputs.token_eta.to_data().convert::<f32>().to_vec().unwrap(),
-        ttt_lr_eta: inputs.ttt_lr_eta.to_data().convert::<f32>().to_vec().unwrap(),
+        token_eta: inputs
+            .token_eta
+            .to_data()
+            .convert::<f32>()
+            .to_vec()
+            .unwrap(),
+        ttt_lr_eta: inputs
+            .ttt_lr_eta
+            .to_data()
+            .convert::<f32>()
+            .to_vec()
+            .unwrap(),
     }
 }
 
@@ -423,7 +433,13 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .convert::<f32>()
                 .to_vec()
                 .unwrap(),
-            &xq_ref.grad(&grads_ref).unwrap().to_data().convert::<f32>().to_vec().unwrap(),
+            &xq_ref
+                .grad(&grads_ref)
+                .unwrap()
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
             rtol,
             atol,
             &format!("{iter_name} grad_xq"),
@@ -436,7 +452,13 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .convert::<f32>()
                 .to_vec()
                 .unwrap(),
-            &xk_ref.grad(&grads_ref).unwrap().to_data().convert::<f32>().to_vec().unwrap(),
+            &xk_ref
+                .grad(&grads_ref)
+                .unwrap()
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
             rtol,
             atol,
             &format!("{iter_name} grad_xk"),
@@ -449,7 +471,13 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 .convert::<f32>()
                 .to_vec()
                 .unwrap(),
-            &xv_ref.grad(&grads_ref).unwrap().to_data().convert::<f32>().to_vec().unwrap(),
+            &xv_ref
+                .grad(&grads_ref)
+                .unwrap()
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
             rtol,
             atol,
             &format!("{iter_name} grad_xv"),
@@ -622,14 +650,29 @@ pub fn test_vs_ttt_linear<B, T, S, Transform, RunRef, RunTested>(
         );
         let tested_state = state_tested.as_ref();
         assert_data_close(
-            &tested_state.weight.to_data().convert::<f32>().to_vec().unwrap(),
-            &state_ref.weight.to_data().convert::<f32>().to_vec().unwrap(),
+            &tested_state
+                .weight
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
+            &state_ref
+                .weight
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
             rtol,
             atol,
             &format!("{iter_name} weight"),
         );
         assert_data_close(
-            &tested_state.bias.to_data().convert::<f32>().to_vec().unwrap(),
+            &tested_state
+                .bias
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
             &state_ref.bias.to_data().convert::<f32>().to_vec().unwrap(),
             rtol,
             atol,

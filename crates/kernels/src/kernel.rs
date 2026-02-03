@@ -24,7 +24,10 @@ pub trait FusedKernel: 'static + Send + Debug + Clone {
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: Self::Inputs<CubeTensor<R>>,
         config: Self::Config,
-    ) -> (Self::Outputs<CubeTensor<R>>, Self::SavedState<CubeTensor<R>>);
+    ) -> (
+        Self::Outputs<CubeTensor<R>>,
+        Self::SavedState<CubeTensor<R>>,
+    );
 
     /// Run the backward pass using saved state and upstream gradients.
     fn backward_launch<R: CubeRuntime, F: FloatElement>(
@@ -44,7 +47,10 @@ pub trait FusedKernelBackend<K: FusedKernel>: Backend {
     fn forward(
         inputs: K::Inputs<FloatTensor<Self>>,
         config: K::Config,
-    ) -> (K::Outputs<FloatTensor<Self>>, K::SavedState<FloatTensor<Self>>);
+    ) -> (
+        K::Outputs<FloatTensor<Self>>,
+        K::SavedState<FloatTensor<Self>>,
+    );
 
     fn backward(
         saved: K::SavedState<FloatTensor<Self>>,

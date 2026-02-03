@@ -212,4 +212,3 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
         output
     }
 }
-

@@ -64,7 +64,10 @@ where
     fn forward(
         inputs: K::Inputs<FloatTensor<Self>>,
         config: K::Config,
-    ) -> (K::Outputs<FloatTensor<Self>>, K::SavedState<FloatTensor<Self>>) {
+    ) -> (
+        K::Outputs<FloatTensor<Self>>,
+        K::SavedState<FloatTensor<Self>>,
+    ) {
         let client = inputs.client().clone();
         let inner_inputs = inputs.map(|t| fusion_in::<B>(t)).into();
         let (outputs, saved) = B::forward(inner_inputs, config);

@@ -20,6 +20,6 @@ pub use kernel::{
     fused_ttt_streaming_ptr_kernel,
 };
 pub use wrapper::{
-    FusedTilePtrStreamingState, PtrStreamHandle, PtrStreamingKernelConfig,
-    TttPtrStreamingKernel, fused_ttt_ptr_streaming_forward, next_ptr_stream_id,
+    FusedTilePtrStreamingState, PtrStreamHandle, PtrStreamingKernelConfig, TttPtrStreamingKernel,
+    fused_ttt_ptr_streaming_forward, next_ptr_stream_id,
 };

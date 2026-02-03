@@ -32,12 +32,13 @@ fn test_fused_tile_streaming_forward_vs_reference(
         .unwrap();
 
     let dims = TestDims::new(batch, heads, dim, seq).with_iterations(iterations);
-    test_fwd::<
-        GpuBackend,
-        FusedTileStreaming<GpuBackend>,
-        FusedTileStreamingState<GpuBackend>,
-        _,
-    >(dims, |m| m.into(), RTOL, ATOL, "FusedTileStreaming");
+    test_fwd::<GpuBackend, FusedTileStreaming<GpuBackend>, FusedTileStreamingState<GpuBackend>, _>(
+        dims,
+        |m| m.into(),
+        RTOL,
+        ATOL,
+        "FusedTileStreaming",
+    );
 }
 
 // =============================================================================
@@ -47,21 +48,17 @@ fn test_fused_tile_streaming_forward_vs_reference(
 // TODO: streaming kernel has issues, needs investigation
 #[test_case(2, 2, 32, 8 ; "batch2_heads2_dim32_seq8")]
 #[ignore]
-fn test_fused_tile_streaming_fmb_vs_reference(
-    batch: usize,
-    heads: usize,
-    dim: usize,
-    seq: usize,
-) {
+fn test_fused_tile_streaming_fmb_vs_reference(batch: usize, heads: usize, dim: usize, seq: usize) {
     let _guard = crate::linear_fused_tile::STREAMING_TEST_MUTEX
         .lock()
         .unwrap();
 
     let dims = TestDims::new(batch, heads, dim, seq);
-    test_fmb::<
-        GpuBackend,
-        FusedTileStreaming<GpuBackend>,
-        FusedTileStreamingState<GpuBackend>,
-        _,
-    >(dims, |m| m.into(), RTOL, ATOL, "FusedTileStreaming");
+    test_fmb::<GpuBackend, FusedTileStreaming<GpuBackend>, FusedTileStreamingState<GpuBackend>, _>(
+        dims,
+        |m| m.into(),
+        RTOL,
+        ATOL,
+        "FusedTileStreaming",
+    );
 }

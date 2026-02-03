@@ -758,4 +758,3 @@ impl<R: CubeRuntime + 'static> Drop for TttPtrStreamingState<R> {
 // Safety: The streaming state is designed to be used from a single thread
 // but the underlying handles are Send
 unsafe impl<R: CubeRuntime> Send for TttPtrStreamingState<R> {}
-

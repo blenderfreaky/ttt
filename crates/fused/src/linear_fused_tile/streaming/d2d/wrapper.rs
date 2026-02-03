@@ -239,8 +239,7 @@ pub fn fused_ttt_streaming_forward<B: FusedTttBackend>(
 
     let config = StreamingKernelConfig::new(stream_id, mini_batch_len, head_dim, epsilon, threads);
 
-    let (outputs, _saved) =
-        <B as FusedKernelBackend<TttStreamingKernel>>::forward(inputs, config);
+    let (outputs, _saved) = <B as FusedKernelBackend<TttStreamingKernel>>::forward(inputs, config);
 
     (
         Tensor::from_primitive(TensorPrimitive::Float(outputs.output)),
@@ -329,4 +328,3 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, StreamingKe
         output
     }
 }
-
