@@ -1,3 +1,46 @@
+//! Tensor bundle abstraction for working with multiple tensor types.
+//!
+//! Burn has multiple tensor wrapper types: `CubeTensor` (raw GPU), `FloatTensor<Autodiff<B>>`
+//! (gradient tracking), `FloatTensor<Fusion<B>>` (operation fusion), etc. A fused kernel
+//! needs to work with all of them using a single struct definition.
+//!
+//! # The Problem
+//!
+//! A kernel's inputs might be `(xq, xk, xv, weight, bias)`. We need:
+//! - A single struct definition that works with any tensor type
+//! - Conversion between tensor types (e.g., unwrap autodiff → run kernel → rewrap)
+//! - Type-level tensor count for generic gradient routing
+//!
+//! # Solution
+//!
+//! [`TensorBundle<T>`] is generic over the tensor type. The [`tensor_bundle!`] macro
+//! generates a struct that implements it:
+//!
+//! ```ignore
+//! tensor_bundle! {
+//!     pub struct MyInputs { xq, xk, xv, weight, bias }
+//! }
+//!
+//! // Same struct, different tensor types:
+//! let cube_inputs: MyInputs<CubeTensor<R>> = ...;           // For kernel launch
+//! let autodiff_inputs: MyInputs<FloatTensor<Autodiff<B>>> = ...; // With gradients
+//! let fusion_inputs: MyInputs<FloatTensor<Fusion<B>>> = ...;     // For fusion
+//!
+//! // Convert between types with map():
+//! let primitives = autodiff_inputs.map(|t| t.primitive);
+//! ```
+//!
+//! The `Mapped<U>` associated type ensures the struct type is preserved across conversions.
+//! The `Array` associated type encodes tensor count, avoiding const generics on
+//! [`FusedKernel`](crate::FusedKernel).
+//!
+//! # Why the loose associated types?
+//!
+//! `Mapped<U>` is always `Self<U>` and `Array` is always `[T; N]`. These are expressed as
+//! associated types rather than being hardcoded because Rust can't express higher-kinded
+//! bounds like `Bundle: for<T> TensorBundle<T>`. The loose types let us write bounds like
+//! `K::Inputs<CubeTensor>: TensorBundle<..., Mapped<Primitive> = K::Inputs<Primitive>>`.
+
 use std::fmt::Debug;
 
 /// Generic trait for tensor bundles.

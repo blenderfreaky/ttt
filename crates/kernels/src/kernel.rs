@@ -1,13 +1,29 @@
+//! Core traits for fused GPU kernels.
+//!
+//! [`FusedKernel`] defines a hard boundary for Burn's fusion and autodiff systems.
+//! At the boundary, wrapper types are stripped to concrete `CubeTensor`s, the kernel
+//! runs, and results are rewrapped. The `impls` module provides [`FusedKernelBackend`]
+//! implementations for `Autodiff<B>` and `Fusion<B>` that handle the unwrapping,
+//! gradient tracking, and rewrapping boilerplate.
+//!
+//! # Usage
+//!
+//! 1. Define input/output/saved bundles using [`tensor_bundle!`](crate::tensor_bundle!)
+//! 2. Implement [`FusedKernel`] with `forward_launch` and `backward_launch` on `CubeTensor`
+//! 3. Call via `FusedKernelBackend::forward()`
+//!
+//! # Limitations
+//!
+//! Due to Burn's autodiff design, backward runs once per output tensor. If the kernel
+//! has 3 outputs and all are used in the loss, `backward_launch` is called 3 times
+//! with gradients accumulated. `SavedState` is cloned for each call.
+
 use std::fmt::Debug;
 
 use burn::tensor::{backend::Backend, ops::FloatTensor};
 use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
 
 use crate::bundle::TensorBundle;
-
-// =============================================================================
-// Main kernel trait
-// =============================================================================
 
 /// Trait for defining fused CubeCL kernels.
 ///
