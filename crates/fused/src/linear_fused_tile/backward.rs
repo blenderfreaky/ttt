@@ -116,8 +116,6 @@ struct Stage4Outputs<P: ParamsTrait> {
 }
 
 /// Stage 4: Compute gradients through output layer norm.
-/// grad_z1_bar is written to the output tile passed by caller.
-/// grad_W_z1bar is computed and stored in temp_f_f (accumulated later, after stage 3 reads grad_W_last).
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage4_ln<P: ParamsTrait>(
@@ -188,7 +186,6 @@ fn backward_stage4_ln<P: ParamsTrait>(
     sync_cube();
 
     // grad_W_z1bar = XQ^T @ grad_z1_bar
-    // Store into temp_f_f (accumulated into grad_W_last after stage 3, which reads it)
     let mut dW_reg = P::rt_ff();
     dW_reg.zero();
     cube::mma_AB(&mut dW_reg, q_smem, grad_z1_bar_out);
@@ -215,7 +212,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
 }
 
 // =============================================================================
-// Stage 3: Update backward (reuses CS×CS tiles)
+// Stage 3: Update backward
 // Split into two parts to allow weight_init reload between them.
 // =============================================================================
 
@@ -481,8 +478,7 @@ fn backward_stage3_part2<P: ParamsTrait>(
     sync_cube();
 
     // --- grad_ttt_lr_eta from η terms in z1_bar ---
-    // Reuse cs_cs_a/b for attn computation
-    build_attn_matrix::<P>(q_smem, k_smem, cs_cs_a, false); // attn (lower tri)
+    build_attn_matrix::<P>(q_smem, k_smem, cs_cs_a, false);
 
     // d_eta_base = -grad_z1_bar @ grad_l^T (lower tri)
     let mut d_eta_base_reg = P::rt_cs_cs();
@@ -613,7 +609,6 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     scratch1.copy_from(grad_output_fused);
     scratch1.mul(scratch2);
 
-    // Need another temp - use grad_Z1_out temporarily
     grad_Z1_out.copy_from(grad_target_out);
     grad_Z1_out.mul(x_hat_fused);
 
@@ -659,7 +654,7 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 
     sync_cube();
 
-    grad_Z1_out.add(scratch1); // grad_Z1_out now = grad_L_x_hat
+    grad_Z1_out.add(scratch1);
 
     sync_cube();
 
@@ -669,7 +664,6 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
     scratch1.div_col(std_fused);
     scratch1.neg();
 
-    // scratch2 still has grad_L_grad_x_hat, reuse it
     scratch2.copy_from(grad_grad_l);
     scratch2.mul(grad_l);
     scratch2.div_col(std_fused);
@@ -746,8 +740,6 @@ fn backward_stage2_ln_l2<P: ParamsTrait>(
 // =============================================================================
 
 /// Stage 1: Final gradient assembly and output storage.
-/// Note: grad_W_z1bar is already accumulated into grad_W_last after stage 3 part 1.
-/// temp_f_f contains weight_init on entry, and is overwritten with dW_tile.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn backward_stage1_assemble<P: ParamsTrait>(
@@ -757,7 +749,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     grad_ln_bias_s4: &RvbFA<P>,
     // Stage 3 outputs
     grad_xq_mini: &StCsF<P>,
-    grad_xk_combined: &StCsF<P>, // grad_xk_mini + grad_xk_attn already combined
+    grad_xk_combined: &StCsF<P>,
     grad_ttt_lr_eta: &RvbCsA<P>,
     // Stage 2 outputs
     grad_Z1: &StCsF<P>,
@@ -891,43 +883,29 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 ) {
     let mut buf = ReduceBuf::<P::EAcc>::new();
 
-    // =========================================================================
-    // Tile pool allocation (total 64KB for 16×32)
-    // =========================================================================
-
-    // Scratch tiles - reused within stages (8KB)
     let mut scratch1 = P::st_cs_f();
     let mut scratch2 = P::st_cs_f();
-
-    // CS×CS tiles - reused across stage 3 computations (8KB)
     let mut cs_cs_a = P::st_cs_cs();
     let mut cs_cs_b = P::st_cs_cs();
-
-    // CS×F tile pool for stage outputs (40KB = 10 tiles)
     let mut tile_grad_z1_bar = P::st_cs_f();
     let mut tile_b = P::st_cs_f();
     let mut tile_c = P::st_cs_f();
-    // tile_grad_xk_combined holds grad_xk_mini + grad_xk_attn (combined to save 1 tile)
     let mut tile_grad_xk_combined = P::st_cs_f();
     let mut tile_e = P::st_cs_f();
     let mut tile_f = P::st_cs_f();
     let mut tile_grad_Z1 = P::st_cs_f();
     let mut tile_grad_target = P::st_cs_f();
-
-    // Shared F×F tile: used for grad_W_z1bar (stage 4), weight_init (stage 3 part 2, stage 1), dW_tile (stage 1)
     let mut temp_f_f = P::st_ff();
 
     // =========================================================================
     // Load persistent data
     // =========================================================================
 
-    // Q/K transposed (needed by stages 4, 3)
     let mut q_smem = P::st_f_cs();
     let mut k_smem = P::st_f_cs();
     cube::load_st_transpose(&saved.xq, &mut q_smem, stage_offset, 0, 0);
     cube::load_st_transpose(&saved.xk, &mut k_smem, stage_offset, 0, 0);
 
-    // Weight init base offset (loaded on-demand into temp_f_f)
     let base_weight_init = index_2d(&saved.weight_init, CUBE_POS_X as usize, CUBE_POS_Y as usize);
 
     // LN weight
@@ -946,7 +924,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     cube::broadcast::load_rv_direct(&saved.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta);
 
-    // grad_l (needed by stages 3, 2)
     let mut grad_l_smem = P::st_cs_f();
     cube::load_st_direct(&fwd.grad_l_wrt_Z1, &mut grad_l_smem, stage_offset, 0, 0);
 
@@ -960,7 +937,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     cube::load_st_direct(&fwd.x_hat_ln, &mut tile_b, stage_offset, 0, 0);
     cube::load_st_direct(grad_L_XQW, &mut tile_c, stage_offset, 0, 0);
 
-    // Rename tiles to reflect their content
     let x_hat_ln = tile_b;
     let grad_output_s4 = tile_c;
 
@@ -987,7 +963,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Stage 3 Part 1: Update backward (grad_W_last-dependent parts)
     // =========================================================================
 
-    // Repurpose tiles: x_hat_ln -> xk_smem, grad_output_s4 -> xq_smem
     let mut xk_smem = x_hat_ln;
     let mut xq_smem = grad_output_s4;
     cube::load_st_direct(&saved.xk, &mut xk_smem, stage_offset, 0, 0);
@@ -1018,7 +993,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &mut tile_grad_xk_combined, // grad_xk_mini + grad_xk_attn combined
     );
 
-    // Rename output from stage 3 part 1
     let grad_grad_l = tile_e;
 
     sync_cube();
@@ -1028,7 +1002,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    // Load weight_init into temp_f_f for stage 3 part 2 and stage 1
     cube::load_st_direct(&saved.weight_init, &mut temp_f_f, base_weight_init, 0, 0);
 
     sync_cube();
@@ -1055,8 +1028,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &mut tile_f, // grad_xq_mini output
     );
 
-    // Rename outputs from stage 3
-    let mut grad_xq_mini = xq_smem; // Repurpose xq_smem tile
+    let mut grad_xq_mini = xq_smem;
     grad_xq_mini.copy_from(&tile_f);
 
     sync_cube();
@@ -1065,9 +1037,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Stage 2: LN+L2 second derivative
     // =========================================================================
 
-    // Repurpose tiles for stage 2 inputs
-    let mut x_hat_fused = xk_smem; // Repurpose xk_smem
-    let mut grad_x_hat_fused = tile_f; // Repurpose tile_f
+    let mut x_hat_fused = xk_smem;
+    let mut grad_x_hat_fused = tile_f;
 
     // Load std_fused
     let mut std_fused = P::rvb_cs_v();
@@ -1126,11 +1097,9 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Stage 1: Final assembly
     // =========================================================================
 
-    // Repurpose grad_grad_l tile for grad_output reload
     let mut grad_output_s1 = grad_grad_l;
     cube::load_st_direct(grad_L_XQW, &mut grad_output_s1, stage_offset, 0, 0);
 
-    // Repurpose x_hat_fused for scratch in stage 1
     let mut scratch_s1 = x_hat_fused;
 
     sync_cube();
@@ -1142,7 +1111,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &stage4_out.grad_ln_bias,
         // Stage 3 outputs
         &grad_xq_mini,
-        &tile_grad_xk_combined, // grad_xk_mini + grad_xk_attn already combined
+        &tile_grad_xk_combined,
         &stage3_out.grad_ttt_lr_eta,
         // Stage 2 outputs
         &tile_grad_Z1,

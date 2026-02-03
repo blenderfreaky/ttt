@@ -112,12 +112,11 @@ fn compute_grad_x_from_grad_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
     cube::sum_rows::<FVal, FAcc, R, C>(temp, &mut sum_grad_x_hat_x_hat_acc, buf);
     let sum_grad_x_hat_x_hat = sum_grad_x_hat_x_hat_acc.cast::<FVal>();
 
-    // Step 2: Compute x_hat * sum_grad_x_hat_x_hat (last use of x_hat!)
+    // Step 2: Compute x_hat * sum_grad_x_hat_x_hat
     temp.copy_from(x_hat);
     temp.mul_col(&sum_grad_x_hat_x_hat);
     sync_cube();
 
-    // Step 3: Now x_hat is no longer needed - overwrite with result
     // x_hat = grad_x_hat * C
     x_hat.copy_from(grad_x_hat);
     x_hat.mul_scalar(c_f);
@@ -126,7 +125,7 @@ fn compute_grad_x_from_grad_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
     x_hat.sub_col(&sum_grad_x_hat);
     sync_cube();
 
-    // x_hat -= temp (which contains x_hat * sum_grad_x_hat_x_hat)
+    // x_hat -= temp
     x_hat.sub(temp);
 
     // x_hat /= (std * C)
@@ -258,7 +257,6 @@ pub fn layer_norm_l2_grad_stream_intermediates<FVal: Float, FAcc: Float, R: Dim,
     temp: &mut St<FVal, R, C>,
     scratch: &mut St<FVal, R, C>,
     buf: &mut ReduceBuf<FAcc>,
-    // Global tensor outputs (stored directly, no smem intermediates)
     x_hat_global: &mut Tensor<Line<FVal>>,
     grad_output_global: &mut Tensor<Line<FVal>>,
     grad_x_hat_global: &mut Tensor<Line<FVal>>,
@@ -608,7 +606,7 @@ pub fn layer_norm_l2_grad_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
 
     sync_cube();
 
-    // Now temp2 = grad_l (recomputed)
+    // temp2 = grad_l
 
     // grad_L_std = -grad_L_x_hat * (x_hat / std) - grad_L_grad_l * (grad_l / std)
     //            = -(temp1 * x_hat + grad_L_grad_l * temp2) / std
@@ -637,7 +635,6 @@ pub fn layer_norm_l2_grad_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
 
     // Final: grad_L_Z1 = grad_L_x_hat / std - (1/F) * sum(grad_L_x_hat) / std + (1/F) * sum(grad_L_std) * x_hat
 
-    // sum(grad_L_x_hat) per row - temp1 still has grad_L_x_hat
     let mut sum_grad_L_x_hat_acc = Rv::<FAcc, R>::new();
     cube::sum_rows::<FVal, FAcc, R, C>(temp1, &mut sum_grad_L_x_hat_acc, buf);
     let sum_grad_L_x_hat = sum_grad_L_x_hat_acc.cast::<FVal>();
@@ -667,8 +664,6 @@ pub fn layer_norm_l2_grad_backward<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
     sync_cube();
 
     // grad_L_target = -ln_weight * grad_L_grad_x_hat
-    // We need to recompute grad_L_grad_x_hat (was in temp1 earlier, but we overwrote it)
-
     // Recompute -grad_L_grad_l / std
     temp1.copy_from(grad_L_grad_l);
     temp1.neg();

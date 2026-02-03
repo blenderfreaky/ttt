@@ -80,7 +80,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     ttt_lr_eta_idx: usize,
     #[comptime] epsilon: f32,
 ) {
-    // Scratch tiles - allocated per stage call
     let mut q_smem = P::st_f_cs();
     let mut k_smem = P::st_f_cs();
     let mut k_direct_smem = P::st_cs_f();
@@ -126,17 +125,14 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
-    // Streams intermediates (x_hat_fused, grad_output_fused, grad_x_hat_fused) directly to global
-    // Use k_direct_smem as scratch (dead after line 131)
     let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::EVal, P::EAcc, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
         ln_weight_rv,
         ln_bias_rv,
         &mut temp_cs_f_smem,
-        &mut k_direct_smem, // scratch (dead after line 131)
+        &mut k_direct_smem,
         &mut reduce_buf,
-        // Global tensor outputs (stored directly, no smem intermediates)
         &mut fwd_intermediates.x_hat_fused,
         &mut fwd_intermediates.grad_output_fused,
         &mut fwd_intermediates.grad_x_hat_fused,
@@ -146,7 +142,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    // Store std_fused and grad_l_wrt_Z1 (z1_smem now contains grad_l)
+    // Store std_fused and grad_l_wrt_Z1
     cube::broadcast::store_rv_direct(
         &std_fused_rv,
         &mut fwd_intermediates.std_fused,
@@ -171,7 +167,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
         false,
     );
 
-    // Step 5: eta @ grad (compute before eta_matrix is overwritten)
+    // Step 5: eta @ grad
     let mut eta_grad_reg = P::rt_cs_f();
     eta_grad_reg.zero();
     cube::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
