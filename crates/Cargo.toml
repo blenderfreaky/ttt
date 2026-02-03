@@ -54,3 +54,17 @@ criterion = { version = "0.8", features = ["html_reports", "csv_output"] }
 safetensors = "0.7"
 rand = "0.9"
 test-case = "3.3"
+
+[patch.crates-io]
+cubecl = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-common = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-core = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-cpp = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-hip = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-ir = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-macros = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-macros-internal = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-opt = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-runtime = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-std = { git = "https://github.com/kilyanni/cubecl", branch = "bf16-hip-fix" }
+cubecl-hip-sys = { git = "https://github.com/kilyanni/cubecl-hip-sys", branch = "rocm-update" }

@@ -811,9 +811,9 @@ checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "bytes"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
+checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 dependencies = [
  "portable-atomic",
 ]
@@ -831,7 +831,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c15b675b80d994b2eadb20a4bbe434eabeb454eac3ee5e2b4cf6f147ee9be091"
 dependencies = [
  "byteorder",
- "float8 0.6.0",
+ "float8 0.6.1",
  "gemm",
  "half",
  "libm",
@@ -1346,8 +1346,7 @@ dependencies = [
 [[package]]
 name = "cubecl"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "053856efd5436224775b9423d43d86f53d5b1d3af9a6b9983d9a313a0922638f"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "cubecl-core",
  "cubecl-cpu",
@@ -1363,8 +1362,7 @@ dependencies = [
 [[package]]
 name = "cubecl-common"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60bf8aaeb572c8cf2f2ffd07fa9bb1a2cf9336d1aa11ecd4d9a2f2e30c4be706"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "backtrace",
  "bytemuck",
@@ -1400,8 +1398,7 @@ dependencies = [
 [[package]]
 name = "cubecl-core"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98374a31d2b68b55709891169832ccf205408c201c5e023964482441f213d0b9"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "bitflags",
  "bytemuck",
@@ -1427,8 +1424,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cpp"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb24d96c1ff84ab4def0a529e384311a15cb771310aaf2b640c312384c3bca23"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1444,8 +1440,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cpu"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "152588a6e16b6bda5e8216af7a6fad3d7de4697294b6ce0f6acbe3a9029ff674"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1466,8 +1461,7 @@ dependencies = [
 [[package]]
 name = "cubecl-cuda"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f74a5750c45090d1fc5ddf6a19fea9a099aa1f6800b78f1167a2d60182d1d96"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1486,8 +1480,7 @@ dependencies = [
 [[package]]
 name = "cubecl-hip"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbae9bc7ee6093d0d7a549c05873dff3478f9087b59eb09b223a97d642c849aa"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "bytemuck",
  "cubecl-common",
@@ -1506,9 +1499,8 @@ dependencies = [
 
 [[package]]
 name = "cubecl-hip-sys"
-version = "7.0.5183101"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59ef087b59445fda47d2177370886351eb923ad1a541086d4919268574cd9558"
+version = "7.1.5280201"
+source = "git+https://github.com/kilyanni/cubecl-hip-sys?branch=rocm-update#c3db8a4baa3b63f1cc030bfdb832449de5a091d9"
 dependencies = [
  "libc",
  "regex",
@@ -1517,8 +1509,7 @@ dependencies = [
 [[package]]
 name = "cubecl-ir"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "361b608ff9f05024c7a7e381852689acd95b6af5af956d68734692b27d5f75ef"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "cubecl-common",
  "cubecl-macros-internal",
@@ -1538,8 +1529,7 @@ dependencies = [
 [[package]]
 name = "cubecl-macros"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c9a872d16207c6a27ed45942fd311a281394dd384b14a21f72131db1556a977"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "cubecl-common",
  "darling 0.21.3",
@@ -1554,8 +1544,7 @@ dependencies = [
 [[package]]
 name = "cubecl-macros-internal"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa3fa0626cdf28b9c49084c2bb51493bfde44378e22d90624aacaafb81da3588"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",
@@ -1566,8 +1555,7 @@ dependencies = [
 [[package]]
 name = "cubecl-opt"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdcff25fdcbd82ea4277c30a81e162722859f57c6ae105c0a3c53f8bb91154f6"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "cubecl-common",
  "cubecl-core",
@@ -1584,8 +1572,7 @@ dependencies = [
 [[package]]
 name = "cubecl-runtime"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b02e28997a8d75311afae4d2cea7b593eb125312f845874118a59d78c7a6b34c"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "async-channel",
  "bytemuck",
@@ -1615,8 +1602,7 @@ dependencies = [
 [[package]]
 name = "cubecl-std"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8ff5741c98b7a7a5944b4afb0b67dd7f5e0be41ce7f303b587f8b0d6430b29b"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "cubecl-common",
  "cubecl-core",
@@ -1633,8 +1619,7 @@ dependencies = [
 [[package]]
 name = "cubecl-wgpu"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29787364632fc7ec6a11cf3d95187f82f6fcce17d6bb4f0fb0dde580b837631d"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 dependencies = [
  "async-channel",
  "bytemuck",
@@ -1657,8 +1642,7 @@ dependencies = [
 [[package]]
 name = "cubecl-zspace"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a0f819071413b19a00b7105497e0f6d2cf3e7e9d65cbb8d4ecf1ddb29c61dc2"
+source = "git+https://github.com/kilyanni/cubecl?branch=bf16-hip-fix#50d17e111daafbf1354182eb0acec5eeabbab9e0"
 
 [[package]]
 name = "cubek"
@@ -2308,9 +2292,9 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flate2"
-version = "1.1.8"
+version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b375d6465b98090a5f25b1c7703f3859783755aa9a80433b36e0379a3ec2f369"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -2339,9 +2323,9 @@ dependencies = [
 
 [[package]]
 name = "float8"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f463a8a37ede13dac13316d1a1eeafa992300906a0c4c7fa1177f366d10bcbf"
+checksum = "719a903cc23e4a89e87962c2a80fdb45cdaad0983a89bd150bb57b4c8571a7d5"
 dependencies = [
  "half",
  "num-traits",
@@ -3024,14 +3008,13 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.19"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "727805d60e7938b76b826a6ef209eb70eaa1812794f9424d4a4e2d740662df5f"
+checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-channel",
- "futures-core",
  "futures-util",
  "http",
  "http-body",
@@ -4614,9 +4597,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.12.2"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "843bc0191f75f3e22651ae5f1e72939ab2f72a4bc30fa80a066bd66edefc24d4"
+checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -4626,9 +4609,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.13"
+version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5276caf25ac86c8d810222b3dbb938e512c55c6831a10f3e6ed1c93b84041f1c"
+checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -4637,9 +4620,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.8"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
+checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
 name = "relative-path"
@@ -7077,9 +7060,9 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.18"
+version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1966f8ac2c1f76987d69a74d0e0f929241c10e78136434e3be70ff7f58f64214"
+checksum = "3ff05f8caa9038894637571ae6b9e29466c1f4f829d26c9b28f869a29cbe3445"
 
 [[package]]
 name = "zune-core"
