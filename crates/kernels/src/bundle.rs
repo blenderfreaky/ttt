@@ -69,7 +69,7 @@ macro_rules! __replace_expr {
     };
 }
 
-/// Declares a tensor bundle struct with automatic TensorBundle implementation.
+/// Declares a tensor bundle struct with automatic `TensorBundle` implementation.
 ///
 /// # Example
 /// ```ignore
@@ -82,7 +82,7 @@ macro_rules! __replace_expr {
 ///
 /// This generates:
 /// - The struct with all fields public
-/// - `TensorBundle<T>` impl with map, into_array, from_array
+/// - `TensorBundle<T>` impl with map, `into_array`, `from_array`
 /// - `HasClient` impl for Fusion (using first field)
 /// - `<scalar>()` builder methods for each scalar
 #[macro_export]

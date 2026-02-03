@@ -36,6 +36,7 @@ impl TestDims {
     }
 
     /// Create test dimensions with explicit mini_batch_size (for multi-stage tests).
+    #[must_use]
     pub fn multi_stage(
         batch_size: usize,
         num_heads: usize,

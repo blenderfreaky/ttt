@@ -91,7 +91,7 @@ where
                 }
 
                 let completed = progress.fetch_add(1, Ordering::Relaxed) + 1;
-                if completed % 10000 == 0 {
+                if completed.is_multiple_of(10000) {
                     println!("Pre-tokenized {completed}/{total_len} sequences");
                 }
 
