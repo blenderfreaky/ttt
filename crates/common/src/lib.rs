@@ -22,8 +22,6 @@ pub enum InnerModel {
     FusedTileMultiLinear,
     D2dStreamingLinear,
     PtrStreamingLinear,
-    /// Mixed layer type: alternates Linear (even layers) and MLP (odd layers)
-    MixedLinearMlp,
 }
 
 /// Position encoding type.
@@ -91,7 +89,6 @@ impl std::fmt::Display for InnerModel {
             Self::FusedTileMultiLinear => write!(f, "fused-tile-multi-linear"),
             Self::D2dStreamingLinear => write!(f, "d2d-streaming-linear"),
             Self::PtrStreamingLinear => write!(f, "ptr-streaming-linear"),
-            Self::MixedLinearMlp => write!(f, "mixed-linear-mlp"),
         }
     }
 }
