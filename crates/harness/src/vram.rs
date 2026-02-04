@@ -181,8 +181,8 @@ impl VramEstimator {
         // Sum before overhead
         let subtotal = model_bytes + optimizer_bytes + gradient_bytes + activation_bytes;
 
-        // 20% framework overhead
-        let overhead_bytes = subtotal / 5;
+        // 33% framework overhead
+        let overhead_bytes = subtotal / 3;
 
         let total_bytes = subtotal + overhead_bytes;
 
