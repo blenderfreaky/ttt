@@ -38,7 +38,7 @@ pub fn device<B: FusedTttBackend>() -> B::Device {
 }
 
 /// Force async operations to complete before returning.
-fn sync<B: FusedTttBackend, const D: usize>(tensor: Tensor<B, D>) {
+fn sync<B: Backend, const D: usize>(tensor: Tensor<B, D>) {
     let _ = tensor.into_data();
 }
 
@@ -310,6 +310,8 @@ fn bench_inner_backward<
             |(inputs, mut state)| {
                 let output = inner.forward(&mut state, inputs);
                 let _grads = output.sum().backward();
+                // Sync all GPU operations (including backward)
+                let _ = B::sync(device);
             },
             criterion::BatchSize::LargeInput,
         );
@@ -335,13 +337,16 @@ fn bench_full_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     group.measurement_time(Duration::from_secs(20));
 
     let bench_id = format!("{}_{}", config.name, params.id());
-    let input = random_logits::<B>(params, device);
 
     group.bench_function(BenchmarkId::new("forward", &bench_id), |b| {
-        b.iter(|| {
-            let output = model.forward_inference(input.clone());
-            sync(output);
-        });
+        b.iter_batched(
+            || random_logits::<B>(params, device),
+            |input| {
+                let output = model.forward_inference(input);
+                sync(output);
+            },
+            criterion::BatchSize::LargeInput,
+        );
     });
 
     group.finish();
@@ -373,6 +378,8 @@ fn bench_full_backward<
             |batch| {
                 let output = model.forward_training(batch);
                 let _grads = output.loss.backward();
+                // Sync all GPU operations (including backward)
+                let _ = B::sync(device);
             },
             criterion::BatchSize::LargeInput,
         );
@@ -495,6 +502,7 @@ macro_rules! define_all_benches {
     };
 }
 
+#[cfg(not(feature = "streaming"))]
 define_all_benches!(
     linear => TTTLinear<_>,
     linear_adam => TTTLinearAdam<_>,
@@ -505,6 +513,21 @@ define_all_benches!(
     fused_linear => FusedLinear<_>,
     fused_linear_tile => FusedTile<_>,
     fused_linear_tile_multi => FusedTileMulti<_>,
+);
+
+#[cfg(feature = "streaming")]
+define_all_benches!(
+    linear => TTTLinear<_>,
+    linear_adam => TTTLinearAdam<_>,
+    mlp => TTTMLP<_>,
+    mlp2 => TTTMLP2<_>,
+    mlp3 => TTTMLP3<_>,
+    mlp4 => TTTMLP4<_>,
+    fused_linear => FusedLinear<_>,
+    fused_linear_tile => FusedTile<_>,
+    fused_linear_tile_multi => FusedTileMulti<_>,
+    fused_linear_tile_d2d_streaming => ttt_fused::FusedTileD2dStreaming<_>,
+    fused_linear_tile_ptr_streaming => ttt_fused::FusedTilePtrStreaming<_>,
 );
 
 criterion_main!(inner_forward, inner_backward, full_forward, full_backward);

@@ -171,7 +171,8 @@ fn bench_bwd<
     for _ in 0..args.warmup {
         let inputs = generate_test_inputs(dims, device);
         let mut state = inner.init_state(args.batch);
-        let _ = inner.forward(&mut state, inputs).sum().backward();
+        let _grads = inner.forward(&mut state, inputs).sum().backward();
+        let _ = B::sync(device);
     }
 
     let mut total = 0.0;
@@ -179,7 +180,8 @@ fn bench_bwd<
         let inputs = generate_test_inputs(dims, device);
         let mut state = inner.init_state(args.batch);
         let start = Instant::now();
-        let _ = inner.forward(&mut state, inputs).sum().backward();
+        let _grads = inner.forward(&mut state, inputs).sum().backward();
+        let _ = B::sync(device);
         total += start.elapsed().as_secs_f64();
     }
     (total / args.repeats as f64) * 1000.0
