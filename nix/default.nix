@@ -162,7 +162,7 @@
     extraEnv.CUDA_PATH = "${cudaPackages.cudatoolkit}";
   };
 
-  # Build a complete backend package set: {f32.{ttt,ttt-bench}, bf16.{ttt,ttt-bench}, ttt-docker}
+  # Build a complete backend package set: {f32.{ttt,ttt-bench}, ttt-docker}
   mkBackendPkgs = {
     name,
     backend,
@@ -175,24 +175,34 @@
       ttt = mkTtt (buildConfig // {inherit backend;});
       ttt-bench = mkTttBench (buildConfig // {inherit backend;});
     };
-    bf16 = {
-      ttt = mkTtt (buildConfig
-        // {
-          backend = "${backend},bf16";
-          binSuffix = "-bf16";
-        });
-      ttt-bench = mkTttBench (buildConfig
-        // {
-          backend = "${backend},bf16";
-          binSuffix = "-bf16";
-        });
-    };
+    # bf16 = {
+    #   ttt = mkTtt (buildConfig
+    #     // {
+    #       backend = "${backend},bf16";
+    #       binSuffix = "-bf16";
+    #     });
+    #   ttt-bench = mkTttBench (buildConfig
+    #     // {
+    #       backend = "${backend},bf16";
+    #       binSuffix = "-bf16";
+    #     });
+    # };
   in {
-    inherit f32 bf16;
+    inherit
+      f32
+      # bf16
+      ;
     ttt-docker = mkTttDocker {
       inherit name;
       tttPkg = f32.ttt;
-      runtimeDeps = runtimeDeps ++ [f32.ttt-bench bf16.ttt bf16.ttt-bench nvtop];
+      runtimeDeps =
+        runtimeDeps
+        ++ [
+          f32.ttt-bench
+          # bf16.ttt
+          # bf16.ttt-bench
+          nvtop
+        ];
       extraEnv = dockerEnv;
     };
     deps = mkCargoArtifacts (buildConfig // {inherit backend;});
