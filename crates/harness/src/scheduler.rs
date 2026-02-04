@@ -1,11 +1,12 @@
 //! Scheduling and parallel run management.
 
 use crate::config::{FailurePolicy, HarnessConfig, RunConfig};
-use crate::runner::{ProgressUpdate, RunError, RunResult, Runner};
+use crate::runner::{new_activity_tracker, ProgressUpdate, RunError, RunResult, Runner};
 use crate::state::{StateError, StateManager};
 use crate::vram::{VramEstimate, VramEstimator};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
@@ -36,12 +37,13 @@ impl Scheduler {
     /// Create a new scheduler.
     #[must_use]
     pub fn new(config: HarnessConfig, ttt_binary: String, state_manager: StateManager) -> Self {
+        let rust_log = config.harness.rust_log.clone();
         let runs = config.runs.clone();
         Self {
             config,
             runs,
             estimator: VramEstimator::default(),
-            runner: Runner::new(ttt_binary, state_manager),
+            runner: Runner::new(ttt_binary, state_manager, rust_log),
         }
     }
 
@@ -154,6 +156,9 @@ impl Scheduler {
         let mut running: HashMap<String, f64> = HashMap::new();
         let mut used_vram = 0.0;
 
+        // Shared "settle until" timestamp — all watchdogs pause until this time
+        let settle_until = Arc::new(AtomicU64::new(0));
+
         // Channel for completion notifications
         let (tx, mut rx) = mpsc::unbounded_channel::<CompletionResult>();
 
@@ -177,11 +182,22 @@ impl Scheduler {
                 match self.runner.spawn(&scheduled.config, scheduled.resume_epoch) {
                     Ok(handle) => {
                         let name = handle.name.clone();
-                        pb.set_message(format!("{name}: starting (PID {})", handle.pid));
+                        let pid = handle.pid;
+                        pb.set_message(format!("{name}: starting (PID {pid})"));
                         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
                         running.insert(name.clone(), vram);
                         used_vram += vram;
+
+                        // Bump settle_until so all watchdogs pause while GPU settles
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        settle_until.store(
+                            now + self.config.harness.settle_grace_secs,
+                            Ordering::Relaxed,
+                        );
 
                         tracing::info!(
                             "Started {} ({:.2} GB, total: {:.2}/{:.2} GB)",
@@ -194,6 +210,9 @@ impl Scheduler {
                         // Progress channel for this run
                         let (progress_tx, mut progress_rx) = watch::channel(ProgressUpdate::default());
                         let progress_tx = Arc::new(progress_tx);
+
+                        // Activity tracker for idle detection
+                        let activity = new_activity_tracker();
 
                         // Task to update progress bar
                         let pb_clone = pb.clone();
@@ -208,13 +227,40 @@ impl Scheduler {
                             }
                         });
 
+                        // Spawn watchdog for hang/idle detection
+                        if self.config.harness.hang_timeout_secs.is_some()
+                            || self.config.harness.idle_timeout_secs.is_some()
+                        {
+                            let hang_timeout = self.config.harness.hang_timeout_secs;
+                            let idle_timeout = self.config.harness.idle_timeout_secs;
+                            let settle = settle_until.clone();
+                            let watch_activity = activity.clone();
+                            let watch_name = name.clone();
+                            // Subscribe to progress for hang detection
+                            let mut watch_progress = progress_tx.subscribe();
+                            tokio::spawn(async move {
+                                watchdog(
+                                    &watch_name,
+                                    pid,
+                                    hang_timeout,
+                                    idle_timeout,
+                                    settle,
+                                    watch_activity,
+                                    &mut watch_progress,
+                                )
+                                .await;
+                            });
+                        }
+
                         let tx = tx.clone();
                         let state_file = self.config.harness.state_file.clone();
+                        let rust_log = self.config.harness.rust_log.clone();
 
                         tokio::spawn(async move {
                             let sm = StateManager::new(&state_file);
-                            let runner = Runner::new("ttt", sm);
-                            let result = runner.wait(handle, Some(progress_tx)).await;
+                            let runner = Runner::new("ttt", sm, rust_log);
+                            let result =
+                                runner.wait(handle, Some(progress_tx), Some(activity)).await;
                             pb.finish_with_message(format!(
                                 "{}: {}",
                                 name,
@@ -349,4 +395,77 @@ pub enum SchedulerError {
     Run(#[from] RunError),
     #[error("run {0} failed: {1}")]
     RunFailed(String, String),
+}
+
+/// Watchdog that kills a process if it hangs or goes idle.
+///
+/// - `hang_timeout`: seconds with no progress update (only active after the first update)
+/// - `idle_timeout`: seconds with no stdout/stderr activity at all
+/// - `settle_until`: shared timestamp — watchdog pauses until this time passes
+async fn watchdog(
+    name: &str,
+    pid: u32,
+    hang_timeout: Option<u64>,
+    idle_timeout: Option<u64>,
+    settle_until: Arc<AtomicU64>,
+    last_activity: Arc<AtomicU64>,
+    progress_rx: &mut watch::Receiver<ProgressUpdate>,
+) {
+    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+    let mut got_first_progress = false;
+    let mut last_progress_time = 0u64;
+
+    loop {
+        tokio::time::sleep(POLL_INTERVAL).await;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Respect settle grace period
+        if now < settle_until.load(Ordering::Relaxed) {
+            continue;
+        }
+
+        // Check if process is still alive
+        let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+        if !alive {
+            return;
+        }
+
+        // Check for new progress updates (non-blocking)
+        if progress_rx.has_changed().unwrap_or(false) {
+            let _ = progress_rx.borrow_and_update();
+            if !got_first_progress {
+                got_first_progress = true;
+            }
+            last_progress_time = now;
+        }
+
+        // Hang detection: no progress update for too long (only after first update)
+        if let Some(timeout) = hang_timeout
+            && got_first_progress
+            && now - last_progress_time > timeout
+        {
+            tracing::error!(
+                "{name}: no progress update for {timeout}s, killing (PID {pid})"
+            );
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            return;
+        }
+
+        // Idle detection: no stdout/stderr activity at all
+        if let Some(timeout) = idle_timeout {
+            let last = last_activity.load(Ordering::Relaxed);
+            if now - last > timeout {
+                tracing::error!(
+                    "{name}: no output activity for {timeout}s, killing (PID {pid})"
+                );
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                return;
+            }
+        }
+    }
 }

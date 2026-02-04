@@ -46,9 +46,19 @@ pub struct HarnessSettings {
     /// Runpod integration settings.
     #[serde(default)]
     pub runpod: RunpodSettings,
-    /// RUST_LOG value to pass to child training processes.
+    /// `RUST_LOG` value to pass to child training processes.
     #[serde(default)]
     pub rust_log: Option<String>,
+    /// Kill process if no progress update after the first one within this many seconds.
+    #[serde(default)]
+    pub hang_timeout_secs: Option<u64>,
+    /// Kill process if no stdout/stderr activity at all within this many seconds.
+    #[serde(default)]
+    pub idle_timeout_secs: Option<u64>,
+    /// Grace period (seconds) applied to all watchdogs when a new process starts,
+    /// to let the GPU settle.
+    #[serde(default = "default_settle_grace")]
+    pub settle_grace_secs: u64,
 }
 
 /// What to do when a run fails.
@@ -115,6 +125,10 @@ fn default_on_failure() -> FailurePolicy {
 
 fn default_max_retries() -> u32 {
     2
+}
+
+fn default_settle_grace() -> u64 {
+    30
 }
 
 fn default_state_file() -> String {

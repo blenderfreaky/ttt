@@ -208,9 +208,9 @@ async fn test_runner_passes_resume_flag() {
     };
 
     // Spawn with resume
-    let runner = Runner::new(mock_bin.to_str().unwrap(), sm);
+    let runner = Runner::new(mock_bin.to_str().unwrap(), sm, None);
     let handle = runner.spawn(&run_config, resume_epoch).unwrap();
-    let result = runner.wait(handle, None).await;
+    let result = runner.wait(handle, None, None).await;
     assert!(result.success);
 
     // Verify --resume was in the args
@@ -262,9 +262,9 @@ async fn test_runner_no_resume_without_checkpoint() {
     };
 
     // Spawn without resume (no checkpoint)
-    let runner = Runner::new(mock_bin.to_str().unwrap(), sm);
+    let runner = Runner::new(mock_bin.to_str().unwrap(), sm, None);
     let handle = runner.spawn(&run_config, None).unwrap();
-    let result = runner.wait(handle, None).await;
+    let result = runner.wait(handle, None, None).await;
     assert!(result.success);
 
     // Verify --resume was NOT in the args

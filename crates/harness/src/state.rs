@@ -360,13 +360,9 @@ fn is_process_alive(pid: u32) -> bool {
 }
 
 /// Get current time as Unix timestamp string.
-fn now_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    format!("{secs}")
+#[must_use]
+pub fn now_timestamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
 /// Errors that can occur with state management.

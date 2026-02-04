@@ -1,10 +1,11 @@
 //! Subprocess execution for training runs.
 
 use crate::config::RunConfig;
-use crate::state::{StateError, StateManager};
+use crate::state::{now_timestamp, StateError, StateManager};
 use std::collections::VecDeque;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -67,7 +68,7 @@ pub struct Runner {
     ttt_binary: String,
     /// State manager for persistence.
     state_manager: StateManager,
-    /// RUST_LOG value for child processes.
+    /// `RUST_LOG` value for child processes.
     rust_log: Option<String>,
 }
 
@@ -157,10 +158,14 @@ impl Runner {
     }
 
     /// Wait for a run to complete and update state, sending progress updates.
+    ///
+    /// If `last_activity` is provided, it is updated (unix seconds) on every
+    /// stdout/stderr line so an external watchdog can detect idle processes.
     pub async fn wait(
         &self,
         mut handle: RunHandle,
         progress_tx: Option<Arc<watch::Sender<ProgressUpdate>>>,
+        last_activity: Option<Arc<AtomicU64>>,
     ) -> RunResult {
         // Create log directory
         let log_dir = Path::new(&handle.artifact_dir);
@@ -169,13 +174,14 @@ impl Runner {
         let stdout_path = log_dir.join("stdout.log");
         let stderr_path = log_dir.join("stderr.log");
 
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let timestamp = now_timestamp();
 
         // Stream stdout to file and parse for progress
         let stdout = handle.child.stdout.take();
         let stdout_task = if let Some(stdout) = stdout {
             let path = stdout_path.clone();
-            let ts = timestamp.to_string();
+            let ts = timestamp.clone();
+            let activity = last_activity.clone();
             Some(tokio::spawn(async move {
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
@@ -187,15 +193,18 @@ impl Runner {
                     .ok();
 
                 // Write retry separator if file already has content
-                if let Some(ref mut f) = file {
-                    if f.metadata().await.map_or(false, |m| m.len() > 0) {
-                        let _ = f
-                            .write_all(format!("\n--- retry at {ts} ---\n\n").as_bytes())
-                            .await;
-                    }
+                if let Some(ref mut f) = file
+                    && f.metadata().await.is_ok_and(|m| m.len() > 0)
+                {
+                    let _ = f
+                        .write_all(format!("\n--- retry at {ts} ---\n\n").as_bytes())
+                        .await;
                 }
 
                 while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(ref a) = activity {
+                        a.store(unix_now(), Ordering::Relaxed);
+                    }
                     if let Some(ref mut f) = file {
                         let _ = f.write_all(line.as_bytes()).await;
                         let _ = f.write_all(b"\n").await;
@@ -217,7 +226,8 @@ impl Runner {
         let stderr = handle.child.stderr.take();
         let stderr_task = if let Some(stderr) = stderr {
             let path = stderr_path.clone();
-            let ts = timestamp.to_string();
+            let ts = timestamp;
+            let activity = last_activity;
             Some(tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
@@ -229,16 +239,19 @@ impl Runner {
                     .ok();
 
                 // Write retry separator if file already has content
-                if let Some(ref mut f) = file {
-                    if f.metadata().await.map_or(false, |m| m.len() > 0) {
-                        let _ = f
-                            .write_all(format!("\n--- retry at {ts} ---\n\n").as_bytes())
-                            .await;
-                    }
+                if let Some(ref mut f) = file
+                    && f.metadata().await.is_ok_and(|m| m.len() > 0)
+                {
+                    let _ = f
+                        .write_all(format!("\n--- retry at {ts} ---\n\n").as_bytes())
+                        .await;
                 }
 
                 let mut tail = VecDeque::with_capacity(20);
                 while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(ref a) = activity {
+                        a.store(unix_now(), Ordering::Relaxed);
+                    }
                     if let Some(ref mut f) = file {
                         let _ = f.write_all(line.as_bytes()).await;
                         let _ = f.write_all(b"\n").await;
@@ -326,6 +339,20 @@ impl Runner {
     pub fn state_manager(&self) -> &StateManager {
         &self.state_manager
     }
+}
+
+/// Get current unix timestamp in seconds.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Create a new last-activity tracker initialized to now.
+#[must_use]
+pub fn new_activity_tracker() -> Arc<AtomicU64> {
+    Arc::new(AtomicU64::new(unix_now()))
 }
 
 /// Handle to a running subprocess.
