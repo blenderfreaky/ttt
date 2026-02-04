@@ -227,7 +227,8 @@ impl Scheduler {
                             ProgressStyle::default_bar()
                                 .template("{spinner:.green} [{elapsed_precise}] {msg:42} [{wide_bar:.cyan/blue}] {pos:>5}/{len:5} ({percent:>2}%) [{eta:>5}]")
                                 .unwrap()
-                                .progress_chars("█▓▒░"),
+                                // RunPod won't print fancier chars properly
+                                .progress_chars("#*-"),
                         );
                         pb.set_message(format!("{:15}: initializing", scheduled.name));
 
