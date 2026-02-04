@@ -4,6 +4,8 @@
 //! and auto-shuts down runpod.
 
 use clap::{Parser, Subcommand};
+use tracing_indicatif::IndicatifLayer;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use ttt_harness::{
     config::HarnessConfig,
     runpod::Runpod,
@@ -63,11 +65,17 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
+    // tracing needs to be initialized with indicatif_layer to not clobber progress bars
+    let indicatif_layer = IndicatifLayer::new();
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
+        .with(
+            EnvFilter::builder()
+                .with_default_directive(tracing::Level::INFO.into())
+                .from_env_lossy(),
         )
+        .with(indicatif_layer)
         .init();
 
     let cli = Cli::parse();

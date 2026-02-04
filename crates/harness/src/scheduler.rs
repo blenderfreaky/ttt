@@ -185,13 +185,13 @@ impl Scheduler {
                         .template("{spinner:.green} [{elapsed_precise}] {msg}")
                         .unwrap(),
                 );
-                pb.set_message(format!("{}: starting...", scheduled.name));
+                pb.set_message(format!("{:15}: starting...", scheduled.name));
 
                 match self.runner.spawn(&scheduled.config, scheduled.resume_epoch) {
                     Ok(handle) => {
                         let name = handle.name.clone();
                         let pid = handle.pid;
-                        pb.set_message(format!("{name}: starting (PID {pid})"));
+                        pb.set_message(format!("{name:15}: starting (PID {pid})"));
                         pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
                         running.insert(name.clone(), vram);
@@ -223,19 +223,55 @@ impl Scheduler {
                         // Activity tracker for idle detection
                         let activity = new_activity_tracker();
 
+                        pb.set_style(
+                            ProgressStyle::default_bar()
+                                .template("{spinner:.green} [{elapsed_precise}] {msg:42} [{wide_bar:.cyan/blue}] {pos:>5}/{len:5} ({percent:>2}%) [{eta:>5}]")
+                                .unwrap()
+                                .progress_chars("█▓▒░"),
+                        );
+                        pb.set_message(format!("{:15}: initializing", scheduled.name));
+
+                        let train_config = scheduled.config.params.train;
+                        let total_samples = train_config.total_samples();
+                        pb.set_length(total_samples as u64);
+
                         // Task to update progress bar
                         let pb_clone = pb.clone();
                         let name_clone = name.clone();
                         tokio::spawn(async move {
+                            let mut last_processed = 0;
+                            let mut last_epoch = 0;
+                            let mut items_so_far = 0;
+                            let mut state = "training";
+
                             while progress_rx.changed().await.is_ok() {
                                 let p = progress_rx.borrow();
+
+                                if last_epoch > 0 {
+                                    if p.epoch == last_epoch {
+                                        // burn doesn't tell us if we're in validation or training,
+                                        // but validation comes after, wraps items around to zero
+                                        // and is the same epoch, so we detect it like this
+                                        if p.items_processed <= last_processed {
+                                            // we just started validation
+                                            items_so_far += train_config.samples;
+                                            state = "validation";
+                                        }
+                                    } else {
+                                        // we started a new epoch
+                                        items_so_far += train_config.test_samples;
+                                        state = "training";
+                                    }
+                                }
+
+                                last_processed = p.items_processed;
+                                last_epoch = p.epoch;
+
+                                pb_clone.set_position((p.items_processed + items_so_far) as u64);
+
                                 pb_clone.set_message(format!(
-                                    "{}: epoch {}/{} [{}/{}]",
-                                    name_clone,
-                                    p.epoch,
-                                    p.epoch_total,
-                                    p.items_processed,
-                                    p.items_total
+                                    "{:15}: epoch {:2}/{:2} ({:>10})",
+                                    name_clone, p.epoch, p.epoch_total, state,
                                 ));
                             }
                         });
@@ -275,7 +311,7 @@ impl Scheduler {
                             let result =
                                 runner.wait(handle, Some(progress_tx), Some(activity)).await;
                             pb.finish_with_message(format!(
-                                "{}: {}",
+                                "{:15}: {}",
                                 name,
                                 if result.success {
                                     "completed"

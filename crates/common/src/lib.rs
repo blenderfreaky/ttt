@@ -382,6 +382,16 @@ impl Default for TrainConfig {
     }
 }
 
+impl TrainConfig {
+    pub fn samples_per_epoch(&self) -> usize {
+        self.samples + self.test_samples
+    }
+
+    pub fn total_samples(&self) -> usize {
+        self.samples_per_epoch() * self.epochs
+    }
+}
+
 /// Full training parameters.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "clap", derive(clap::Args))]
