@@ -104,6 +104,26 @@ impl std::fmt::Display for PosEncoding {
     }
 }
 
+/// Model size presets.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+#[serde(rename_all = "lowercase")]
+pub enum DType {
+    #[default]
+    F32,
+    F16,
+    BF16,
+}
+
+impl std::fmt::Display for DType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::F32 => write!(f, "f32"),
+            Self::F16 => write!(f, "f16"),
+            Self::BF16 => write!(f, "bf16"),
+        }
+    }
+}
 /// Model architecture (derived from ModelSize + vocab_size).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "burn", derive(burn::config::Config))]
@@ -215,16 +235,38 @@ pub struct TTTConfig {
     #[serde(default = "default_epsilon")]
     #[cfg_attr(feature = "clap", arg(long, default_value = "1e-6", hide = true))]
     pub epsilon: f64,
+    #[serde(default = "default_dtype")]
+    #[cfg_attr(feature = "clap", arg(long, default_value = "f32"))]
+    pub dtype: DType,
 }
 
-fn default_base_lr() -> f32 { 1.0 }
-fn default_mini_batch_size() -> usize { 16 }
-fn default_max_seq_len() -> usize { 2048 }
-fn default_mlp_expansion() -> usize { 4 }
-fn default_rope_theta() -> f32 { 10000.0 }
-fn default_conv_kernel() -> usize { 4 }
-fn default_true() -> bool { true }
-fn default_epsilon() -> f64 { 1e-6 }
+fn default_base_lr() -> f32 {
+    1.0
+}
+fn default_mini_batch_size() -> usize {
+    16
+}
+fn default_max_seq_len() -> usize {
+    2048
+}
+fn default_mlp_expansion() -> usize {
+    4
+}
+fn default_rope_theta() -> f32 {
+    10000.0
+}
+fn default_conv_kernel() -> usize {
+    4
+}
+fn default_true() -> bool {
+    true
+}
+fn default_epsilon() -> f64 {
+    1e-6
+}
+fn default_dtype() -> DType {
+    DType::F32
+}
 
 impl Default for TTTConfig {
     fn default() -> Self {
@@ -243,6 +285,7 @@ impl Default for TTTConfig {
             share_qk: false,
             tie_word_embeddings: true,
             epsilon: default_epsilon(),
+            dtype: default_dtype(),
         }
     }
 }
@@ -288,17 +331,39 @@ pub struct TrainConfig {
     pub weight_decay: f32,
 }
 
-fn default_batch() -> usize { 32 }
-fn default_epochs() -> usize { 10 }
-fn default_lr() -> f64 { 2e-3 }
-fn default_samples() -> usize { 10000 }
-fn default_test_samples() -> usize { 1000 }
-fn default_grad_accum() -> usize { 1 }
-fn default_workers() -> usize { 2 }
-fn default_warmup_steps() -> usize { 5000 }
-fn default_beta1() -> f32 { 0.9 }
-fn default_beta2() -> f32 { 0.999 }
-fn default_weight_decay() -> f32 { 0.0 }
+fn default_batch() -> usize {
+    32
+}
+fn default_epochs() -> usize {
+    10
+}
+fn default_lr() -> f64 {
+    2e-3
+}
+fn default_samples() -> usize {
+    10000
+}
+fn default_test_samples() -> usize {
+    1000
+}
+fn default_grad_accum() -> usize {
+    1
+}
+fn default_workers() -> usize {
+    2
+}
+fn default_warmup_steps() -> usize {
+    5000
+}
+fn default_beta1() -> f32 {
+    0.9
+}
+fn default_beta2() -> f32 {
+    0.999
+}
+fn default_weight_decay() -> f32 {
+    0.0
+}
 
 impl Default for TrainConfig {
     fn default() -> Self {
@@ -342,7 +407,9 @@ pub struct TrainParams {
     pub dry_run: bool,
 }
 
-fn default_tokenizer() -> String { "gpt2".into() }
+fn default_tokenizer() -> String {
+    "gpt2".into()
+}
 
 impl Default for TrainParams {
     fn default() -> Self {
@@ -366,24 +433,40 @@ impl TrainParams {
     /// Convert to CLI arguments for subprocess invocation.
     pub fn to_cli_args(&self) -> Vec<String> {
         let mut args = vec![
-            "--tokenizer".into(), self.tokenizer.clone(),
-            "--size".into(), self.size.to_string(),
+            "--tokenizer".into(),
+            self.tokenizer.clone(),
+            "--size".into(),
+            self.size.to_string(),
             // TTT config
-            "--layer-type".into(), self.ttt.layer_type.to_string(),
-            "--pos-encoding".into(), self.ttt.pos_encoding.to_string(),
-            "--base-lr".into(), self.ttt.base_lr.to_string(),
-            "--mini-batch-size".into(), self.ttt.mini_batch_size.to_string(),
-            "--max-seq-len".into(), self.ttt.max_seq_len.to_string(),
-            "--mlp-expansion".into(), self.ttt.mlp_expansion_factor.to_string(),
+            "--layer-type".into(),
+            self.ttt.layer_type.to_string(),
+            "--pos-encoding".into(),
+            self.ttt.pos_encoding.to_string(),
+            "--base-lr".into(),
+            self.ttt.base_lr.to_string(),
+            "--mini-batch-size".into(),
+            self.ttt.mini_batch_size.to_string(),
+            "--max-seq-len".into(),
+            self.ttt.max_seq_len.to_string(),
+            "--mlp-expansion".into(),
+            self.ttt.mlp_expansion_factor.to_string(),
             // Train config
-            "--batch".into(), self.train.batch.to_string(),
-            "--epochs".into(), self.train.epochs.to_string(),
-            "--lr".into(), self.train.lr.to_string(),
-            "--samples".into(), self.train.samples.to_string(),
-            "--test-samples".into(), self.train.test_samples.to_string(),
-            "--grad-accum".into(), self.train.grad_accum.to_string(),
-            "--workers".into(), self.train.workers.to_string(),
-            "--warmup-steps".into(), self.train.warmup_steps.to_string(),
+            "--batch".into(),
+            self.train.batch.to_string(),
+            "--epochs".into(),
+            self.train.epochs.to_string(),
+            "--lr".into(),
+            self.train.lr.to_string(),
+            "--samples".into(),
+            self.train.samples.to_string(),
+            "--test-samples".into(),
+            self.train.test_samples.to_string(),
+            "--grad-accum".into(),
+            self.train.grad_accum.to_string(),
+            "--workers".into(),
+            self.train.workers.to_string(),
+            "--warmup-steps".into(),
+            self.train.warmup_steps.to_string(),
         ];
         if let Some(threads) = self.ttt.threads {
             args.extend(["--threads".into(), threads.to_string()]);
@@ -420,8 +503,17 @@ mod tests {
 
     #[test]
     fn test_enum_serde() {
-        assert_eq!(serde_json::from_str::<InnerModel>("\"linear\"").unwrap(), InnerModel::Linear);
-        assert_eq!(serde_json::from_str::<ModelSize>("\"60m\"").unwrap(), ModelSize::M60);
-        assert_eq!(serde_json::from_str::<PosEncoding>("\"rope\"").unwrap(), PosEncoding::Rope);
+        assert_eq!(
+            serde_json::from_str::<InnerModel>("\"linear\"").unwrap(),
+            InnerModel::Linear
+        );
+        assert_eq!(
+            serde_json::from_str::<ModelSize>("\"60m\"").unwrap(),
+            ModelSize::M60
+        );
+        assert_eq!(
+            serde_json::from_str::<PosEncoding>("\"rope\"").unwrap(),
+            PosEncoding::Rope
+        );
     }
 }

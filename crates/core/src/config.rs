@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
 use ttt_common::{ModelArch, TTTConfig};
 
 /// Combined model config for inner model implementations.
@@ -19,27 +19,37 @@ impl ModelConfig {
     }
 }
 
-// Central backend type aliases - selected via feature flags (rocm, cuda, wgpu)
-#[cfg(all(feature = "rocm", not(feature = "bf16")))]
-pub type GpuBackend = burn::backend::Rocm<f32>;
-#[cfg(all(feature = "rocm", feature = "bf16"))]
-pub type GpuBackend = burn::backend::Rocm<half::bf16>;
+#[cfg(all(feature = "rocm"))]
+pub type GpuBackend<F = DType> = burn::backend::Rocm<F>;
 
-#[cfg(all(feature = "cuda", not(feature = "bf16")))]
-pub type GpuBackend = burn::backend::Cuda<f32>;
-#[cfg(all(feature = "cuda", feature = "bf16"))]
-pub type GpuBackend = burn::backend::Cuda<half::bf16>;
+#[cfg(all(feature = "cuda"))]
+pub type GpuBackend<F = DType> = burn::backend::Cuda<F>;
 
 #[cfg(feature = "wgpu")]
-pub type GpuBackend = burn::backend::Wgpu;
+pub type GpuBackend<F = DType> = burn::backend::Wgpu<F>;
 
-#[cfg(not(any(feature = "rocm", feature = "cuda", feature = "wgpu")))]
-pub type GpuBackend =
-    compile_error!("One of the features 'rocm', 'cuda', or 'wgpu' must be enabled");
+#[cfg(feature = "cpu")]
+pub type GpuBackend<F = DType> = burn::backend::Cpu<F>;
 
-pub type GpuAutodiffBackend = burn::backend::Autodiff<GpuBackend>;
-pub type TrainingBackend = burn::backend::Autodiff<
-    GpuBackend,
+#[cfg(not(any(feature = "rocm", feature = "cuda", feature = "wgpu", feature = "cpu")))]
+pub type GpuBackend<F = DType> =
+    compile_error!("One of the features 'rocm', 'cuda', 'wgpu' or 'cpu' must be enabled");
+
+#[cfg(feature = "bf16")]
+pub type DType = bf16;
+
+#[cfg(feature = "f16")]
+pub type DType = f16;
+
+#[cfg(feature = "f32")]
+pub type DType = f32;
+
+#[cfg(not(any(feature = "bf16", feature = "f16", feature = "f32")))]
+pub type DType = compile_error!("One of the features 'bf16', 'f16' or 'f32' must be enabled");
+
+pub type GpuAutodiffBackend<F = DType> = burn::backend::Autodiff<GpuBackend<F>>;
+pub type TrainingBackend<F = DType> = burn::backend::Autodiff<
+    GpuBackend<F>,
     burn::backend::autodiff::checkpoint::strategy::BalancedCheckpointing,
 >;
 

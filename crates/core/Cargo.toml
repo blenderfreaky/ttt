@@ -15,8 +15,10 @@ serde.workspace = true
 paste.workspace = true
 
 [features]
-default = []
-bf16 = ["ttt-kernels/bf16"]
+default = ["f32"]
+f32 = []
+bf16 = []
+f16 = []
 rocm = ["ttt-kernels/rocm"]
 cuda = ["ttt-kernels/cuda"]
 wgpu = ["ttt-kernels/wgpu"]

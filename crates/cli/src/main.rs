@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
+use burn::tensor::backend::AutodiffBackend;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
-use ttt::{artifact_info, metrics_export};
-use ttt_common::{ModelArch, TrainParams};
+use half::{bf16, f16};
+use ttt::{FusedTttBackend, artifact_info, metrics_export};
+use ttt_common::{DType, ModelArch, TrainParams};
 use ttt_core::{TrainingBackend, config::ModelConfig};
 use ttt_data::{Tokenizer, TokenizerTrait};
 use ttt_training::{
     TTTTrainingConfig, generate as inference_generate, interactive, train_dataset,
     train_dataset_pretokenized,
 };
-use burn::tensor::backend::Backend;
 
 /// Load a tokenizer from a HuggingFace model name or local file path.
 fn load_tokenizer(identifier: &str) -> Tokenizer {
@@ -209,8 +210,7 @@ fn main() {
             println!("Layer type: {:?}", config.model_config.ttt.layer_type);
             println!(
                 "Model size: {} hidden, {} layers",
-                config.model_config.arch.hidden_size,
-                config.model_config.arch.num_hidden_layers
+                config.model_config.arch.hidden_size, config.model_config.arch.num_hidden_layers
             );
             println!(
                 "Batch size: {}, Epochs: {}, LR: {}",
@@ -227,21 +227,40 @@ fn main() {
 
             let device = Default::default();
 
-            // Set RNG seed for reproducibility if provided
-            if let Some(seed) = seed {
-                println!("Using fixed RNG seed: {seed}");
-                TrainingBackend::seed(&device, seed);
-            }
-
-            if pretokenized {
-                train_dataset_pretokenized::<TrainingBackend>(
-                    &device,
-                    &config,
-                    &tokenizer,
-                    &tokenizer_name,
-                );
-            } else {
-                train_dataset::<TrainingBackend>(&device, &config);
+            match config.model_config.ttt.dtype {
+                DType::F32 => {
+                    println!("Using float32");
+                    train::<TrainingBackend<f32>>(
+                        pretokenized,
+                        tokenizer_name,
+                        seed,
+                        tokenizer,
+                        config,
+                        device,
+                    );
+                }
+                DType::F16 => {
+                    println!("Using float16");
+                    train::<TrainingBackend<f16>>(
+                        pretokenized,
+                        tokenizer_name,
+                        seed,
+                        tokenizer,
+                        config,
+                        device,
+                    );
+                }
+                DType::BF16 => {
+                    println!("Using bfloat16");
+                    train::<TrainingBackend<bf16>>(
+                        pretokenized,
+                        tokenizer_name,
+                        seed,
+                        tokenizer,
+                        config,
+                        device,
+                    );
+                }
             }
         }
         Commands::Generate {
@@ -310,5 +329,29 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+}
+
+fn train<B>(
+    pretokenized: bool,
+    tokenizer_name: String,
+    seed: Option<u64>,
+    tokenizer: Tokenizer,
+    config: TTTTrainingConfig,
+    device: B::Device,
+) where
+    B: FusedTttBackend + AutodiffBackend,
+    <B as AutodiffBackend>::InnerBackend: FusedTttBackend,
+{
+    // Set RNG seed for reproducibility if provided
+    if let Some(seed) = seed {
+        println!("Using fixed RNG seed: {seed}");
+        B::seed(&device, seed);
+    }
+
+    if pretokenized {
+        train_dataset_pretokenized::<B>(&device, &config, &tokenizer, &tokenizer_name);
+    } else {
+        train_dataset::<B>(&device, &config);
     }
 }

@@ -18,7 +18,6 @@ rand.workspace = true
 
 [features]
 default = []
-bf16 = []
 rocm = ["burn/rocm", "cubecl/hip", "thundercube/rocm"]
 cuda = ["burn/cuda", "cubecl/cuda", "thundercube/cuda"]
 wgpu = ["burn/wgpu", "cubecl/wgpu", "thundercube/wgpu"]
