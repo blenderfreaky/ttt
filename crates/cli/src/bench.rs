@@ -49,6 +49,10 @@ fn parse_layer_type(s: &str) -> InnerModel {
         "fused" | "fused-linear" | "fusedlinear" => InnerModel::FusedLinear,
         "fused-tile" | "fusedtile" => InnerModel::FusedTileLinear,
         "fused-tile-multi" | "fusedtilemulti" => InnerModel::FusedTileMultiLinear,
+        #[cfg(feature = "streaming")]
+        "d2d-streaming" | "d2dstreaming" => InnerModel::D2dStreamingLinear,
+        #[cfg(feature = "streaming")]
+        "ptr-streaming" | "ptrstreaming" => InnerModel::PtrStreamingLinear,
         _ => panic!(
             "Unknown ttt-type: {s}. Use: linear, linear-adam, mlp, mlp2, mlp3, mlp4, fused, fused-tile, fused-tile-multi"
         ),

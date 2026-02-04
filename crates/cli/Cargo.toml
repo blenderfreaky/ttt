@@ -46,11 +46,13 @@ name = "ttt-bench"
 path = "src/bench.rs"
 
 [[bench]]
-name = "ttt_benchmark"
+name = "ttt-bench-criterion"
+path = "benches/ttt_benchmark.s"
 harness = false
 
 [[bench]]
-name = "tile_configs"
+name = "ttt-tile-configs-bench"
+path = "benches/tile_configs.rs"
 harness = false
 
 [features]
