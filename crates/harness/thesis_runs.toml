@@ -10,7 +10,7 @@ enabled = true
 
 [defaults]
 tokenizer = "/workspace/tinystories-8k.json"
-size = "12m"
+size = "60m"
 batch = 64
 mini_batch_size = 16
 warmup_steps = 1000
@@ -79,4 +79,16 @@ ttt_base_lr = 0.1
 name = "mlp4-exp-1"
 inner = "mlp4"
 mlp_expansion = 1
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "mlp-exp-2"
+inner = "mlp"
+mlp_expansion = 1
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "mlp4-exp-8"
+inner = "mlp4"
+mlp_expansion = 8
 ttt_base_lr = 0.1
