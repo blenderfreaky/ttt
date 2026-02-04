@@ -7,14 +7,14 @@ use burn::{
     tensor::{Distribution, backend::AutodiffBackend},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
-use ttt_core::{TTTConfig, TTTInnerModel};
+use ttt_core::{TTTInnerModel, config::ModelConfig};
 use ttt_data::{TokenizerTrait, TrainingTextGenerationBatch};
 use ttt_fused::FusedTttBackend;
-use ttt_layer::{TTTConfigModelExt, TTTModel};
+use ttt_layer::{ModelConfigModelExt, TTTModel};
 
-#[derive(Config, Debug)]
+#[derive(Clone, Debug)]
 pub struct TTTTextGenerationConfig {
-    pub ttt_config: TTTConfig,
+    pub model_config: ModelConfig,
     pub pad_token: usize,
 }
 
@@ -25,19 +25,23 @@ pub struct TTTTextGenerationModel<B: FusedTttBackend, Inner> {
 }
 
 impl TTTTextGenerationConfig {
-    pub fn from_tokenizer(ttt_config: TTTConfig, tokenizer: &impl TokenizerTrait) -> Self {
-        assert_eq!(tokenizer.vocab_size(), ttt_config.vocab_size);
+    pub fn new(model_config: ModelConfig, pad_token: usize) -> Self {
+        Self { model_config, pad_token }
+    }
+
+    pub fn from_tokenizer(model_config: ModelConfig, tokenizer: &impl TokenizerTrait) -> Self {
+        assert_eq!(tokenizer.vocab_size(), model_config.arch.vocab_size);
         Self {
-            ttt_config,
+            model_config,
             pad_token: tokenizer.pad_token(),
         }
     }
 
     /// Initialize with pad token of zero, intended only for use in tests.
     #[must_use]
-    pub fn new_testing(ttt_config: TTTConfig) -> Self {
+    pub fn new_testing(model_config: ModelConfig) -> Self {
         Self {
-            ttt_config,
+            model_config,
             pad_token: 0,
         }
     }
@@ -47,9 +51,8 @@ impl TTTTextGenerationConfig {
         self,
         device: &B::Device,
     ) -> TTTTextGenerationModel<B, Inner> {
-        let ttt_config = Arc::new(self.ttt_config);
-        let linear_config = Arc::new(Inner::Config::default());
-        let ttt_model = ttt_config.init_with_inner_model(&linear_config, device);
+        let inner_config = Arc::new(Inner::Config::default());
+        let ttt_model = self.model_config.init_with_inner_model(&inner_config, device);
 
         TTTTextGenerationModel {
             ttt_model,
@@ -73,7 +76,7 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inne
         let logits = self.ttt_model.forward(inputs, 0);
 
         let output_flatten =
-            logits.reshape([batch_size * seq_length, self.ttt_model.config.vocab_size]);
+            logits.reshape([batch_size * seq_length, self.ttt_model.config.arch.vocab_size]);
         let targets_flatten = targets.reshape([batch_size * seq_length]);
 
         let loss = CrossEntropyLossConfig::new()
@@ -224,6 +227,7 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
 
 #[cfg(test)]
 mod tests {
+    use ttt_common::{ModelArch, ModelSize, TTTConfig};
     use ttt_core::{GpuAutodiffBackend, TEST_VOCAB_SIZE};
     use ttt_fused::FusedLinear;
 
@@ -231,13 +235,20 @@ mod tests {
 
     type Inner = FusedLinear<GpuAutodiffBackend>;
 
+    fn test_model_config(size: ModelSize) -> ModelConfig {
+        ModelConfig::new(
+            Arc::new(ModelArch::from_size(size, TEST_VOCAB_SIZE)),
+            Arc::new(TTTConfig::default()),
+        )
+    }
+
     #[test]
     fn forward_inference_doesnt_crash() {
         let device = Default::default();
 
-        let model_config =
-            TTTTextGenerationConfig::new_testing(TTTConfig::default_125m(TEST_VOCAB_SIZE));
-        let vocab_size = model_config.ttt_config.vocab_size;
+        let model_config = test_model_config(ModelSize::M125);
+        let vocab_size = model_config.arch.vocab_size;
+        let model_config = TTTTextGenerationConfig::new_testing(model_config);
         let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
 
         let batch_size = 2;
@@ -257,9 +268,9 @@ mod tests {
         let device = Default::default();
 
         // Use smaller config for faster test
-        let ttt_config = TTTConfig::default_12m(TEST_VOCAB_SIZE);
-        let vocab_size = ttt_config.vocab_size;
-        let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
+        let model_config = test_model_config(ModelSize::M12);
+        let vocab_size = model_config.arch.vocab_size;
+        let model_config = TTTTextGenerationConfig::new_testing(model_config);
         let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
 
         let batch_size = 4;

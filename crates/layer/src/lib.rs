@@ -28,10 +28,10 @@ pub mod ttt;
 
 // Re-export commonly used items
 pub use block::{TTTBlock, TTTBlockConfig, TTTBlockWithSeq};
-pub use lm::{TTTConfigModelExt, TTTModel};
-pub use ttt::{TTT, TTTConfigExt};
-// Re-export TTTLayerType for use with the dispatch macro
-pub use ttt_core::TTTLayerType;
+pub use lm::{ModelConfigModelExt, TTTModel};
+pub use ttt::{ModelConfigExt, TTT};
+// Re-export InnerModel for use with the dispatch macro
+pub use ttt_common::InnerModel;
 
 /// Dispatch a function call based on TTT layer type.
 ///
@@ -50,43 +50,43 @@ pub use ttt_core::TTTLayerType;
 macro_rules! dispatch_ttt_layer_type {
     ($f:ident :: < $backend:ident, $ty:tt $(, $other:ty)* > ($($args:expr),* $(,)?)) => {
         match $ty {
-            $crate::TTTLayerType::Linear => {
+            $crate::InnerModel::Linear => {
                 $f::<$backend, ttt_core::TTTLinear<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::LinearAdam => {
+            $crate::InnerModel::LinearAdam => {
                 $f::<$backend, ttt_core::TTTLinearAdam<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::MLP => {
+            $crate::InnerModel::Mlp => {
                 $f::<$backend, ttt_core::TTTMLP<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::MLP2 => {
+            $crate::InnerModel::Mlp2 => {
                 $f::<$backend, ttt_core::TTTMLP2<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::MLP3 => {
+            $crate::InnerModel::Mlp3 => {
                 $f::<$backend, ttt_core::TTTMLP3<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::MLP4 => {
+            $crate::InnerModel::Mlp4 => {
                 $f::<$backend, ttt_core::TTTMLP4<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::FusedLinear => {
+            $crate::InnerModel::FusedLinear => {
                 $f::<$backend, ttt_fused::FusedLinear<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::FusedTileLinear => {
+            $crate::InnerModel::FusedTileLinear => {
                 $f::<$backend, ttt_fused::FusedTile<$backend> $(, $other)*>($($args),*)
             }
-            $crate::TTTLayerType::FusedTileMultiLinear => {
+            $crate::InnerModel::FusedTileMultiLinear => {
                 $f::<$backend, ttt_fused::FusedTileMulti<$backend> $(, $other)*>($($args),*)
             }
             #[cfg(feature = "streaming")]
-            $crate::TTTLayerType::D2dStreamingLinear => {
+            $crate::InnerModel::D2dStreamingLinear => {
                 $f::<$backend, ttt_fused::FusedTileD2dStreaming<$backend> $(, $other)*>($($args),*)
             }
             #[cfg(feature = "streaming")]
-            $crate::TTTLayerType::PtrStreamingLinear => {
+            $crate::InnerModel::PtrStreamingLinear => {
                 $f::<$backend, ttt_fused::FusedPtrStreaming<$backend> $(, $other)*>($($args),*)
             }
             #[cfg(not(feature = "streaming"))]
-            $crate::TTTLayerType::D2dStreamingLinear | $crate::TTTLayerType::PtrStreamingLinear => {
+            $crate::InnerModel::D2dStreamingLinear | $crate::InnerModel::PtrStreamingLinear => {
                 panic!("Streaming kernels require the 'streaming' feature to be enabled")
             }
         }

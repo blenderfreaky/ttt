@@ -9,7 +9,7 @@ use burn::{
 use ttt_kernels::{gelu_bwd, gelu_tanh};
 
 use crate::{
-    TTTConfig,
+    config::ModelConfig,
     inner::{TTTInnerModel, TTTInputsInner},
     mlp::GeluBackend,
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
@@ -32,7 +32,7 @@ pub struct TTTMLP2<B: GeluBackend> {
     /// Third layer bias: [num_heads, head_dim]
     pub b3_init: Param<Tensor<B, 2>>,
     pub layer_norm: MultiHeadLayerNorm<B>,
-    pub config: Ignored<Arc<TTTConfig>>,
+    pub config: Ignored<ModelConfig>,
 }
 
 #[derive(Module, Debug)]
@@ -71,60 +71,58 @@ impl<B: GeluBackend> TTTInnerModel<B> for TTTMLP2<B> {
         "TTTMLP2"
     }
 
-    fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
-        let len = global_config.hidden_size;
-        let head_dim = global_config.head_dim();
-        let mlp_dim = global_config.mlp_expansion_factor * head_dim;
+    fn new(config: &ModelConfig, inner_config: &Arc<Self::Config>, device: &B::Device) -> Self {
+        let len = config.arch.hidden_size;
+        let num_heads = config.arch.num_heads;
+        let head_dim = config.head_dim();
+        let mlp_dim = config.ttt.mlp_expansion_factor * head_dim;
 
         Self {
-            w1_init: config.initializer.init_with(
-                [global_config.num_heads, head_dim, mlp_dim],
+            w1_init: inner_config.initializer.init_with(
+                [num_heads, head_dim, mlp_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            b1_init: config.initializer.init_with(
-                [global_config.num_heads, mlp_dim],
+            b1_init: inner_config.initializer.init_with(
+                [num_heads, mlp_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            w2_init: config.initializer.init_with(
-                [global_config.num_heads, mlp_dim, mlp_dim],
+            w2_init: inner_config.initializer.init_with(
+                [num_heads, mlp_dim, mlp_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            b2_init: config.initializer.init_with(
-                [global_config.num_heads, mlp_dim],
+            b2_init: inner_config.initializer.init_with(
+                [num_heads, mlp_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            w3_init: config.initializer.init_with(
-                [global_config.num_heads, mlp_dim, head_dim],
+            w3_init: inner_config.initializer.init_with(
+                [num_heads, mlp_dim, head_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            b3_init: config.initializer.init_with(
-                [global_config.num_heads, head_dim],
+            b3_init: inner_config.initializer.init_with(
+                [num_heads, head_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            layer_norm: MultiHeadLayerNormConfig::new(
-                global_config.num_heads,
-                global_config.head_dim(),
-            )
-            .with_initializer(config.initializer.clone())
-            .with_epsilon(global_config.epsilon)
-            .init(device),
-            config: Ignored(global_config.clone()),
+            layer_norm: MultiHeadLayerNormConfig::new(num_heads, head_dim)
+                .with_initializer(inner_config.initializer.clone())
+                .with_epsilon(config.ttt.epsilon)
+                .init(device),
+            config: Ignored(config.clone()),
         }
     }
 
-    fn get_config(&self) -> &Arc<TTTConfig> {
+    fn get_config(&self) -> &ModelConfig {
         &self.config.0
     }
 

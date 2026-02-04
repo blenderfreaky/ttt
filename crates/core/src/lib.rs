@@ -35,10 +35,8 @@ pub mod mlp4;
 pub mod test_utils;
 pub mod util;
 
-pub use config::{
-    GpuAutodiffBackend, GpuBackend, PositionEncodingType, TEST_VOCAB_SIZE, TTTConfig, TTTLayerType,
-    TrainingBackend,
-};
+pub use config::{GpuAutodiffBackend, GpuBackend, ModelConfig, TEST_VOCAB_SIZE, TrainingBackend};
+pub use ttt_common::{InnerModel, ModelArch, ModelSize, PosEncoding, TTTConfig, TrainConfig, TrainParams};
 pub use inner::{Qkv, TTTInnerModel, TTTInputsInner};
 pub use linear::{TTTLinear, TTTLinearConfig, TTTLinearState};
 pub use linear_adam::{TTTLinearAdam, TTTLinearAdamConfig};

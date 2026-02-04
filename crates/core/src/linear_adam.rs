@@ -9,7 +9,7 @@ use burn::{
 };
 
 use crate::{
-    TTTConfig,
+    config::ModelConfig,
     inner::{TTTInnerModel, TTTInputsInner},
     util::{MultiHeadLayerNorm, MultiHeadLayerNormConfig},
 };
@@ -21,7 +21,7 @@ pub struct TTTLinearAdam<B: Backend> {
     /// [num_heads, head_dim]
     pub bias_init: Param<Tensor<B, 2>>,
     pub layer_norm: MultiHeadLayerNorm<B>,
-    pub config: Ignored<Arc<TTTConfig>>,
+    pub config: Ignored<ModelConfig>,
     pub adam_config: Ignored<Arc<TTTLinearAdamConfig>>,
 }
 
@@ -115,38 +115,33 @@ impl<B: Backend> TTTInnerModel<B> for TTTLinearAdam<B> {
         "TTTLinearAdam"
     }
 
-    fn new(global_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device) -> Self {
-        let len = global_config.hidden_size;
+    fn new(config: &ModelConfig, inner_config: &Arc<Self::Config>, device: &B::Device) -> Self {
+        let len = config.arch.hidden_size;
+        let num_heads = config.arch.num_heads;
+        let head_dim = config.head_dim();
         Self {
-            weight_init: config.initializer.init_with(
-                [
-                    global_config.num_heads,
-                    global_config.head_dim(),
-                    global_config.head_dim(),
-                ],
+            weight_init: inner_config.initializer.init_with(
+                [num_heads, head_dim, head_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            bias_init: config.initializer.init_with(
-                [global_config.num_heads, global_config.head_dim()],
+            bias_init: inner_config.initializer.init_with(
+                [num_heads, head_dim],
                 Some(len),
                 Some(len),
                 device,
             ),
-            layer_norm: MultiHeadLayerNormConfig::new(
-                global_config.num_heads,
-                global_config.head_dim(),
-            )
-            .with_initializer(config.initializer.clone())
-            .with_epsilon(global_config.epsilon)
-            .init(device),
-            config: Ignored(global_config.clone()),
-            adam_config: Ignored(config.clone()),
+            layer_norm: MultiHeadLayerNormConfig::new(num_heads, head_dim)
+                .with_initializer(inner_config.initializer.clone())
+                .with_epsilon(config.ttt.epsilon)
+                .init(device),
+            config: Ignored(config.clone()),
+            adam_config: Ignored(inner_config.clone()),
         }
     }
 
-    fn get_config(&self) -> &Arc<TTTConfig> {
+    fn get_config(&self) -> &ModelConfig {
         &self.config.0
     }
 

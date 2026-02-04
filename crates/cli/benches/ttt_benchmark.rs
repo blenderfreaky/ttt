@@ -24,9 +24,10 @@ use std::{sync::Arc, time::Duration};
 use burn::prelude::*;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use paste::paste;
+use ttt_common::{ModelArch, TTTConfig};
 use ttt_core::{
-    GpuAutodiffBackend, GpuBackend, Qkv, TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear,
-    TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4,
+    GpuAutodiffBackend, GpuBackend, Qkv, TTTInnerModel, TTTInputsInner, TTTLinear,
+    TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4, config::ModelConfig,
 };
 use ttt_data::TrainingTextGenerationBatch;
 use ttt_fused::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend};
@@ -118,24 +119,28 @@ impl BenchConfig {
         }
     }
 
-    pub fn to_ttt_config(&self, vocab_size: usize) -> TTTConfig {
-        self.to_ttt_config_with_threads(vocab_size, None)
+    pub fn to_model_config(&self, vocab_size: usize) -> ModelConfig {
+        self.to_model_config_with_threads(vocab_size, None)
     }
 
-    pub fn to_ttt_config_with_threads(
+    pub fn to_model_config_with_threads(
         &self,
         vocab_size: usize,
         threads: Option<usize>,
-    ) -> TTTConfig {
-        TTTConfig::new(vocab_size)
-            .with_token_size(self.hidden_size)
-            .with_hidden_size(self.hidden_size)
-            .with_num_heads(self.num_heads)
-            .with_num_hidden_layers(self.num_layers)
-            .with_swi_glu_mlp_intermediate_size(self.mlp_intermediate)
-            .with_mini_batch_size(self.mini_batch_size)
-            .with_conv_before_ttt(false)
-            .with_threads(threads)
+    ) -> ModelConfig {
+        let arch = Arc::new(ModelArch {
+            hidden_size: self.hidden_size,
+            num_hidden_layers: self.num_layers,
+            num_heads: self.num_heads,
+            intermediate_size: self.mlp_intermediate,
+            vocab_size,
+        });
+        let ttt = Arc::new(TTTConfig {
+            mini_batch_size: self.mini_batch_size,
+            threads,
+            ..TTTConfig::default()
+        });
+        ModelConfig::new(arch, ttt)
     }
 
     pub fn head_dim(&self) -> usize {
@@ -245,10 +250,10 @@ fn bench_inner_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     params: &RuntimeParams,
     device: &B::Device,
 ) {
-    let ttt_config = Arc::new(config.to_ttt_config(params.vocab_size));
+    let model_config = config.to_model_config(params.vocab_size);
     let inner_config = Arc::new(Inner::Config::default());
 
-    let inner: Inner = Inner::new(&ttt_config, &inner_config, device);
+    let inner: Inner = Inner::new(&model_config, &inner_config, device);
 
     // Warmup
     let warmup_inputs = create_inner_inputs::<B>(config, params, device);
@@ -291,10 +296,10 @@ fn bench_inner_backward<
     params: &RuntimeParams,
     device: &B::Device,
 ) {
-    let ttt_config = Arc::new(config.to_ttt_config(params.vocab_size));
+    let model_config = config.to_model_config(params.vocab_size);
     let inner_config = Arc::new(Inner::Config::default());
 
-    let inner: Inner = Inner::new(&ttt_config, &inner_config, device);
+    let inner: Inner = Inner::new(&model_config, &inner_config, device);
 
     // Warmup
     let warmup_inputs = create_inner_inputs::<B>(config, params, device);
@@ -333,9 +338,9 @@ fn bench_full_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     params: &RuntimeParams,
     device: &B::Device,
 ) {
-    let ttt_config = config.to_ttt_config(params.vocab_size);
-    let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
-    let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
+    let model_config = config.to_model_config(params.vocab_size);
+    let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
+    let model: TTTTextGenerationModel<B, Inner> = text_gen_config.init(device);
 
     // Warmup
     let warmup_input = random_logits::<B>(params, device);
@@ -371,9 +376,9 @@ fn bench_full_backward<
     params: &RuntimeParams,
     device: &B::Device,
 ) {
-    let ttt_config = config.to_ttt_config(params.vocab_size);
-    let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
-    let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
+    let model_config = config.to_model_config(params.vocab_size);
+    let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
+    let model: TTTTextGenerationModel<B, Inner> = text_gen_config.init(device);
 
     // Warmup
     let warmup_batch = create_training_batch::<B>(params, device);

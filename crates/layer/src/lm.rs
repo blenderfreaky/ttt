@@ -5,14 +5,15 @@ use burn::{
     nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     tensor::{Int, Tensor},
 };
-use ttt_core::{PositionEncodingType, TTTConfig, TTTInnerModel};
+use ttt_common::PosEncoding;
+use ttt_core::{TTTInnerModel, config::ModelConfig};
 use ttt_fused::FusedTttBackend;
 
 use crate::block::{TTTBlockConfig, TTTBlockWithSeq};
 
 #[derive(Module, Debug)]
 pub struct TTTModel<B: FusedTttBackend, Inner> {
-    pub config: Ignored<Arc<TTTConfig>>,
+    pub config: Ignored<ModelConfig>,
     pub embedding: Embedding<B>,
     /// Optional absolute position embeddings (only present when pos_encoding is Absolute)
     pub position_embedding: Option<Embedding<B>>,
@@ -24,31 +25,35 @@ pub struct TTTModel<B: FusedTttBackend, Inner> {
     pub lm_head: Option<Linear<B>>,
 }
 
-/// Extension trait for TTTConfig to initialize TTT models.
-pub trait TTTConfigModelExt {
+/// Extension trait for ModelConfig to initialize TTT models.
+pub trait ModelConfigModelExt {
     fn init_with_inner_model<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
-        self: &Arc<Self>,
+        &self,
         inner_config: &Arc<Inner::Config>,
         device: &B::Device,
     ) -> TTTModel<B, Inner>;
 }
 
-impl TTTConfigModelExt for TTTConfig {
+impl ModelConfigModelExt for ModelConfig {
     fn init_with_inner_model<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
-        self: &Arc<Self>,
+        &self,
         inner_config: &Arc<Inner::Config>,
         device: &B::Device,
     ) -> TTTModel<B, Inner> {
-        let embedding = EmbeddingConfig::new(self.vocab_size, self.hidden_size)
+        let hidden_size = self.arch.hidden_size;
+        let vocab_size = self.arch.vocab_size;
+        let num_hidden_layers = self.arch.num_hidden_layers;
+
+        let embedding = EmbeddingConfig::new(vocab_size, hidden_size)
             .with_initializer(Initializer::Normal {
                 mean: 0.0,
                 std: 0.02,
             })
             .init(device);
 
-        let position_embedding = match self.pos_encoding {
-            PositionEncodingType::Absolute => Some(
-                EmbeddingConfig::new(self.max_seq_len, self.hidden_size)
+        let position_embedding = match self.ttt.pos_encoding {
+            PosEncoding::Absolute => Some(
+                EmbeddingConfig::new(self.ttt.max_seq_len, hidden_size)
                     .with_initializer(Initializer::Normal {
                         mean: 0.0,
                         std: 0.02,
@@ -58,19 +63,19 @@ impl TTTConfigModelExt for TTTConfig {
             _ => None,
         };
 
-        let layers = (0..self.num_hidden_layers)
+        let layers = (0..num_hidden_layers)
             .map(|idx| {
                 TTTBlockConfig::new(self.clone(), idx)
                     .init_with_inner(Inner::new(self, inner_config, device), device)
             })
             .collect();
-        let norm = RmsNormConfig::new(self.hidden_size).init(device);
+        let norm = RmsNormConfig::new(hidden_size).init(device);
 
-        let lm_head = if self.tie_word_embeddings {
+        let lm_head = if self.ttt.tie_word_embeddings {
             None
         } else {
             Some(
-                LinearConfig::new(self.hidden_size, self.vocab_size)
+                LinearConfig::new(hidden_size, vocab_size)
                     .with_bias(false)
                     .with_initializer(Initializer::Normal {
                         mean: 0.0,

@@ -16,7 +16,8 @@ use burn::{
         metric::{AccuracyMetric, LearningRateMetric, LossMetric, PerplexityMetric},
     },
 };
-use ttt_core::{TTTConfig, TTTInnerModel};
+use ttt_common::TrainConfig;
+use ttt_core::{TTTInnerModel, config::ModelConfig};
 use ttt_data::{
     TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher, TokenizedItem, Tokenizer,
     TokenizerTrait, TrainingTextGenerationBatch, load_or_pretokenize,
@@ -26,46 +27,58 @@ use ttt_layer::dispatch_ttt_layer_type;
 
 use crate::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 
-#[derive(Config, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TTTTrainingConfig {
     /// TTT model configuration
-    pub ttt_config: TTTConfig,
-    /// Optimizer configuration
-    pub optimizer: AdamConfig,
-    /// Training batch size
-    #[config(default = 16)]
-    pub batch_size: usize,
-    /// Number of training epochs
-    #[config(default = 10)]
-    pub num_epochs: usize,
-    /// Gradient accumulation steps
-    #[config(default = 1)]
-    pub grad_accumulation: usize,
-    /// Learning rate warmup steps
-    #[config(default = 5000)]
-    pub warmup_steps: usize,
-    /// Peak learning rate
-    #[config(default = 5e-4)]
-    pub learning_rate: f64,
-    /// Maximum sequence length for training
-    #[config(default = 2048)]
-    pub max_seq_len: usize,
-    /// Training samples per epoch
-    #[config(default = 10000)]
-    pub train_samples: usize,
-    /// Test samples per epoch
-    #[config(default = 1000)]
-    pub test_samples: usize,
-    /// Dataloader workers
-    #[config(default = 2)]
-    pub num_workers: usize,
+    pub model_config: ModelConfig,
+    /// Training hyperparameters
+    #[serde(default)]
+    pub train: TrainConfig,
+    /// Pad token ID
+    pub pad_token: usize,
+    /// Artifact directory for checkpoints
+    pub artifact_dir: String,
+    /// Resume from epoch (if any)
+    #[serde(default)]
+    pub resume_epoch: Option<usize>,
     /// If set, don't perform any training, just setup
-    #[config(default = false)]
+    #[serde(default)]
     pub dry_run: bool,
 }
 
+impl TTTTrainingConfig {
+    pub fn new(model_config: ModelConfig, pad_token: usize, artifact_dir: String) -> Self {
+        Self {
+            model_config,
+            train: TrainConfig::default(),
+            pad_token,
+            artifact_dir,
+            resume_epoch: None,
+            dry_run: false,
+        }
+    }
+
+    pub fn save<P: AsRef<std::path::Path>>(&self, path: P) -> std::io::Result<()> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(path, json)
+    }
+
+    pub fn load<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+
+    fn adam_config(&self) -> AdamConfig {
+        AdamConfig::new()
+            .with_beta_1(self.train.beta1)
+            .with_beta_2(self.train.beta2)
+            .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(self.train.weight_decay.into())))
+    }
+}
+
 /// Common training loop for all inner model types
-#[allow(clippy::too_many_arguments)]
 fn run_training<
     B: AutodiffBackend + FusedTttBackend,
     Inner: TTTInnerModel<B> + ModuleDisplay + AutodiffModule<B> + 'static,
@@ -83,9 +96,6 @@ fn run_training<
     dataset_train: D,
     dataset_test: D,
     config: &TTTTrainingConfig,
-    pad_token: usize,
-    artifact_dir: &str,
-    resume_epoch: Option<usize>,
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
     <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
@@ -94,7 +104,9 @@ fn run_training<
             Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
-    if resume_epoch.is_none() {
+    let artifact_dir = &config.artifact_dir;
+
+    if config.resume_epoch.is_none() {
         DefaultRecorder::new()
             .record(
                 model.clone().into_record(),
@@ -104,20 +116,20 @@ fn run_training<
     }
 
     let dataloader_train = DataLoaderBuilder::new(batcher.clone())
-        .batch_size(config.batch_size)
-        .num_workers(config.num_workers)
-        .build(SamplerDataset::new(dataset_train, config.train_samples));
+        .batch_size(config.train.batch)
+        .num_workers(config.train.workers)
+        .build(SamplerDataset::new(dataset_train, config.train.samples));
 
     let dataloader_test = DataLoaderBuilder::new(batcher)
-        .batch_size(config.batch_size)
-        .num_workers(config.num_workers)
-        .build(SamplerDataset::new(dataset_test, config.test_samples));
+        .batch_size(config.train.batch)
+        .num_workers(config.train.workers)
+        .build(SamplerDataset::new(dataset_test, config.train.test_samples));
 
-    let optim = config.optimizer.init();
+    let optim = config.adam_config().init();
 
-    let hidden_size = config.ttt_config.hidden_size;
-    let warmup_steps = config.warmup_steps;
-    let learning_rate = config.learning_rate;
+    let hidden_size = config.model_config.arch.hidden_size;
+    let warmup_steps = config.train.warmup_steps;
+    let learning_rate = config.train.lr;
 
     let lr_scheduler = NoamLrSchedulerConfig::new(learning_rate)
         .with_warmup_steps(warmup_steps.max(1))
@@ -128,17 +140,17 @@ fn run_training<
     let mut training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
         .metric_train(PerplexityMetric::new())
         .metric_valid(PerplexityMetric::new())
-        .metric_train_numeric(AccuracyMetric::new().with_pad_token(pad_token))
-        .metric_valid_numeric(AccuracyMetric::new().with_pad_token(pad_token))
+        .metric_train_numeric(AccuracyMetric::new().with_pad_token(config.pad_token))
+        .metric_valid_numeric(AccuracyMetric::new().with_pad_token(config.pad_token))
         .metric_train(LossMetric::new())
         .metric_valid(LossMetric::new())
         .metric_train_numeric(LearningRateMetric::new())
         .with_file_checkpointer(CompactRecorder::new())
-        .grads_accumulation(config.grad_accumulation)
-        .num_epochs(config.num_epochs)
+        .grads_accumulation(config.train.grad_accum)
+        .num_epochs(config.train.epochs)
         .summary();
 
-    if let Some(epoch) = resume_epoch {
+    if let Some(epoch) = config.resume_epoch {
         training = training.checkpoint(epoch);
     }
 
@@ -171,9 +183,6 @@ fn train_with_inner<
     dataset_train: D,
     dataset_test: D,
     config: &TTTTrainingConfig,
-    artifact_dir: &str,
-    tokenizer: Tokenizer,
-    resume_epoch: Option<usize>,
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
     <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
@@ -182,39 +191,28 @@ fn train_with_inner<
             Output = ClassificationOutput<B::InnerBackend>,
         >,
 {
-    let tokenizer = Arc::new(tokenizer);
     // Batcher needs max_seq_len + 1 to account for next-token prediction
-    let batcher = TextGenerationBatcher::new(tokenizer.clone(), config.max_seq_len + 1);
+    let batcher = TextGenerationBatcher::new(
+        Arc::new(Tokenizer::default()),  // TODO: pass tokenizer through config
+        config.model_config.ttt.max_seq_len + 1,
+    );
 
-    std::fs::create_dir_all(artifact_dir).unwrap();
-    config.save(format!("{artifact_dir}/config.json")).unwrap();
+    std::fs::create_dir_all(&config.artifact_dir).unwrap();
+    config.save(format!("{}/config.json", config.artifact_dir)).unwrap();
 
-    let model_config = TTTTextGenerationConfig {
-        ttt_config: config.ttt_config.clone(),
-        pad_token: tokenizer.pad_token(),
-    };
+    let model_config = TTTTextGenerationConfig::new(
+        config.model_config.clone(),
+        config.pad_token,
+    );
 
     let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
 
-    let pad_token = tokenizer.pad_token();
-    run_training(
-        model,
-        batcher,
-        dataset_train,
-        dataset_test,
-        config,
-        pad_token,
-        artifact_dir,
-        resume_epoch,
-    );
+    run_training(model, batcher, dataset_train, dataset_test, config);
 }
 
 pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
-    artifact_dir: &str,
-    tokenizer: Tokenizer,
-    resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
 {
@@ -223,8 +221,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     let dataset_test = TextDataset::test();
 
     println!("Starting TTT text generation training...");
-    println!("Tokenizer vocab size: {}", tokenizer.vocab_size());
-    let ttt_type = config.ttt_config.layer_type;
+    let ttt_type = config.model_config.ttt.layer_type;
     println!("Layer type: {ttt_type:?}");
 
     dispatch_ttt_layer_type!(train_with_inner::<B, ttt_type, _>(
@@ -232,12 +229,9 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
         dataset_train,
         dataset_test,
         config,
-        artifact_dir,
-        tokenizer,
-        resume_epoch,
     ));
 
-    println!("Training completed! Artifacts saved to: {artifact_dir}");
+    println!("Training completed! Artifacts saved to: {}", config.artifact_dir);
 }
 
 /// Train with a specific inner model type using pre-tokenized data
@@ -250,9 +244,6 @@ fn train_with_inner_pretokenized<
     dataset_train: D,
     dataset_test: D,
     config: &TTTTrainingConfig,
-    artifact_dir: &str,
-    pad_token: usize,
-    resume_epoch: Option<usize>,
 ) where
     TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
     <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
@@ -262,28 +253,19 @@ fn train_with_inner_pretokenized<
         >,
 {
     // Batcher needs max_seq_len + 1 to account for next-token prediction
-    let batcher = TokenBatcher::new(pad_token, config.max_seq_len + 1);
+    let batcher = TokenBatcher::new(config.pad_token, config.model_config.ttt.max_seq_len + 1);
 
-    std::fs::create_dir_all(artifact_dir).unwrap();
-    config.save(format!("{artifact_dir}/config.json")).unwrap();
+    std::fs::create_dir_all(&config.artifact_dir).unwrap();
+    config.save(format!("{}/config.json", config.artifact_dir)).unwrap();
 
-    let model_config = TTTTextGenerationConfig {
-        ttt_config: config.ttt_config.clone(),
-        pad_token,
-    };
+    let model_config = TTTTextGenerationConfig::new(
+        config.model_config.clone(),
+        config.pad_token,
+    );
 
     let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
 
-    run_training(
-        model,
-        batcher,
-        dataset_train,
-        dataset_test,
-        config,
-        pad_token,
-        artifact_dir,
-        resume_epoch,
-    );
+    run_training(model, batcher, dataset_train, dataset_test, config);
 }
 
 /// Train using pre-tokenized dataset
@@ -295,27 +277,25 @@ fn train_with_inner_pretokenized<
 pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
-    artifact_dir: &str,
     tokenizer: &Tokenizer,
     tokenizer_name: &str,
-    resume_epoch: Option<usize>,
 ) where
     B::InnerBackend: FusedTttBackend,
 {
     println!("Tokenizer vocab size: {}", tokenizer.vocab_size());
-    let pad_token = tokenizer.pad_token();
 
     println!("Loading pre-tokenized datasets...");
     // Load max_seq_len + 1 tokens to account for next-token prediction shift
     // (inputs: 0..max_seq_len, targets: 1..max_seq_len+1)
+    let max_seq_len = config.model_config.ttt.max_seq_len;
     let dataset_train =
-        load_or_pretokenize(tokenizer, tokenizer_name, "train", config.max_seq_len + 1)
+        load_or_pretokenize(tokenizer, tokenizer_name, "train", max_seq_len + 1)
             .expect("Failed to load/create pre-tokenized train dataset");
     let dataset_test = load_or_pretokenize(
         tokenizer,
         tokenizer_name,
         "validation",
-        config.max_seq_len + 1,
+        max_seq_len + 1,
     )
     .expect("Failed to load/create pre-tokenized test dataset");
 
@@ -326,7 +306,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     );
 
     println!("Starting TTT text generation training (pre-tokenized)...");
-    let ttt_type = config.ttt_config.layer_type;
+    let ttt_type = config.model_config.ttt.layer_type;
     println!("Layer type: {ttt_type:?}");
 
     dispatch_ttt_layer_type!(train_with_inner_pretokenized::<B, ttt_type, _>(
@@ -334,10 +314,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
         dataset_train,
         dataset_test,
         config,
-        artifact_dir,
-        pad_token,
-        resume_epoch,
     ));
 
-    println!("Training completed! Artifacts saved to: {artifact_dir}");
+    println!("Training completed! Artifacts saved to: {}", config.artifact_dir);
 }

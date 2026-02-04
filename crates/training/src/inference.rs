@@ -9,7 +9,7 @@ use ttt_data::{Tokenizer, TokenizerTrait};
 use ttt_fused::FusedTttBackend;
 
 use crate::{
-    text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
+    text_generation::TTTTextGenerationModel,
     training::TTTTrainingConfig,
 };
 
@@ -26,15 +26,17 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
         device: B::Device,
         tokenizer: Tokenizer,
     ) -> Result<Self, Box<dyn std::error::Error>> {
+        use crate::text_generation::TTTTextGenerationConfig;
+
         let config: TTTTrainingConfig =
             TTTTrainingConfig::load(format!("{artifact_dir}/config.json"))?;
 
         let tokenizer = Arc::new(tokenizer);
 
-        let model_config = TTTTextGenerationConfig {
-            ttt_config: config.ttt_config,
-            pad_token: tokenizer.pad_token(),
-        };
+        let model_config = TTTTextGenerationConfig::new(
+            config.model_config,
+            config.pad_token,
+        );
 
         let mut model = model_config.init(&device);
 
@@ -216,9 +218,11 @@ pub fn interactive<B: FusedTttBackend>(
 
 #[cfg(test)]
 mod tests {
-    use ttt_core::{GpuBackend, TTTConfig};
+    use ttt_common::{ModelArch, ModelSize, TTTConfig};
+    use ttt_core::{GpuBackend, config::ModelConfig};
 
     use super::*;
+    use crate::text_generation::TTTTextGenerationConfig;
 
     /// Basic sanity check that everything runs without raising errors
     #[test]
@@ -226,11 +230,12 @@ mod tests {
         let device = Default::default();
 
         let tokenizer = Arc::new(Tokenizer::default());
-        let model_config = TTTTextGenerationConfig::from_tokenizer(
-            TTTConfig::default_12m(tokenizer.vocab_size()),
-            &*tokenizer,
+        let model_config = ModelConfig::new(
+            Arc::new(ModelArch::from_size(ModelSize::M12, tokenizer.vocab_size())),
+            Arc::new(TTTConfig::default()),
         );
-        let model = model_config.init::<GpuBackend, TTTLinear<GpuBackend>>(&device);
+        let text_gen_config = TTTTextGenerationConfig::from_tokenizer(model_config, &*tokenizer);
+        let model = text_gen_config.init::<GpuBackend, TTTLinear<GpuBackend>>(&device);
 
         let generator = TTTTextGenerator::new(model, tokenizer, device);
 

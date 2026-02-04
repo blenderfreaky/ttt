@@ -3,7 +3,7 @@
 use std::{ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
-use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear};
+use ttt_core::{TTTInnerModel, TTTInputsInner, TTTLinear, config::ModelConfig};
 
 use super::api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 use crate::{Fused, FusedTttBackend, FusedTttConfig, TileKernel, TileMultiKernel};
@@ -18,14 +18,14 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileKernel>
     }
 
     fn new(
-        general_config: &Arc<TTTConfig>,
-        config: &Arc<Self::Config>,
+        config: &ModelConfig,
+        inner_config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused::new(TTTLinear::new(general_config, config, device))
+        Fused::new(TTTLinear::new(config, inner_config, device))
     }
 
-    fn get_config(&self) -> &Arc<TTTConfig> {
+    fn get_config(&self) -> &ModelConfig {
         self.inner.get_config()
     }
 
@@ -52,9 +52,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileKernel>
 
         let inner_config = self.inner.get_config();
         let threads = inner_config
+            .ttt
             .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
-        let config = FusedTttConfig::new(inner_config.mini_batch_size, head_dim, epsilon, threads);
+        let config = FusedTttConfig::new(inner_config.ttt.mini_batch_size, head_dim, epsilon, threads);
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,
@@ -89,14 +90,14 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
     }
 
     fn new(
-        general_config: &Arc<TTTConfig>,
-        config: &Arc<Self::Config>,
+        config: &ModelConfig,
+        inner_config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused::new(TTTLinear::new(general_config, config, device))
+        Fused::new(TTTLinear::new(config, inner_config, device))
     }
 
-    fn get_config(&self) -> &Arc<TTTConfig> {
+    fn get_config(&self) -> &ModelConfig {
         self.inner.get_config()
     }
 
@@ -107,8 +108,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
     /// Override forward to use multi-stage kernel for full sequence processing.
     fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
         let inner = &self.inner;
-        let config = inner.get_config();
-        let mini_batch_size = config.mini_batch_size;
+        let model_config = inner.get_config();
+        let mini_batch_size = model_config.ttt.mini_batch_size;
 
         let [_batch_size, _num_heads, seq_len, head_dim] = inputs.qkv.xv.shape().dims();
         let num_full_batches = seq_len / mini_batch_size;
@@ -118,7 +119,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
         let ln_bias = inner.layer_norm.bias.val();
         let epsilon = inner.layer_norm.epsilon as f32;
 
-        let threads = config
+        let threads = model_config
+            .ttt
             .threads
             .unwrap_or_else(|| super::api::default_threads(mini_batch_size, head_dim));
         let config = FusedTttConfig::new(mini_batch_size, head_dim, epsilon, threads);
@@ -172,7 +174,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
         inputs: &TTTInputsInner<B>,
         range: Range<usize>,
     ) -> Tensor<B, 4> {
-        if range.len() != self.inner.config.mini_batch_size {
+        if range.len() != self.inner.config.ttt.mini_batch_size {
             panic!("Sequence length must be equal to mini_batch_size");
         }
 
@@ -189,9 +191,10 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
 
         let threads = inner
             .config
+            .ttt
             .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
-        let config = FusedTttConfig::new(inner.config.mini_batch_size, head_dim, epsilon, threads);
+        let config = FusedTttConfig::new(inner.config.ttt.mini_batch_size, head_dim, epsilon, threads);
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,

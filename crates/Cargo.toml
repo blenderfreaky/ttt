@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernels", "core", "fused", "layer", "data", "training", "cli", "thundercube"]
+members = ["kernels", "core", "fused", "layer", "data", "training", "cli", "thundercube", "harness", "common"]
 resolver = "2"
 
 [workspace.package]
@@ -8,6 +8,7 @@ edition = "2024"
 
 [workspace.dependencies]
 # Internal crates
+ttt-common = { path = "common" }
 ttt-kernels = { path = "kernels" }
 ttt-core = { path = "core" }
 ttt-fused = { path = "fused" }

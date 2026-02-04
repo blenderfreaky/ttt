@@ -1,8 +1,9 @@
 use std::path::Path;
+use std::sync::Arc;
 
-use burn::optim::AdamConfig;
 use serde_json::Value;
-use ttt_core::TTTConfig;
+use ttt_common::{ModelArch, TTTConfig};
+use ttt_core::config::ModelConfig;
 use ttt_training::TTTTrainingConfig;
 
 /// Recursively merge two JSON values. `overlay` values override `base`.
@@ -25,7 +26,11 @@ fn merge_json(base: Value, overlay: Value) -> Value {
 
 /// Create a default config for JSON merging (placeholder values get overwritten)
 fn default_config() -> TTTTrainingConfig {
-    TTTTrainingConfig::new(TTTConfig::new(0), AdamConfig::new())
+    let model_config = ModelConfig::new(
+        Arc::new(ModelArch::from_size(ttt_common::ModelSize::M60, 50257)),
+        Arc::new(TTTConfig::default()),
+    );
+    TTTTrainingConfig::new(model_config, 0, String::new())
 }
 
 /// Load config with backwards compatibility for old formats missing newer fields.
@@ -243,7 +248,9 @@ fn print_metrics_table(title: &str, metrics: &[EpochMetrics]) {
 /// Pretty-print the artifact info
 pub fn print_info(info: &ArtifactInfo, verbose: bool) {
     let config = &info.config;
-    let ttt = &config.ttt_config;
+    let arch = &config.model_config.arch;
+    let ttt = &config.model_config.ttt;
+    let train = &config.train;
 
     println!("╭{}╮", "─".repeat(BOX_WIDTH - 2));
     println!("│{:^width$}│", "Training Run Info", width = BOX_WIDTH - 2);
@@ -252,10 +259,10 @@ pub fn print_info(info: &ArtifactInfo, verbose: bool) {
 
     box_top("Model Configuration");
     box_row("Layer Type:", format!("{:?}", ttt.layer_type));
-    box_row("Hidden Size:", ttt.hidden_size);
-    box_row("Num Layers:", ttt.num_hidden_layers);
-    box_row("Num Heads:", ttt.num_heads);
-    box_row("Vocab Size:", ttt.vocab_size);
+    box_row("Hidden Size:", arch.hidden_size);
+    box_row("Num Layers:", arch.num_hidden_layers);
+    box_row("Num Heads:", arch.num_heads);
+    box_row("Vocab Size:", arch.vocab_size);
     box_row("Max Seq Len:", ttt.max_seq_len);
     box_row("Position Enc:", format!("{:?}", ttt.pos_encoding));
     box_row("Mini-batch:", ttt.mini_batch_size);
@@ -264,24 +271,24 @@ pub fn print_info(info: &ArtifactInfo, verbose: bool) {
     println!();
 
     box_top("Training Configuration");
-    box_row("Batch Size:", config.batch_size);
-    box_row("Num Epochs:", config.num_epochs);
-    box_row("Learning Rate:", format!("{:.2e}", config.learning_rate));
-    box_row("Warmup Steps:", config.warmup_steps);
-    box_row("Grad Accum:", config.grad_accumulation);
-    box_row("Train Samples:", config.train_samples);
-    box_row("Test Samples:", config.test_samples);
+    box_row("Batch Size:", train.batch);
+    box_row("Num Epochs:", train.epochs);
+    box_row("Learning Rate:", format!("{:.2e}", train.lr));
+    box_row("Warmup Steps:", train.warmup_steps);
+    box_row("Grad Accum:", train.grad_accum);
+    box_row("Train Samples:", train.samples);
+    box_row("Test Samples:", train.test_samples);
     box_bottom();
     println!();
 
     box_top("Training Progress");
     box_row(
         "Progress:",
-        progress_bar(info.total_epochs, config.num_epochs, 30),
+        progress_bar(info.total_epochs, train.epochs, 30),
     );
     box_row(
         "Epochs:",
-        format!("{} / {}", info.total_epochs, config.num_epochs),
+        format!("{} / {}", info.total_epochs, train.epochs),
     );
     if let Some(cp) = info.latest_checkpoint {
         box_row("Latest Ckpt:", format!("epoch {cp}"));

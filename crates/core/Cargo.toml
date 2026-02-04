@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+ttt-common = { workspace = true }
 ttt-kernels = { workspace = true }
 burn = { workspace = true, features = ["autodiff", "cubecl", "fusion"] }
 burn-backend = { workspace = true, features = ["cubecl"] }

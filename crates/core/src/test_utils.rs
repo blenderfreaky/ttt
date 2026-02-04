@@ -4,10 +4,11 @@ use std::sync::Arc;
 
 use burn::tensor::Tensor;
 use burn_backend::Backend;
+use ttt_common::{ModelArch, TTTConfig};
 
 use crate::{
-    Qkv, TEST_VOCAB_SIZE, TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearConfig,
-    TTTLinearState,
+    Qkv, TEST_VOCAB_SIZE, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearConfig,
+    TTTLinearState, config::ModelConfig,
 };
 
 /// Dimensions for TTT tests.
@@ -75,21 +76,26 @@ pub fn small_test_dims() -> TestDims {
     TestDims::new(2, 2, 8, 4)
 }
 
-/// Create a default TTTConfig for testing.
-pub fn default_test_config(dims: TestDims) -> Arc<TTTConfig> {
-    Arc::new(TTTConfig {
-        num_heads: dims.num_heads,
+/// Create a default ModelConfig for testing.
+pub fn default_test_config(dims: TestDims) -> ModelConfig {
+    let arch = Arc::new(ModelArch {
         hidden_size: dims.hidden_size(),
-        token_size: dims.hidden_size(),
+        num_hidden_layers: 1,
+        num_heads: dims.num_heads,
+        intermediate_size: dims.hidden_size() * 2,
+        vocab_size: TEST_VOCAB_SIZE,
+    });
+    let ttt = Arc::new(TTTConfig {
         mini_batch_size: dims.mini_batch_size,
         base_lr: 1.0,
         epsilon: 1e-6,
-        ..TTTConfig::new(TEST_VOCAB_SIZE)
-    })
+        ..TTTConfig::default()
+    });
+    ModelConfig::new(arch, ttt)
 }
 
 /// Create a TTTLinear model for testing.
-pub fn create_test_model<B: Backend>(config: &Arc<TTTConfig>, device: &B::Device) -> TTTLinear<B> {
+pub fn create_test_model<B: Backend>(config: &ModelConfig, device: &B::Device) -> TTTLinear<B> {
     let linear_config = Arc::new(TTTLinearConfig::new());
     TTTLinear::new(config, &linear_config, device)
 }

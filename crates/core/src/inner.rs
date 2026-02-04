@@ -8,7 +8,7 @@ use burn::{
 };
 use burn_backend::Distribution;
 
-use crate::config::TTTConfig;
+use crate::config::ModelConfig;
 
 pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
     type Config: Config + Default;
@@ -16,19 +16,18 @@ pub trait TTTInnerModel<B: Backend>: Module<B> + ModuleDisplay {
 
     fn name() -> &'static str;
 
-    fn new(general_config: &Arc<TTTConfig>, config: &Arc<Self::Config>, device: &B::Device)
-    -> Self;
+    fn new(config: &ModelConfig, inner_config: &Arc<Self::Config>, device: &B::Device) -> Self;
 
     fn init_state(&self, batch_size: usize) -> Self::State;
 
-    fn get_config(&self) -> &Arc<TTTConfig>;
+    fn get_config(&self) -> &ModelConfig;
 
     fn forward(&self, state: &mut Self::State, inputs: TTTInputsInner<B>) -> Tensor<B, 4> {
         let mut output = inputs.qkv.xv.zeros_like();
 
         let [_batch_size, _num_heads, seq_len, _head_dim] = inputs.qkv.xv.shape().dims();
 
-        let mini_batch_size = self.get_config().mini_batch_size;
+        let mini_batch_size = self.get_config().ttt.mini_batch_size;
         let num_mini_batch = seq_len / mini_batch_size;
 
         for i in 0..num_mini_batch {

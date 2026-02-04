@@ -1,7 +1,5 @@
 //! TTT struct - the outer layer that wraps inner model implementations.
 
-use std::sync::Arc;
-
 use burn::{
     module::{Ignored, Module},
     nn::{
@@ -11,8 +9,9 @@ use burn::{
     prelude::*,
     tensor::{Tensor, activation::sigmoid},
 };
+use ttt_common::PosEncoding;
 use ttt_core::{
-    PositionEncodingType, Qkv, TTTConfig, TTTInnerModel, TTTInputsInner,
+    Qkv, TTTInnerModel, TTTInputsInner, config::ModelConfig,
     util::{RotaryEmbedding, RotaryEmbeddingConfig, causal_conv1d_fn},
 };
 use ttt_fused::FusedTttBackend;
@@ -57,17 +56,22 @@ pub struct TTT<B: Backend> {
     /// Learnable offset added to `token_idx`. `[mini_batch_size]`
     pub learnable_token_idx: Tensor<B, 1>,
     pub post_norm: LayerNorm<B>,
-    pub config: Ignored<Arc<TTTConfig>>,
+    pub config: Ignored<ModelConfig>,
     pub rot_enc: Option<RotaryEmbedding<B>>,
 }
 
-/// Extension trait for TTTConfig to initialize TTT layers.
-pub trait TTTConfigExt {
-    fn init_ttt_seq<B: Backend>(self: &Arc<Self>, device: &B::Device) -> TTT<B>;
+/// Extension trait for ModelConfig to initialize TTT layers.
+pub trait ModelConfigExt {
+    fn init_ttt_seq<B: Backend>(&self, device: &B::Device) -> TTT<B>;
 }
 
-impl TTTConfigExt for TTTConfig {
-    fn init_ttt_seq<B: Backend>(self: &Arc<Self>, device: &B::Device) -> TTT<B> {
+impl ModelConfigExt for ModelConfig {
+    fn init_ttt_seq<B: Backend>(&self, device: &B::Device) -> TTT<B> {
+        let hidden_size = self.arch.hidden_size;
+        let num_heads = self.arch.num_heads;
+        let head_dim = self.head_dim();
+        let mini_batch_size = self.ttt.mini_batch_size;
+
         let linear = |in_size, out_size, bias| {
             LinearConfig::new(in_size, out_size)
                 .with_bias(bias)
@@ -79,56 +83,56 @@ impl TTTConfigExt for TTTConfig {
         };
 
         let conv = |size| {
-            Conv1dConfig::new(size, size, self.conv_kernel_size)
+            Conv1dConfig::new(size, size, self.ttt.conv_kernel_size)
                 .with_groups(size)
                 .with_padding(burn::nn::PaddingConfig1d::Explicit(
-                    self.conv_kernel_size - 1,
+                    self.ttt.conv_kernel_size - 1,
                 ))
                 .with_bias(true)
                 .init(device)
         };
 
         let learnable_ttt_lr_weight = Tensor::random(
-            [self.num_heads, self.token_size, 1],
+            [num_heads, hidden_size, 1],
             burn::tensor::Distribution::Normal(0.0, 0.02),
             device,
         );
 
-        let learnable_ttt_lr_bias = Tensor::zeros([self.num_heads, 1], device);
+        let learnable_ttt_lr_bias = Tensor::zeros([num_heads, 1], device);
 
-        let token_idx = Tensor::arange(1..(self.mini_batch_size as i64 + 1), device)
+        let token_idx = Tensor::arange(1..(mini_batch_size as i64 + 1), device)
             .float()
             .recip();
 
-        let learnable_token_idx = Tensor::zeros([self.mini_batch_size], device);
+        let learnable_token_idx = Tensor::zeros([mini_batch_size], device);
 
         TTT {
-            q_proj: linear(self.token_size, self.hidden_size, false),
-            k_proj: if self.share_qk {
+            q_proj: linear(hidden_size, hidden_size, false),
+            k_proj: if self.ttt.share_qk {
                 None
             } else {
-                Some(linear(self.token_size, self.hidden_size, false))
+                Some(linear(hidden_size, hidden_size, false))
             },
-            v_proj: linear(self.token_size, self.hidden_size, false),
-            g_proj: if self.use_gate {
-                Some(linear(self.token_size, self.hidden_size, false))
+            v_proj: linear(hidden_size, hidden_size, false),
+            g_proj: if self.ttt.use_gate {
+                Some(linear(hidden_size, hidden_size, false))
             } else {
                 None
             },
-            o_proj: linear(self.hidden_size, self.token_size, false),
-            q_conv: conv(self.hidden_size),
-            k_conv: conv(self.hidden_size),
+            o_proj: linear(hidden_size, hidden_size, false),
+            q_conv: conv(hidden_size),
+            k_conv: conv(hidden_size),
             learnable_ttt_lr_weight,
             learnable_ttt_lr_bias,
             token_idx,
             learnable_token_idx,
-            post_norm: LayerNormConfig::new(self.hidden_size)
+            post_norm: LayerNormConfig::new(hidden_size)
                 .with_epsilon(1e-6)
                 .init(device),
-            rot_enc: match self.pos_encoding {
-                PositionEncodingType::RoPE => Some(
-                    RotaryEmbeddingConfig::new(self.head_dim())
-                        .with_base(f64::from(self.rope_theta))
+            rot_enc: match self.ttt.pos_encoding {
+                PosEncoding::Rope => Some(
+                    RotaryEmbeddingConfig::new(head_dim)
+                        .with_base(f64::from(self.ttt.rope_theta))
                         .init(device),
                 ),
                 _ => None,
@@ -161,7 +165,7 @@ impl<B: FusedTttBackend> TTT<B> {
             x.reshape([
                 batch_size,
                 seq_len,
-                self.config.num_heads,
+                self.config.arch.num_heads,
                 self.config.head_dim(),
             ])
             .permute([0, 2, 1, 3])
@@ -176,8 +180,8 @@ impl<B: FusedTttBackend> TTT<B> {
                 let (xq, xk) = rot_enc.apply(
                     xq,
                     xk,
-                    start_idx % self.config.mini_batch_size,
-                    self.config.mini_batch_size,
+                    start_idx % self.config.ttt.mini_batch_size,
+                    self.config.ttt.mini_batch_size,
                 );
                 (undo_permute_qk(xq), undo_permute_qk(xk))
             }
@@ -214,7 +218,7 @@ impl<B: FusedTttBackend> TTT<B> {
         // [B, seq_len, num_heads] -> [B, num_heads, seq_len]
         let lr_sigmoid = sigmoid(lr.permute([0, 2, 1]));
 
-        (self.config.base_lr * lr_sigmoid) / (self.config.head_dim() as f32)
+        (self.config.ttt.base_lr * lr_sigmoid) / (self.config.head_dim() as f32)
     }
 
     fn conv_qk(&self, xqk: Tensor<B, 3>) -> (Tensor<B, 3>, Tensor<B, 3>) {
@@ -242,7 +246,7 @@ impl<B: FusedTttBackend> TTT<B> {
         let [_batch_size, seq_len, _] = x.shape().dims();
 
         let token_eta = (self.token_idx.clone() + self.learnable_token_idx.clone())
-            .repeat_dim(0, seq_len.div_ceil(self.config.mini_batch_size))
+            .repeat_dim(0, seq_len.div_ceil(self.config.ttt.mini_batch_size))
             .slice(s![0..seq_len])
             .clamp_min(0.);
 
@@ -275,7 +279,7 @@ impl<B: FusedTttBackend> TTT<B> {
 
         let out = out
             .permute([0, 2, 1, 3])
-            .reshape([batch_size, seq_len, self.config.hidden_size]);
+            .reshape([batch_size, seq_len, self.config.arch.hidden_size]);
 
         let out = self.post_norm.forward(out);
 

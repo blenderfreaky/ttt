@@ -1,7 +1,7 @@
 use std::{ops::Range, sync::Arc};
 
 use burn::tensor::Tensor;
-use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear};
+use ttt_core::{TTTInnerModel, TTTInputsInner, TTTLinear, config::ModelConfig};
 
 use crate::{Fused, FusedTttBackend, NaiveKernel, fused_ttt_forward};
 
@@ -14,14 +14,14 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, NaiveKernel
     }
 
     fn new(
-        general_config: &Arc<TTTConfig>,
-        config: &Arc<Self::Config>,
+        config: &ModelConfig,
+        inner_config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
-        Fused::new(TTTLinear::new(general_config, config, device))
+        Fused::new(TTTLinear::new(config, inner_config, device))
     }
 
-    fn get_config(&self) -> &Arc<TTTConfig> {
+    fn get_config(&self) -> &ModelConfig {
         self.inner.get_config()
     }
 

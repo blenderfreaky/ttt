@@ -6,6 +6,7 @@ edition.workspace = true
 default-run = "ttt"
 
 [dependencies]
+ttt-common = { workspace = true, features = ["cli"] }
 ttt-kernels = { workspace = true }
 ttt-core = { workspace = true }
 ttt-fused = { workspace = true }
@@ -27,6 +28,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+half.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
@@ -58,5 +60,5 @@ cuda = ["ttt-training/cuda"]
 wgpu = ["ttt-training/wgpu"]
 cpu = ["ttt-training/cpu"]
 streaming = ["ttt-training/streaming"]
-sweep_tests = []
+sweep-tests = []
 tile-tuning = []
