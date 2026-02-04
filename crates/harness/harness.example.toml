@@ -18,6 +18,18 @@ max_retries = 2
 # Path to state file for persistence/crash recovery
 state_file = "./harness_state.json"
 
+# RUST_LOG value passed to child training processes (optional)
+# rust_log = "info"
+
+# Hang detection: kill if no progress update within N seconds (after first update)
+# hang_timeout_secs = 600
+
+# Idle detection: kill if no stdout/stderr activity within N seconds
+# idle_timeout_secs = 300
+
+# Grace period when a new process starts (all watchdogs pause)
+settle_grace_secs = 30
+
 [harness.runpod]
 # Auto-shutdown runpod when all runs complete
 # Requires RUNPOD_POD_ID environment variable and runpodctl CLI

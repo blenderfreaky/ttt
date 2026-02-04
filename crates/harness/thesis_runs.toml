@@ -5,6 +5,10 @@ on_failure = "retry"
 max_retries = 2
 state_file = "./harness_state.json"
 
+hang_timeout_secs = 600
+idle_timeout_secs = 300
+settle_grace_secs = 60
+
 [harness.runpod]
 enabled = true
 
