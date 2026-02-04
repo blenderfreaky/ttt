@@ -4,12 +4,13 @@ use burn::{
     tensor::Tensor,
 };
 use ttt_core::{
-    TTTInnerModel, config::ModelConfig,
+    TTTInnerModel,
+    config::ModelConfig,
     util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
 };
 use ttt_fused::FusedTttBackend;
 
-use crate::ttt::{TTT, ModelConfigExt};
+use crate::ttt::{ModelConfigExt, TTT};
 
 // We can't write the trait bound due to a limitation of the Module derive macro
 // but impls enforce it
@@ -54,7 +55,10 @@ pub struct TTTBlockConfig {
 
 impl TTTBlockConfig {
     pub fn new(model_config: ModelConfig, layer_idx: usize) -> Self {
-        Self { model_config, layer_idx }
+        Self {
+            model_config,
+            layer_idx,
+        }
     }
 
     pub fn init<B: FusedTttBackend>(self, device: &B::Device) -> TTTBlock<B> {

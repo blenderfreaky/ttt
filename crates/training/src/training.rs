@@ -66,15 +66,16 @@ impl TTTTrainingConfig {
 
     pub fn load<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Self> {
         let json = std::fs::read_to_string(path)?;
-        serde_json::from_str(&json)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        serde_json::from_str(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 
     fn adam_config(&self) -> AdamConfig {
         AdamConfig::new()
             .with_beta_1(self.train.beta1)
             .with_beta_2(self.train.beta2)
-            .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(self.train.weight_decay.into())))
+            .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(
+                self.train.weight_decay.into(),
+            )))
     }
 }
 
@@ -193,17 +194,16 @@ fn train_with_inner<
 {
     // Batcher needs max_seq_len + 1 to account for next-token prediction
     let batcher = TextGenerationBatcher::new(
-        Arc::new(Tokenizer::default()),  // TODO: pass tokenizer through config
+        Arc::new(Tokenizer::default()), // TODO: pass tokenizer through config
         config.model_config.ttt.max_seq_len + 1,
     );
 
     std::fs::create_dir_all(&config.artifact_dir).unwrap();
-    config.save(format!("{}/config.json", config.artifact_dir)).unwrap();
+    config
+        .save(format!("{}/config.json", config.artifact_dir))
+        .unwrap();
 
-    let model_config = TTTTextGenerationConfig::new(
-        config.model_config.clone(),
-        config.pad_token,
-    );
+    let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
 
     let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
 
@@ -231,7 +231,10 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
         config,
     ));
 
-    println!("Training completed! Artifacts saved to: {}", config.artifact_dir);
+    println!(
+        "Training completed! Artifacts saved to: {}",
+        config.artifact_dir
+    );
 }
 
 /// Train with a specific inner model type using pre-tokenized data
@@ -256,12 +259,11 @@ fn train_with_inner_pretokenized<
     let batcher = TokenBatcher::new(config.pad_token, config.model_config.ttt.max_seq_len + 1);
 
     std::fs::create_dir_all(&config.artifact_dir).unwrap();
-    config.save(format!("{}/config.json", config.artifact_dir)).unwrap();
+    config
+        .save(format!("{}/config.json", config.artifact_dir))
+        .unwrap();
 
-    let model_config = TTTTextGenerationConfig::new(
-        config.model_config.clone(),
-        config.pad_token,
-    );
+    let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
 
     let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
 
@@ -288,16 +290,11 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     // Load max_seq_len + 1 tokens to account for next-token prediction shift
     // (inputs: 0..max_seq_len, targets: 1..max_seq_len+1)
     let max_seq_len = config.model_config.ttt.max_seq_len;
-    let dataset_train =
-        load_or_pretokenize(tokenizer, tokenizer_name, "train", max_seq_len + 1)
-            .expect("Failed to load/create pre-tokenized train dataset");
-    let dataset_test = load_or_pretokenize(
-        tokenizer,
-        tokenizer_name,
-        "validation",
-        max_seq_len + 1,
-    )
-    .expect("Failed to load/create pre-tokenized test dataset");
+    let dataset_train = load_or_pretokenize(tokenizer, tokenizer_name, "train", max_seq_len + 1)
+        .expect("Failed to load/create pre-tokenized train dataset");
+    let dataset_test =
+        load_or_pretokenize(tokenizer, tokenizer_name, "validation", max_seq_len + 1)
+            .expect("Failed to load/create pre-tokenized test dataset");
 
     println!(
         "Loaded {} train sequences, {} test sequences",
@@ -316,5 +313,8 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
         config,
     ));
 
-    println!("Training completed! Artifacts saved to: {}", config.artifact_dir);
+    println!(
+        "Training completed! Artifacts saved to: {}",
+        config.artifact_dir
+    );
 }

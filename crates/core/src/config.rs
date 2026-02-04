@@ -1,5 +1,6 @@
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 use ttt_common::{ModelArch, TTTConfig};
 
 /// Combined model config for inner model implementations.

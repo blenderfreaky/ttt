@@ -5,8 +5,7 @@
 //!   ttt-bench --model-size 125m --ttt-type fused-linear --batch 8 --json
 //!   ttt-bench --model-size 125m --ttt-type linear --dtype bfloat16
 
-use std::sync::Arc;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use burn::prelude::*;
 use clap::Parser;
@@ -50,7 +49,9 @@ fn parse_layer_type(s: &str) -> InnerModel {
         "fused" | "fused-linear" | "fusedlinear" => InnerModel::FusedLinear,
         "fused-tile" | "fusedtile" => InnerModel::FusedTileLinear,
         "fused-tile-multi" | "fusedtilemulti" => InnerModel::FusedTileMultiLinear,
-        _ => panic!("Unknown ttt-type: {s}. Use: linear, linear-adam, mlp, mlp2, mlp3, mlp4, fused, fused-tile, fused-tile-multi"),
+        _ => panic!(
+            "Unknown ttt-type: {s}. Use: linear, linear-adam, mlp, mlp2, mlp3, mlp4, fused, fused-tile, fused-tile-multi"
+        ),
     }
 }
 
@@ -155,7 +156,10 @@ fn bench_fwd<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     (total / args.repeats as f64) * 1000.0
 }
 
-fn bench_bwd<B: burn::tensor::backend::AutodiffBackend + FusedTttBackend, Inner: TTTInnerModel<B>>(
+fn bench_bwd<
+    B: burn::tensor::backend::AutodiffBackend + FusedTttBackend,
+    Inner: TTTInnerModel<B>,
+>(
     args: &Args,
     config: &ModelConfig,
     device: &B::Device,
@@ -200,22 +204,30 @@ fn main() {
     let (time_ms, dtype_str) = match (args.dtype.as_str(), args.backward) {
         ("float32", false) => {
             let device: <BackendF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendF32, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendF32, layer_type>(
+                &args, &config, &device
+            ));
             (t, "float32")
         }
         ("float32", true) => {
             let device: <AutodiffF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffF32, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffF32, layer_type>(
+                &args, &config, &device
+            ));
             (t, "float32")
         }
         ("bfloat16", false) => {
             let device: <BackendBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendBf16, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendBf16, layer_type>(
+                &args, &config, &device
+            ));
             (t, "bfloat16")
         }
         ("bfloat16", true) => {
             let device: <AutodiffBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffBf16, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffBf16, layer_type>(
+                &args, &config, &device
+            ));
             (t, "bfloat16")
         }
         _ => panic!("Unknown dtype: {}. Use: float32, bfloat16", args.dtype),
@@ -244,7 +256,10 @@ fn main() {
         println!("Model: {} / {}", args.model_size, args.ttt_type);
         println!("Dtype: {}", dtype_str);
         println!("Backward: {}", args.backward);
-        println!("Batch: {}, Seq: {}, Mini-batch: {}", args.batch, args.seq_len, args.mini_batch);
+        println!(
+            "Batch: {}, Seq: {}, Mini-batch: {}",
+            args.batch, args.seq_len, args.mini_batch
+        );
         println!();
         println!("Time: {:.2} ms", time_ms);
         println!("Throughput: {:.0} tok/s", throughput);

@@ -1,16 +1,26 @@
 //! Subprocess execution for training runs.
 
-use crate::config::RunConfig;
-use crate::state::{now_timestamp, StateError, StateManager};
-use std::collections::VecDeque;
-use std::path::Path;
-use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use tokio::fs::OpenOptions;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::watch;
+use std::{
+    collections::VecDeque,
+    path::Path,
+    process::Stdio,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+use tokio::{
+    fs::OpenOptions,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::{Child, Command},
+    sync::watch,
+};
+
+use crate::{
+    config::RunConfig,
+    state::{StateError, StateManager, now_timestamp},
+};
 
 /// Result of a training run.
 #[derive(Debug)]
@@ -300,9 +310,9 @@ impl Runner {
                     |lines| lines.join("\n"),
                 );
                 let checkpoint = StateManager::find_checkpoint(&handle.artifact_dir);
-                if let Err(e) =
-                    self.state_manager
-                        .mark_failed(&handle.name, &error_msg, checkpoint)
+                if let Err(e) = self
+                    .state_manager
+                    .mark_failed(&handle.name, &error_msg, checkpoint)
                 {
                     tracing::error!("Failed to mark {} as failed: {}", handle.name, e);
                 }
@@ -317,9 +327,9 @@ impl Runner {
             Err(e) => {
                 let error_msg = format!("Process error: {e}");
                 let checkpoint = StateManager::find_checkpoint(&handle.artifact_dir);
-                if let Err(e) =
-                    self.state_manager
-                        .mark_failed(&handle.name, &error_msg, checkpoint)
+                if let Err(e) = self
+                    .state_manager
+                    .mark_failed(&handle.name, &error_msg, checkpoint)
                 {
                     tracing::error!("Failed to mark {} as failed: {}", handle.name, e);
                 }

@@ -6,8 +6,9 @@
 //! - Activations: batch * `seq_len` * hidden * layers * dtype * factor
 //! - 20% overhead for framework internals
 
-use crate::config::RunConfig;
 use ttt_common::{InnerModel, ModelArch};
+
+use crate::config::RunConfig;
 
 /// VRAM estimator for training runs.
 #[derive(Debug, Clone)]
@@ -31,11 +32,13 @@ impl Default for VramEstimator {
 fn inner_model_weights(head_dim: usize, inner_type: InnerModel, expansion: usize) -> usize {
     match inner_type {
         // Linear: W (head_dim x head_dim) + b (head_dim)
-        InnerModel::Linear | InnerModel::LinearAdam | InnerModel::FusedLinear
-        | InnerModel::FusedTileLinear | InnerModel::FusedTileMultiLinear
-        | InnerModel::D2dStreamingLinear | InnerModel::PtrStreamingLinear => {
-            head_dim * head_dim + head_dim
-        }
+        InnerModel::Linear
+        | InnerModel::LinearAdam
+        | InnerModel::FusedLinear
+        | InnerModel::FusedTileLinear
+        | InnerModel::FusedTileMultiLinear
+        | InnerModel::D2dStreamingLinear
+        | InnerModel::PtrStreamingLinear => head_dim * head_dim + head_dim,
         // MLP with N hidden layers: input + N hidden + output
         // Each hidden layer: inner_dim x inner_dim + bias
         // inner_dim = head_dim * expansion
@@ -196,8 +199,9 @@ impl VramEstimator {
 
 #[cfg(test)]
 mod tests {
+    use ttt_common::{ModelSize, TTTConfig, TrainConfig, TrainParams};
+
     use super::*;
-    use ttt_common::{ModelSize, TrainConfig, TrainParams, TTTConfig};
 
     #[test]
     fn test_model_arch() {
@@ -230,8 +234,14 @@ mod tests {
             name: "test".to_string(),
             params: TrainParams {
                 size: ModelSize::M60,
-                train: TrainConfig { batch: 32, ..Default::default() },
-                ttt: TTTConfig { max_seq_len: 256, ..Default::default() },
+                train: TrainConfig {
+                    batch: 32,
+                    ..Default::default()
+                },
+                ttt: TTTConfig {
+                    max_seq_len: 256,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             out: None,
@@ -250,8 +260,14 @@ mod tests {
             name: "test".to_string(),
             params: TrainParams {
                 size: ModelSize::B1,
-                train: TrainConfig { batch: 8, ..Default::default() },
-                ttt: TTTConfig { max_seq_len: 512, ..Default::default() },
+                train: TrainConfig {
+                    batch: 8,
+                    ..Default::default()
+                },
+                ttt: TTTConfig {
+                    max_seq_len: 512,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             out: None,

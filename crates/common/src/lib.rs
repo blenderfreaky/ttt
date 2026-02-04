@@ -1,9 +1,8 @@
 //! Common types shared between TTT crates.
 
-use serde::{Deserialize, Serialize};
-
 #[cfg(feature = "burn")]
 pub use burn::config::Config;
+use serde::{Deserialize, Serialize};
 
 /// Inner model type for TTT layer.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

@@ -5,8 +5,8 @@
 //! 2. Passes --resume flag when retrying with a checkpoint
 //! 3. Updates state with checkpoint info on failure
 
-use std::fs;
-use std::path::Path;
+use std::{fs, path::Path};
+
 use tempfile::tempdir;
 use ttt_harness::state::{RunState, RunStatus, StateManager};
 

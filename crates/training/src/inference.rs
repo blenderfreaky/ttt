@@ -8,10 +8,7 @@ use ttt_core::{TTTInnerModel, TTTLinear};
 use ttt_data::{Tokenizer, TokenizerTrait};
 use ttt_fused::FusedTttBackend;
 
-use crate::{
-    text_generation::TTTTextGenerationModel,
-    training::TTTTrainingConfig,
-};
+use crate::{text_generation::TTTTextGenerationModel, training::TTTTrainingConfig};
 
 pub struct TTTTextGenerator<B: FusedTttBackend, Inner> {
     model: TTTTextGenerationModel<B, Inner>,
@@ -33,10 +30,7 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerator<B, Inner> {
 
         let tokenizer = Arc::new(tokenizer);
 
-        let model_config = TTTTextGenerationConfig::new(
-            config.model_config,
-            config.pad_token,
-        );
+        let model_config = TTTTextGenerationConfig::new(config.model_config, config.pad_token);
 
         let mut model = model_config.init(&device);
 

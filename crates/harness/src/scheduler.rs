@@ -1,14 +1,22 @@
 //! Scheduling and parallel run management.
 
-use crate::config::{FailurePolicy, HarnessConfig, RunConfig};
-use crate::runner::{new_activity_tracker, ProgressUpdate, RunError, RunResult, Runner};
-use crate::state::{StateError, StateManager};
-use crate::vram::{VramEstimate, VramEstimator};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
+
+use crate::{
+    config::{FailurePolicy, HarnessConfig, RunConfig},
+    runner::{ProgressUpdate, RunError, RunResult, Runner, new_activity_tracker},
+    state::{StateError, StateManager},
+    vram::{VramEstimate, VramEstimator},
+};
 
 /// Scheduler for managing parallel training runs.
 pub struct Scheduler {
@@ -208,7 +216,8 @@ impl Scheduler {
                         );
 
                         // Progress channel for this run
-                        let (progress_tx, mut progress_rx) = watch::channel(ProgressUpdate::default());
+                        let (progress_tx, mut progress_rx) =
+                            watch::channel(ProgressUpdate::default());
                         let progress_tx = Arc::new(progress_tx);
 
                         // Activity tracker for idle detection
@@ -222,7 +231,11 @@ impl Scheduler {
                                 let p = progress_rx.borrow();
                                 pb_clone.set_message(format!(
                                     "{}: epoch {}/{} [{}/{}]",
-                                    name_clone, p.epoch, p.epoch_total, p.items_processed, p.items_total
+                                    name_clone,
+                                    p.epoch,
+                                    p.epoch_total,
+                                    p.items_processed,
+                                    p.items_total
                                 ));
                             }
                         });
@@ -264,9 +277,16 @@ impl Scheduler {
                             pb.finish_with_message(format!(
                                 "{}: {}",
                                 name,
-                                if result.success { "completed" } else { "failed" }
+                                if result.success {
+                                    "completed"
+                                } else {
+                                    "failed"
+                                }
                             ));
-                            let _ = tx.send(CompletionResult { result, vram_gb: vram });
+                            let _ = tx.send(CompletionResult {
+                                result,
+                                vram_gb: vram,
+                            });
                         });
                     }
                     Err(e) => {
@@ -333,8 +353,10 @@ impl Scheduler {
                             && run_state.retry_count >= self.config.harness.max_retries
                         {
                             if self.config.harness.on_failure == FailurePolicy::Skip {
-                                state_manager
-                                    .mark_skipped(&completion.result.name, "max retries exceeded")?;
+                                state_manager.mark_skipped(
+                                    &completion.result.name,
+                                    "max retries exceeded",
+                                )?;
                             }
                             failed += 1;
                         }
@@ -449,9 +471,7 @@ async fn watchdog(
             && got_first_progress
             && now - last_progress_time > timeout
         {
-            tracing::error!(
-                "{name}: no progress update for {timeout}s, killing (PID {pid})"
-            );
+            tracing::error!("{name}: no progress update for {timeout}s, killing (PID {pid})");
             unsafe { libc::kill(pid as i32, libc::SIGKILL) };
             return;
         }
@@ -460,9 +480,7 @@ async fn watchdog(
         if let Some(timeout) = idle_timeout {
             let last = last_activity.load(Ordering::Relaxed);
             if now - last > timeout {
-                tracing::error!(
-                    "{name}: no output activity for {timeout}s, killing (PID {pid})"
-                );
+                tracing::error!("{name}: no output activity for {timeout}s, killing (PID {pid})");
                 unsafe { libc::kill(pid as i32, libc::SIGKILL) };
                 return;
             }

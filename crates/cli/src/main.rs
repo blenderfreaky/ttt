@@ -130,9 +130,13 @@ fn find_latest_checkpoint(artifact_dir: &str) -> Option<usize> {
         })
         .filter(|epoch| {
             let has_optim = checkpoint_dir.join(format!("optim-{epoch}.mpk")).exists();
-            let has_scheduler = checkpoint_dir.join(format!("scheduler-{epoch}.mpk")).exists();
+            let has_scheduler = checkpoint_dir
+                .join(format!("scheduler-{epoch}.mpk"))
+                .exists();
             if !has_optim || !has_scheduler {
-                eprintln!("Warning: checkpoint {epoch} is incomplete (missing optim/scheduler), skipping");
+                eprintln!(
+                    "Warning: checkpoint {epoch} is incomplete (missing optim/scheduler), skipping"
+                );
             }
             has_optim && has_scheduler
         })
@@ -201,7 +205,10 @@ fn main() {
                     .unwrap_or_else(|| panic!("No checkpoint found in {resume_dir}/checkpoint/"));
 
                 if resume_epoch >= config.train.epochs {
-                    println!("Training already completed (checkpoint {resume_epoch} >= epochs {}). Nothing to do.", config.train.epochs);
+                    println!(
+                        "Training already completed (checkpoint {resume_epoch} >= epochs {}). Nothing to do.",
+                        config.train.epochs
+                    );
                     println!("To continue training, pass --epochs with a higher value.");
                     return;
                 }

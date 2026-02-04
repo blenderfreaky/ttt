@@ -26,8 +26,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use paste::paste;
 use ttt_common::{ModelArch, TTTConfig};
 use ttt_core::{
-    GpuAutodiffBackend, GpuBackend, Qkv, TTTInnerModel, TTTInputsInner, TTTLinear,
-    TTTLinearAdam, TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4, config::ModelConfig,
+    GpuAutodiffBackend, GpuBackend, Qkv, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearAdam,
+    TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4, config::ModelConfig,
 };
 use ttt_data::TrainingTextGenerationBatch;
 use ttt_fused::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend};

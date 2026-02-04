@@ -11,7 +11,8 @@ use burn::{
 };
 use ttt_common::PosEncoding;
 use ttt_core::{
-    Qkv, TTTInnerModel, TTTInputsInner, config::ModelConfig,
+    Qkv, TTTInnerModel, TTTInputsInner,
+    config::ModelConfig,
     util::{RotaryEmbedding, RotaryEmbeddingConfig, causal_conv1d_fn},
 };
 use ttt_fused::FusedTttBackend;
@@ -277,9 +278,9 @@ impl<B: FusedTttBackend> TTT<B> {
 
         let out = inner.forward(state, inputs);
 
-        let out = out
-            .permute([0, 2, 1, 3])
-            .reshape([batch_size, seq_len, self.config.arch.hidden_size]);
+        let out =
+            out.permute([0, 2, 1, 3])
+                .reshape([batch_size, seq_len, self.config.arch.hidden_size]);
 
         let out = self.post_norm.forward(out);
 

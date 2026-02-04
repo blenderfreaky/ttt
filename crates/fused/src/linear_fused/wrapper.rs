@@ -13,11 +13,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, NaiveKernel
         "FusedTTTLinear"
     }
 
-    fn new(
-        config: &ModelConfig,
-        inner_config: &Arc<Self::Config>,
-        device: &B::Device,
-    ) -> Self {
+    fn new(config: &ModelConfig, inner_config: &Arc<Self::Config>, device: &B::Device) -> Self {
         Fused::new(TTTLinear::new(config, inner_config, device))
     }
 

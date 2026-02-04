@@ -3,8 +3,7 @@
 //! Uses runpodctl CLI (pre-authenticated inside pod) to stop the pod
 //! when all runs are complete.
 
-use std::env;
-use std::process::Command;
+use std::{env, process::Command};
 
 /// Runpod integration for auto-shutdown.
 pub struct Runpod {

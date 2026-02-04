@@ -34,7 +34,9 @@
 
 // Compile-time check: streaming requires rocm
 #[cfg(all(feature = "streaming", not(feature = "rocm")))]
-compile_error!("The 'streaming' feature requires the 'rocm' feature to be enabled. Streaming kernels are ROCm-only.");
+compile_error!(
+    "The 'streaming' feature requires the 'rocm' feature to be enabled. Streaming kernels are ROCm-only."
+);
 
 use std::marker::PhantomData;
 

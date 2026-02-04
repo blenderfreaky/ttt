@@ -20,12 +20,11 @@ use safetensors::{Dtype, SafeTensors};
 use test_case::test_case;
 use ttt_common::{ModelArch, TTTConfig};
 use ttt_core::{
-    GpuBackend, Qkv, TTTInnerModel, TTTInputsInner, TEST_VOCAB_SIZE,
-    TTTLinear, TTTLinearConfig, TTTLinearState,
-    TTTMLP, TTTMLPConfig, mlp::TTTMLPState,
-    config::ModelConfig, util::MultiHeadLayerNorm,
+    GpuBackend, Qkv, TEST_VOCAB_SIZE, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearConfig,
+    TTTLinearState, TTTMLP, TTTMLPConfig, config::ModelConfig, mlp::TTTMLPState,
+    util::MultiHeadLayerNorm,
 };
-use ttt_layer::{TTTBlock, TTTBlockConfig, TTT, TTTModel, ModelConfigExt, ModelConfigModelExt};
+use ttt_layer::{ModelConfigExt, ModelConfigModelExt, TTT, TTTBlock, TTTBlockConfig, TTTModel};
 
 /// Helper to build a ModelConfig for testing
 fn build_model_config(
@@ -527,8 +526,7 @@ fn print_header(title: &str) {
 
 fn load_validation_data(filename: &str, dir: Option<PathBuf>) -> SafeTensorLoader {
     let data_dir = dir.unwrap_or_else(|| {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../validation_data_reference")
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../validation_data_reference")
     });
     let path = data_dir.join(filename);
     if !path.exists() {
@@ -679,14 +677,14 @@ fn test_inner_model_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<Path
         TEST_VOCAB_SIZE,
         hidden_size,
         num_heads,
-        1,                    // num_layers
-        hidden_size * 4,      // intermediate_size
-        seq_len,              // mini_batch_size
-        4,                    // conv_kernel_size
-        false,                // use_gate
-        false,                // conv_before_ttt
-        false,                // share_qk
-        true,                 // tie_word_embeddings
+        1,               // num_layers
+        hidden_size * 4, // intermediate_size
+        seq_len,         // mini_batch_size
+        4,               // conv_kernel_size
+        false,           // use_gate
+        false,           // conv_before_ttt
+        false,           // share_qk
+        true,            // tie_word_embeddings
     );
 
     // Load inner model and state using trait methods
@@ -824,14 +822,14 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Optio
         TEST_VOCAB_SIZE,
         hidden_size,
         num_heads,
-        1,                    // num_layers
+        1, // num_layers
         intermediate_size,
         mini_batch_size,
         conv_kernel_size,
         use_gate,
-        pre_conv,             // conv_before_ttt
+        pre_conv, // conv_before_ttt
         share_qk,
-        true,                 // tie_word_embeddings
+        true, // tie_word_embeddings
     );
 
     let mut block: TTTBlock<GpuBackend> = TTTBlockConfig::new(config.clone(), 0).init(&device);
@@ -1009,14 +1007,14 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Optio
         TEST_VOCAB_SIZE,
         hidden_size,
         num_heads,
-        1,                    // num_layers
-        hidden_size * 4,      // intermediate_size
+        1,               // num_layers
+        hidden_size * 4, // intermediate_size
         mini_batch_size,
-        4,                    // conv_kernel_size
+        4, // conv_kernel_size
         use_gate,
-        false,                // conv_before_ttt
+        false, // conv_before_ttt
         share_qk,
-        true,                 // tie_word_embeddings
+        true, // tie_word_embeddings
     );
 
     let mut ttt_layer: TTT<GpuBackend> = config.init_ttt_seq(&device);
@@ -1174,7 +1172,7 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Opti
         mini_batch_size,
         conv_kernel_size,
         use_gate,
-        pre_conv,             // conv_before_ttt
+        pre_conv, // conv_before_ttt
         share_qk,
         tie_word_embeddings,
     );

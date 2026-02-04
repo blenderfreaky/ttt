@@ -1,7 +1,8 @@
 //! Configuration parsing for the training harness.
 
-use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 use ttt_common::TrainParams;
 
 /// Top-level configuration loaded from TOML (raw, before merging).
@@ -107,7 +108,9 @@ impl RunConfig {
     /// Get the output directory for this run.
     #[must_use]
     pub fn artifact_dir(&self) -> String {
-        self.out.clone().unwrap_or_else(|| format!("./artifacts/{}", self.name))
+        self.out
+            .clone()
+            .unwrap_or_else(|| format!("./artifacts/{}", self.name))
     }
 }
 
@@ -165,7 +168,11 @@ impl HarnessConfig {
             toml::from_str(&content).map_err(|e| ConfigError::Parse(e.to_string()))?;
 
         // Get out_prefix from defaults if present
-        let out_prefix = raw.defaults.get("out_prefix").and_then(|v| v.as_str()).map(String::from);
+        let out_prefix = raw
+            .defaults
+            .get("out_prefix")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         // Merge defaults into each run
         let runs: Vec<RunConfig> = raw
@@ -177,16 +184,25 @@ impl HarnessConfig {
                 if let toml::Value::Table(ref mut t) = merged {
                     t.remove("out_prefix"); // Don't pass to RunConfig
                     if !t.contains_key("out")
-                        && let (Some(prefix), Some(name)) = (&out_prefix, t.get("name").and_then(|n| n.as_str()))
+                        && let (Some(prefix), Some(name)) =
+                            (&out_prefix, t.get("name").and_then(|n| n.as_str()))
                     {
-                        t.insert("out".into(), toml::Value::String(format!("{prefix}/{name}")));
+                        t.insert(
+                            "out".into(),
+                            toml::Value::String(format!("{prefix}/{name}")),
+                        );
                     }
                 }
-                merged.try_into().map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))
+                merged
+                    .try_into()
+                    .map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))
             })
             .collect::<Result<_, _>>()?;
 
-        Ok(Self { harness: raw.harness, runs })
+        Ok(Self {
+            harness: raw.harness,
+            runs,
+        })
     }
 
     /// Get the usable VRAM after applying the safety margin.
@@ -207,9 +223,10 @@ pub enum ConfigError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
     use ttt_common::ModelSize;
+
+    use super::*;
 
     fn parse_config(toml_str: &str) -> HarnessConfig {
         // Write to unique temp file since load() reads from file
@@ -221,14 +238,16 @@ mod tests {
 
     #[test]
     fn test_parse_minimal_config() {
-        let config = parse_config(r#"
+        let config = parse_config(
+            r#"
 [harness]
 total_vram_gb = 192
 
 [[runs]]
 name = "test-run"
 size = "60m"
-"#);
+"#,
+        );
         assert_eq!(config.harness.total_vram_gb, 192.0);
         assert_eq!(config.runs.len(), 1);
         assert_eq!(config.runs[0].name, "test-run");
@@ -236,7 +255,8 @@ size = "60m"
 
     #[test]
     fn test_defaults_applied() {
-        let config = parse_config(r#"
+        let config = parse_config(
+            r#"
 [harness]
 total_vram_gb = 192
 
@@ -253,7 +273,8 @@ size = "60m"
 name = "run2"
 size = "125m"
 batch = 8
-"#);
+"#,
+        );
         assert_eq!(config.runs[0].params.tokenizer, "gpt2");
         assert_eq!(config.runs[0].params.train.epochs, 20);
         assert_eq!(config.runs[0].params.train.batch, 32);
@@ -269,7 +290,10 @@ batch = 8
             name: "test".to_string(),
             params: TrainParams {
                 size: ModelSize::M60,
-                train: ttt_common::TrainConfig { batch: 32, ..Default::default() },
+                train: ttt_common::TrainConfig {
+                    batch: 32,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             out: Some("./out/test".to_string()),

@@ -23,7 +23,9 @@ use ttt_kernels::kernel::FusedKernel;
 
 use super::{
     super::TttTileOutputs,
-    host::{D2dStreamingConfig, get_or_create_d2d_streaming_state, remove_d2d_streaming_state_by_id},
+    host::{
+        D2dStreamingConfig, get_or_create_d2d_streaming_state, remove_d2d_streaming_state_by_id,
+    },
 };
 use crate::{D2dStreamingKernel, Fused, FusedTttBackend, ttt::TttInputs};
 

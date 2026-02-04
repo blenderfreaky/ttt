@@ -26,7 +26,10 @@ pub struct TTTTextGenerationModel<B: FusedTttBackend, Inner> {
 
 impl TTTTextGenerationConfig {
     pub fn new(model_config: ModelConfig, pad_token: usize) -> Self {
-        Self { model_config, pad_token }
+        Self {
+            model_config,
+            pad_token,
+        }
     }
 
     pub fn from_tokenizer(model_config: ModelConfig, tokenizer: &impl TokenizerTrait) -> Self {
@@ -52,7 +55,9 @@ impl TTTTextGenerationConfig {
         device: &B::Device,
     ) -> TTTTextGenerationModel<B, Inner> {
         let inner_config = Arc::new(Inner::Config::default());
-        let ttt_model = self.model_config.init_with_inner_model(&inner_config, device);
+        let ttt_model = self
+            .model_config
+            .init_with_inner_model(&inner_config, device);
 
         TTTTextGenerationModel {
             ttt_model,
@@ -75,8 +80,10 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inne
 
         let logits = self.ttt_model.forward(inputs, 0);
 
-        let output_flatten =
-            logits.reshape([batch_size * seq_length, self.ttt_model.config.arch.vocab_size]);
+        let output_flatten = logits.reshape([
+            batch_size * seq_length,
+            self.ttt_model.config.arch.vocab_size,
+        ]);
         let targets_flatten = targets.reshape([batch_size * seq_length]);
 
         let loss = CrossEntropyLossConfig::new()

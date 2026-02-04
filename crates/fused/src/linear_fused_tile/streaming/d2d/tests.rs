@@ -32,13 +32,12 @@ fn test_fused_tile_streaming_forward_vs_reference(
         .unwrap();
 
     let dims = TestDims::new(batch, heads, dim, seq).with_iterations(iterations);
-    test_fwd::<GpuBackend, FusedTileD2dStreaming<GpuBackend>, FusedTileD2dStreamingState<GpuBackend>, _>(
-        dims,
-        |m| m.into(),
-        RTOL,
-        ATOL,
-        "FusedTileD2dStreaming",
-    );
+    test_fwd::<
+        GpuBackend,
+        FusedTileD2dStreaming<GpuBackend>,
+        FusedTileD2dStreamingState<GpuBackend>,
+        _,
+    >(dims, |m| m.into(), RTOL, ATOL, "FusedTileD2dStreaming");
 }
 
 // =============================================================================
@@ -54,11 +53,10 @@ fn test_fused_tile_streaming_fmb_vs_reference(batch: usize, heads: usize, dim: u
         .unwrap();
 
     let dims = TestDims::new(batch, heads, dim, seq);
-    test_fmb::<GpuBackend, FusedTileD2dStreaming<GpuBackend>, FusedTileD2dStreamingState<GpuBackend>, _>(
-        dims,
-        |m| m.into(),
-        RTOL,
-        ATOL,
-        "FusedTileD2dStreaming",
-    );
+    test_fmb::<
+        GpuBackend,
+        FusedTileD2dStreaming<GpuBackend>,
+        FusedTileD2dStreamingState<GpuBackend>,
+        _,
+    >(dims, |m| m.into(), RTOL, ATOL, "FusedTileD2dStreaming");
 }

@@ -2,12 +2,15 @@
 //!
 //! Tracks the status of each run and persists to JSON for crash recovery.
 
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufReader, BufWriter, Seek, SeekFrom},
+    path::Path,
+};
+
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Seek, SeekFrom};
-use std::path::Path;
 
 /// Status of a training run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -380,8 +383,9 @@ pub enum StateError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_state_roundtrip() {

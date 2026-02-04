@@ -1,5 +1,4 @@
-use std::path::Path;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use serde_json::Value;
 use ttt_common::{ModelArch, TTTConfig};

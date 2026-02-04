@@ -17,11 +17,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileKernel>
         "FusedTileTTTLinear"
     }
 
-    fn new(
-        config: &ModelConfig,
-        inner_config: &Arc<Self::Config>,
-        device: &B::Device,
-    ) -> Self {
+    fn new(config: &ModelConfig, inner_config: &Arc<Self::Config>, device: &B::Device) -> Self {
         Fused::new(TTTLinear::new(config, inner_config, device))
     }
 
@@ -55,7 +51,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileKernel>
             .ttt
             .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
-        let config = FusedTttConfig::new(inner_config.ttt.mini_batch_size, head_dim, epsilon, threads);
+        let config =
+            FusedTttConfig::new(inner_config.ttt.mini_batch_size, head_dim, epsilon, threads);
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,
@@ -89,11 +86,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
         "FusedTileMultiTTTLinear"
     }
 
-    fn new(
-        config: &ModelConfig,
-        inner_config: &Arc<Self::Config>,
-        device: &B::Device,
-    ) -> Self {
+    fn new(config: &ModelConfig, inner_config: &Arc<Self::Config>, device: &B::Device) -> Self {
         Fused::new(TTTLinear::new(config, inner_config, device))
     }
 
@@ -194,7 +187,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
             .ttt
             .threads
             .unwrap_or_else(|| super::api::default_threads(seq_len, head_dim));
-        let config = FusedTttConfig::new(inner.config.ttt.mini_batch_size, head_dim, epsilon, threads);
+        let config =
+            FusedTttConfig::new(inner.config.ttt.mini_batch_size, head_dim, epsilon, threads);
 
         let (output, weight_updated, bias_updated) = fused_ttt_tile_forward(
             qkv.xq,
