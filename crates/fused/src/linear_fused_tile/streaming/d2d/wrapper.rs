@@ -18,7 +18,7 @@ use burn::{
 };
 use burn_cubecl::{CubeRuntime, FloatElement, tensor::CubeTensor};
 use tracing::trace;
-use ttt_core::{TTTConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
+use ttt_core::{ModelConfig, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearState};
 use ttt_kernels::kernel::FusedKernel;
 
 use super::{
@@ -269,14 +269,14 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, D2dStreamin
     }
 
     fn new(
-        general_config: &Arc<TTTConfig>,
+        general_config: &ModelConfig,
         config: &Arc<Self::Config>,
         device: &B::Device,
     ) -> Self {
         Fused::new(TTTLinear::new(general_config, config, device))
     }
 
-    fn get_config(&self) -> &Arc<TTTConfig> {
+    fn get_config(&self) -> &ModelConfig {
         self.inner.get_config()
     }
 
@@ -306,6 +306,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, D2dStreamin
 
         let inner_config = inner.get_config();
         let threads = inner_config
+            .ttt
             .threads
             .unwrap_or_else(|| super::super::super::api::default_threads(seq_len, head_dim));
 
@@ -320,7 +321,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, D2dStreamin
             ln_weight,
             ln_bias,
             state.stream_id(),
-            inner_config.mini_batch_size,
+            inner_config.ttt.mini_batch_size,
             head_dim,
             epsilon,
             threads,
