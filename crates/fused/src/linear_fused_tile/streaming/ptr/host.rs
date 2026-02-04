@@ -242,7 +242,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let ptr_table = alloc_u64(vec![PTR_TABLE_SIZE]);
         let control = alloc_u32(vec![num_cubes * CTRL_ARRAY_SIZE]);
 
-        // Array buffers for HIP pointer loads (sized for ALL cubes - each cube uses its own offset)
+        // Array buffers for HIP pointer loads
         let qkv_buf_size_per_cube = mini_batch_len * head_dim;
         let eta_buf_size_per_cube = mini_batch_len;
         let xq_buf = alloc(vec![num_cubes * qkv_buf_size_per_cube]);
@@ -250,7 +250,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let xv_buf = alloc(vec![num_cubes * qkv_buf_size_per_cube]);
         let eta_buf = alloc(vec![num_cubes * eta_buf_size_per_cube]);
 
-        // Scratch tensors for Inputs (sized for all cubes, each cube uses its own offset)
+        // Scratch tensors for Inputs
         let xq_scratch = alloc(vec![
             config.batch_size,
             config.num_heads,
@@ -271,7 +271,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         ]);
         let ttt_lr_eta_scratch = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
 
-        // Outputs - 4D to match expected tensor shapes
+        // Outputs
         let output = alloc(vec![
             config.batch_size,
             config.num_heads,
@@ -286,7 +286,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         ]);
         let bias_out = alloc(vec![config.batch_size, config.num_heads, head_dim]);
 
-        // ForwardIntermediates (sized for all cubes)
+        // ForwardIntermediates
         let x_hat_fused = alloc(vec![
             config.batch_size,
             config.num_heads,
@@ -320,8 +320,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         ]);
         let std_ln = alloc(vec![config.batch_size, config.num_heads, mini_batch_len]);
 
-        // Allocate weight/bias buffers with full [batch, heads, ...] shape
-        // The kernel expects these to have data for each cube (batch, head) pair
+        // Hidden state
         let weight = alloc(vec![
             config.batch_size,
             config.num_heads,
@@ -621,6 +620,7 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         // Poll until all cubes report DONE
         loop {
             let status = self.stream.read(self.control_ptr, 0, num_cubes);
+            trace!("ptr_stream: status: {:?}", status);
             if status.iter().all(|&s| s == STATUS_DONE) {
                 break;
             }

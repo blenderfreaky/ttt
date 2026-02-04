@@ -29,10 +29,7 @@
 #![allow(non_camel_case_types, non_snake_case)]
 
 use cubecl::prelude::*;
-use thundercube::{
-    prelude::*,
-    util::{index_2d, transpose_4},
-};
+use thundercube::{prelude::*, util::index_2d};
 
 use super::super::super::{
     forward::{ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_stage},
@@ -66,8 +63,6 @@ pub const BUF_XV: usize = 4;
 pub const BUF_ETA: usize = 5;
 
 /// Inject HIP code to load from pointer table into Array parameters.
-///
-/// Uses buffer indices for the Array parameters (buffer_9 through buffer_12).
 #[cube]
 #[allow(unused_variables)]
 fn load_from_pointers<P: ParamsTrait>(
@@ -124,7 +119,7 @@ const uint32 eta_off = cube_idx * {eta}u;
     });
 }
 
-/// Inject HIP code to store from buffer_9 (xq_buf) to output pointer.
+/// Inject HIP code to store from xq_buf to output pointer.
 #[cube]
 #[allow(unused_variables)]
 fn store_to_output<P: ParamsTrait>(xq_buf: &Array<Line<P::EVal>>, #[comptime] count: usize) {
@@ -179,98 +174,17 @@ fn copy_tensor_to_array<F: Float>(
     }
 }
 
-/// Load from a Slice into shared memory tile (direct, no transpose).
-/// Assumes row-major contiguous layout with known dimensions.
-#[cube]
-pub fn load_st_from_slice<F: Float, R: Dim, C: Dim>(
-    src: Slice<Line<F>>,
-    dst: &mut St<F, R, C>,
-    #[comptime] src_cols: usize, // Number of columns in source (head_dim)
-) {
-    let vec_stride = C::LINES;
-    let total_vecs = R::VALUE * vec_stride;
-    let mask = vec_stride - 1;
-
-    let num_threads = CUBE_DIM as usize;
-    let tid = UNIT_POS as usize;
-
-    // Source has src_cols columns, so LINE stride is src_cols / LINE_SIZE
-    let src_line_stride = comptime!(src_cols / LINE_SIZE);
-
-    for i in range_stepped(tid, total_vecs, num_threads) {
-        let r = i / vec_stride;
-        let c_vec = i % vec_stride;
-
-        // Source index: row * line_stride + col_vec
-        let src_idx = r * src_line_stride + c_vec;
-        let val = src[src_idx];
-
-        let phys_c = cube::swizzle(r, c_vec, mask);
-        let s_idx = r * vec_stride + phys_c;
-        dst.data[s_idx] = val;
-    }
-}
-
-/// Load from a Slice into shared memory tile with transpose.
-/// Assumes row-major contiguous layout with known dimensions.
-#[cube]
-pub fn load_st_from_slice_transpose<F: Float, R: Dim, C: Dim>(
-    src: Slice<Line<F>>,
-    dst: &mut St<F, R, C>,
-    #[comptime] src_cols: usize, // Number of columns in source (head_dim)
-) {
-    let s_stride = C::LINES;
-    let patches_h = R::LINES;
-    let patches_w = C::LINES;
-    let total_patches = patches_h * patches_w;
-
-    let num_threads = CUBE_DIM as usize;
-    let tid = UNIT_POS as usize;
-    let mask = s_stride - 1;
-
-    // Source has src_cols columns, so LINE stride is src_cols / LINE_SIZE
-    let src_line_stride = comptime!(src_cols / LINE_SIZE);
-
-    for i in range_stepped(tid, total_patches, num_threads) {
-        let patch_row = i / patches_w;
-        let patch_col = i % patches_w;
-
-        let base_row = patch_row * LINE_SIZE;
-        let base_col_vec = patch_col;
-
-        // Load 4 consecutive rows
-        let r0 = src[(base_row + 0) * src_line_stride + base_col_vec];
-        let r1 = src[(base_row + 1) * src_line_stride + base_col_vec];
-        let r2 = src[(base_row + 2) * src_line_stride + base_col_vec];
-        let r3 = src[(base_row + 3) * src_line_stride + base_col_vec];
-
-        // Transpose
-        let (c0, c1, c2, c3) = transpose_4(r0, r1, r2, r3);
-
-        // Store transposed
-        let s_base_row = patch_col * LINE_SIZE;
-        let s_col_vec = patch_row;
-
-        let s0 = cube::swizzle(s_base_row + 0, s_col_vec, mask);
-        let s1 = cube::swizzle(s_base_row + 1, s_col_vec, mask);
-        let s2 = cube::swizzle(s_base_row + 2, s_col_vec, mask);
-        let s3 = cube::swizzle(s_base_row + 3, s_col_vec, mask);
-
-        dst.data[(s_base_row + 0) * s_stride + s0] = c0;
-        dst.data[(s_base_row + 1) * s_stride + s1] = c1;
-        dst.data[(s_base_row + 2) * s_stride + s2] = c2;
-        dst.data[(s_base_row + 3) * s_stride + s3] = c3;
-    }
-}
-
 /// Streaming kernel with pointer indirection.
 ///
-/// The kernel receives data via pointer table (zero-copy from host tensors),
+/// The kernel receives data via pointer table,
 /// copies to scratch Tensors, then calls the standard TTT forward stage.
 ///
 /// Arrays (buffer_9-12) receive data via injected HIP code that dereferences
 /// addresses from ptr_table. After sync, we copy Array -> scratch Tensor
 /// so the standard forward stage can operate on Tensors.
+/// Essentially we're just hoping that hipcc will be smart enough
+/// to optimize away the Array -> Tensor copies,
+/// as we can't easily trick CubeCL any other way.
 #[cube(launch)]
 #[allow(unused_assignments, reason = "False positive on `status`")]
 pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
@@ -278,7 +192,7 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     // not read by CubeCL, but our injected HIP code reads it.
     // rustc can't see that we're using it, so we give it the underscore prefix.
     _ptr_table: &Tensor<u64>,
-    // Control array [batch * heads] - mutable for atomic ops
+    // Control array [batch * heads]
     control: &mut Tensor<Atomic<u32>>,
     // Array buffers for pointer-based loading (get predictable buffer_N names)
     xq_buf: &mut Array<Line<P::EVal>>,
@@ -289,7 +203,7 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     inputs: &mut Inputs<P::EVal>,
     // Outputs struct (output tensor, weight_out, bias_out)
     outputs: &mut Outputs<P::EVal>,
-    // Forward intermediates (for backward pass compatibility)
+    // Forward intermediates
     fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     #[comptime] config: FusedTttConfig,
     #[comptime] debug: bool,

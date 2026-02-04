@@ -170,11 +170,10 @@ impl FusedKernel for TttPtrStreamingKernel {
             trace!("forward_launch sync warning: {:?}", e);
         }
 
-        // Use pointer-based forward
         let output = state.forward_tensor(&xq, &xk, &xv, &ttt_lr_eta);
 
         trace!("ptr streaming forward complete");
-        // Make a true copy of the output - the kernel reuses its buffer for each mini-batch
+        // Make a true copy of the output; the kernel reuses its buffer for each mini-batch
         // so we need to copy the data before it gets overwritten by the next call.
         // Note: into_contiguous skips copy if already contiguous, so we force a copy
         // using mul_scalar by 1.0 which allocates a new output buffer.
@@ -277,11 +276,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, PtrStreamin
         "FusedPtrStreamingTTTLinear"
     }
 
-    fn new(
-        general_config: &ModelConfig,
-        config: &Arc<Self::Config>,
-        device: &B::Device,
-    ) -> Self {
+    fn new(general_config: &ModelConfig, config: &Arc<Self::Config>, device: &B::Device) -> Self {
         Fused::new(TTTLinear::new(general_config, config, device))
     }
 

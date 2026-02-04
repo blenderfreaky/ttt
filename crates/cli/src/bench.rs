@@ -10,6 +10,7 @@ use std::{sync::Arc, time::Instant};
 use burn::prelude::*;
 use clap::Parser;
 use serde::Serialize;
+use tracing_subscriber::EnvFilter;
 use ttt_common::{InnerModel, ModelArch, ModelSize, TTTConfig};
 use ttt_core::{
     TTTInnerModel,
@@ -203,6 +204,10 @@ fn make_config(model_size: &str, mini_batch: usize) -> ModelConfig {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     let args = Args::parse();
     let config = make_config(&args.model_size, args.mini_batch);
     let layer_type = parse_layer_type(&args.ttt_type);
