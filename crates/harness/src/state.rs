@@ -251,7 +251,12 @@ impl StateManager {
     }
 
     /// Mark a run as failed.
-    pub fn mark_failed(&self, name: &str, error: &str) -> Result<(), StateError> {
+    pub fn mark_failed(
+        &self,
+        name: &str,
+        error: &str,
+        checkpoint: Option<usize>,
+    ) -> Result<(), StateError> {
         self.update(|state| {
             if let Some(run) = state.runs.get_mut(name) {
                 run.status = RunStatus::Failed;
@@ -259,6 +264,10 @@ impl StateManager {
                 run.retry_count += 1;
                 run.errors.push(error.to_string());
                 run.finished_at = Some(now_timestamp());
+
+                if checkpoint.is_some() {
+                    run.checkpoint_epoch = checkpoint;
+                }
             }
         })?;
         Ok(())

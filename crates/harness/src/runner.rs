@@ -253,7 +253,11 @@ impl Runner {
                     || format!("Exit code: {:?}", status.code()),
                     |lines| lines.join("\n"),
                 );
-                if let Err(e) = self.state_manager.mark_failed(&handle.name, &error_msg) {
+                let checkpoint = StateManager::find_checkpoint(&handle.artifact_dir);
+                if let Err(e) =
+                    self.state_manager
+                        .mark_failed(&handle.name, &error_msg, checkpoint)
+                {
                     tracing::error!("Failed to mark {} as failed: {}", handle.name, e);
                 }
                 RunResult {
@@ -261,12 +265,16 @@ impl Runner {
                     success: false,
                     exit_code: status.code(),
                     error: Some(error_msg),
-                    checkpoint_epoch: StateManager::find_checkpoint(&handle.artifact_dir),
+                    checkpoint_epoch: checkpoint,
                 }
             }
             Err(e) => {
                 let error_msg = format!("Process error: {e}");
-                if let Err(e) = self.state_manager.mark_failed(&handle.name, &error_msg) {
+                let checkpoint = StateManager::find_checkpoint(&handle.artifact_dir);
+                if let Err(e) =
+                    self.state_manager
+                        .mark_failed(&handle.name, &error_msg, checkpoint)
+                {
                     tracing::error!("Failed to mark {} as failed: {}", handle.name, e);
                 }
                 RunResult {
@@ -274,7 +282,7 @@ impl Runner {
                     success: false,
                     exit_code: None,
                     error: Some(error_msg),
-                    checkpoint_epoch: None,
+                    checkpoint_epoch: checkpoint,
                 }
             }
         }

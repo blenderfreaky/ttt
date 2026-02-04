@@ -448,7 +448,7 @@ impl TrainParams {
             self.ttt.mini_batch_size.to_string(),
             "--max-seq-len".into(),
             self.ttt.max_seq_len.to_string(),
-            "--mlp-expansion".into(),
+            "--mlp-expansion-factor".into(),
             self.ttt.mlp_expansion_factor.to_string(),
             // Train config
             "--batch".into(),
