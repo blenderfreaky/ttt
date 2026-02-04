@@ -9,8 +9,6 @@ use ttt_core::{
 use super::FusedTilePtrStreamingState;
 use crate::FusedTilePtrStreaming;
 
-// Tolerance constants for ptr streaming kernel
-// Higher tolerance due to pointer-based memory access patterns
 const RTOL: f32 = 0.5;
 const ATOL: f32 = 0.4;
 
@@ -18,7 +16,6 @@ const ATOL: f32 = 0.4;
 // Forward tests (forward - multi-stage, multi-iteration)
 // =============================================================================
 
-// TODO: ptr streaming kernel has issues, needs investigation
 #[test_case(2, 2, 32, 8, 2, 2 ; "batch2_heads2_dim32_mini8_stages2_iter2")]
 #[ignore]
 fn test_fused_tile_ptr_streaming_forward_vs_reference(
@@ -47,7 +44,6 @@ fn test_fused_tile_ptr_streaming_forward_vs_reference(
 // Forward tests (forward_mini_batch)
 // =============================================================================
 
-// TODO: ptr streaming kernel has issues, needs investigation
 #[test_case(2, 2, 32, 8 ; "batch2_heads2_dim32_seq8")]
 #[ignore]
 fn test_fused_tile_ptr_streaming_fmb_vs_reference(
