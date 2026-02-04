@@ -18,22 +18,53 @@ use std::{
 use burn::{module::Param, prelude::*, tensor::Tensor};
 use safetensors::{Dtype, SafeTensors};
 use test_case::test_case;
-use ttt::{
-    GpuBackend,
-    ttt::{
-        TEST_VOCAB_SIZE, TTTConfig,
-        layer::{Qkv, TTTInnerModel, TTTInputsInner},
-        linear::{TTTLinear, TTTLinearConfig, TTTLinearState},
-        mlp::{TTTMLP, TTTMLPConfig, TTTMLPState},
-        util::MultiHeadLayerNorm,
-    },
+use ttt_common::{ModelArch, TTTConfig};
+use ttt_core::{
+    GpuBackend, Qkv, TTTInnerModel, TTTInputsInner, TEST_VOCAB_SIZE,
+    TTTLinear, TTTLinearConfig, TTTLinearState,
+    TTTMLP, TTTMLPConfig, mlp::TTTMLPState,
+    config::ModelConfig, util::MultiHeadLayerNorm,
 };
+use ttt_layer::{TTTBlock, TTTBlockConfig, TTT, TTTModel, ModelConfigExt, ModelConfigModelExt};
+
+/// Helper to build a ModelConfig for testing
+fn build_model_config(
+    vocab_size: usize,
+    hidden_size: usize,
+    num_heads: usize,
+    num_layers: usize,
+    intermediate_size: usize,
+    mini_batch_size: usize,
+    conv_kernel_size: usize,
+    use_gate: bool,
+    conv_before_ttt: bool,
+    share_qk: bool,
+    tie_word_embeddings: bool,
+) -> ModelConfig {
+    let arch = Arc::new(ModelArch {
+        hidden_size,
+        num_hidden_layers: num_layers,
+        num_heads,
+        intermediate_size,
+        vocab_size,
+    });
+    let ttt = Arc::new(TTTConfig {
+        mini_batch_size,
+        conv_kernel_size,
+        use_gate,
+        conv_before_ttt,
+        share_qk,
+        tie_word_embeddings,
+        ..TTTConfig::default()
+    });
+    ModelConfig::new(arch, ttt)
+}
 
 /// Trait for inner models that can be loaded from safetensors for testing
 trait TestableInnerModel<B: burn::tensor::backend::Backend>: TTTInnerModel<B> {
     fn load_from_safetensors(
         loader: &SafeTensorLoader,
-        config: &Arc<TTTConfig>,
+        config: &ModelConfig,
         device: &B::Device,
         prefix: &str,
     ) -> Self;
@@ -52,7 +83,7 @@ trait TestableInnerModel<B: burn::tensor::backend::Backend>: TTTInnerModel<B> {
     /// Load and configure inner model from inner model test validation data
     fn load_for_inner_model_test(
         loader: &SafeTensorLoader,
-        config: &Arc<TTTConfig>,
+        config: &ModelConfig,
         device: &B::Device,
     ) -> Self;
 
@@ -74,7 +105,7 @@ struct ExpectedState<B: burn::tensor::backend::Backend> {
 impl TestableInnerModel<GpuBackend> for TTTLinear<GpuBackend> {
     fn load_from_safetensors(
         loader: &SafeTensorLoader,
-        config: &Arc<TTTConfig>,
+        config: &ModelConfig,
         device: &<GpuBackend as burn::prelude::Backend>::Device,
         prefix: &str,
     ) -> Self {
@@ -148,7 +179,7 @@ impl TestableInnerModel<GpuBackend> for TTTLinear<GpuBackend> {
 
     fn load_for_inner_model_test(
         loader: &SafeTensorLoader,
-        config: &Arc<TTTConfig>,
+        config: &ModelConfig,
         device: &<GpuBackend as burn::prelude::Backend>::Device,
     ) -> Self {
         let inner_config = Arc::new(TTTLinearConfig::new());
@@ -177,7 +208,7 @@ impl TestableInnerModel<GpuBackend> for TTTLinear<GpuBackend> {
 impl TestableInnerModel<GpuBackend> for TTTMLP<GpuBackend> {
     fn load_from_safetensors(
         loader: &SafeTensorLoader,
-        config: &Arc<TTTConfig>,
+        config: &ModelConfig,
         device: &<GpuBackend as burn::prelude::Backend>::Device,
         prefix: &str,
     ) -> Self {
@@ -279,7 +310,7 @@ impl TestableInnerModel<GpuBackend> for TTTMLP<GpuBackend> {
 
     fn load_for_inner_model_test(
         loader: &SafeTensorLoader,
-        config: &Arc<TTTConfig>,
+        config: &ModelConfig,
         device: &<GpuBackend as burn::prelude::Backend>::Device,
     ) -> Self {
         let inner_config = Arc::new(TTTMLPConfig::new());
@@ -495,8 +526,10 @@ fn print_header(title: &str) {
 }
 
 fn load_validation_data(filename: &str, dir: Option<PathBuf>) -> SafeTensorLoader {
-    let data_dir =
-        dir.unwrap_or(Path::new(env!("CARGO_MANIFEST_DIR")).join("validation_data_reference"));
+    let data_dir = dir.unwrap_or_else(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../validation_data_reference")
+    });
     let path = data_dir.join(filename);
     if !path.exists() {
         panic!(
@@ -642,12 +675,18 @@ fn test_inner_model_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<Path
     println!("  ttt_lr_eta shape: {:?}", ttt_lr_eta.dims());
 
     let hidden_size = num_heads * head_dim;
-    let config = Arc::new(
-        TTTConfig::new(TEST_VOCAB_SIZE)
-            .with_token_size(hidden_size)
-            .with_hidden_size(hidden_size)
-            .with_num_heads(num_heads)
-            .with_mini_batch_size(seq_len),
+    let config = build_model_config(
+        TEST_VOCAB_SIZE,
+        hidden_size,
+        num_heads,
+        1,                    // num_layers
+        hidden_size * 4,      // intermediate_size
+        seq_len,              // mini_batch_size
+        4,                    // conv_kernel_size
+        false,                // use_gate
+        false,                // conv_before_ttt
+        false,                // share_qk
+        true,                 // tie_word_embeddings
     );
 
     // Load inner model and state using trait methods
@@ -701,8 +740,6 @@ fn test_ttt_inner_model_mlp(dir: Option<PathBuf>) {
 
 /// Full Block Test - Generic implementation
 fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<PathBuf>) {
-    use ttt::ttt::block::TTTBlockConfig;
-
     let layer_type = Inner::layer_type_name();
     print_header(&format!("Block Forward Validation ({layer_type})"));
     let device = Default::default();
@@ -783,20 +820,21 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Optio
         4
     };
 
-    let config = Arc::new(
-        TTTConfig::new(TEST_VOCAB_SIZE)
-            .with_token_size(hidden_size)
-            .with_hidden_size(hidden_size)
-            .with_num_heads(num_heads)
-            .with_mini_batch_size(mini_batch_size)
-            .with_conv_kernel_size(conv_kernel_size)
-            .with_use_gate(use_gate)
-            .with_conv_before_ttt(pre_conv)
-            .with_swi_glu_mlp_intermediate_size(intermediate_size)
-            .with_share_qk(share_qk),
+    let config = build_model_config(
+        TEST_VOCAB_SIZE,
+        hidden_size,
+        num_heads,
+        1,                    // num_layers
+        intermediate_size,
+        mini_batch_size,
+        conv_kernel_size,
+        use_gate,
+        pre_conv,             // conv_before_ttt
+        share_qk,
+        true,                 // tie_word_embeddings
     );
 
-    let mut block = TTTBlockConfig::new(config.clone(), 0).init::<GpuBackend>(&device);
+    let mut block: TTTBlock<GpuBackend> = TTTBlockConfig::new(config.clone(), 0).init(&device);
     let inner_model = Inner::load_from_safetensors(&loader, &config, &device, "");
 
     // Set all weights from loaded data
@@ -967,18 +1005,21 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Optio
     let token_idx: Tensor<GpuBackend, 1> = loader.get_tensor("token_idx");
     let learnable_token_idx: Tensor<GpuBackend, 1> = loader.get_tensor("learnable_token_idx");
 
-    let config = Arc::new(
-        TTTConfig::new(TEST_VOCAB_SIZE)
-            .with_token_size(hidden_size)
-            .with_hidden_size(hidden_size)
-            .with_num_heads(num_heads)
-            .with_mini_batch_size(mini_batch_size)
-            .with_conv_kernel_size(4)
-            .with_use_gate(use_gate)
-            .with_share_qk(share_qk),
+    let config = build_model_config(
+        TEST_VOCAB_SIZE,
+        hidden_size,
+        num_heads,
+        1,                    // num_layers
+        hidden_size * 4,      // intermediate_size
+        mini_batch_size,
+        4,                    // conv_kernel_size
+        use_gate,
+        false,                // conv_before_ttt
+        share_qk,
+        true,                 // tie_word_embeddings
     );
 
-    let mut ttt_layer = config.init_ttt_seq::<GpuBackend>(&device);
+    let mut ttt_layer: TTT<GpuBackend> = config.init_ttt_seq(&device);
     let inner_model = Inner::load_from_safetensors(&loader, &config, &device, "");
 
     // Set TTT layer weights
@@ -1050,7 +1091,6 @@ fn test_ttt_layer_forward_mlp(dir: Option<PathBuf>) {
 /// Full Model Test - Generic implementation
 fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Option<PathBuf>) {
     use burn::tensor::Int;
-    use ttt::ttt::lm::TTTModel;
 
     let layer_type = Inner::layer_type_name();
     print_header(&format!("Full Model Forward Validation ({layer_type})"));
@@ -1125,19 +1165,18 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Opti
     println!("    embed_weight: {:?}", embed_weight.dims());
     println!("    final_norm_weight: {:?}", final_norm_weight.dims());
 
-    let config = Arc::new(
-        TTTConfig::new(vocab_size)
-            .with_token_size(hidden_size)
-            .with_hidden_size(hidden_size)
-            .with_num_heads(num_heads)
-            .with_mini_batch_size(mini_batch_size)
-            .with_conv_kernel_size(conv_kernel_size)
-            .with_use_gate(use_gate)
-            .with_conv_before_ttt(pre_conv)
-            .with_swi_glu_mlp_intermediate_size(intermediate_size)
-            .with_num_hidden_layers(num_layers)
-            .with_share_qk(share_qk)
-            .with_tie_word_embeddings(tie_word_embeddings),
+    let config = build_model_config(
+        vocab_size,
+        hidden_size,
+        num_heads,
+        num_layers,
+        intermediate_size,
+        mini_batch_size,
+        conv_kernel_size,
+        use_gate,
+        pre_conv,             // conv_before_ttt
+        share_qk,
+        tie_word_embeddings,
     );
 
     let inner_config = Arc::new(Inner::Config::default());

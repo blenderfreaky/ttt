@@ -1,4 +1,4 @@
-#![cfg(feature = "sweep_tests")]
+#![cfg(feature = "sweep-tests")]
 //! Parameter sweep validation tests.
 //!
 //! These tests run the Python reference validation with various parameter combinations,
@@ -62,7 +62,7 @@ fn generate_validation_data(
 
     let output = Command::new("python3")
         .args(&args)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
         .output()
         .map_err(|e| format!("Failed to run Python: {e}"))?;
 
@@ -93,15 +93,16 @@ fn run_sweep(
     share_qk: bool,
     tie_word_embeddings: bool,
 ) {
-    let dir = format!(
+    let project_root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let rel_dir = format!(
         "validation_data/batch_{b}/layer_{l}/head_{h}/dim_{d}/mini_batch_{mini_batch_size}/seed_{seed}/conv_{conv_kernel}/gate_{use_gate}_pre_conv_{pre_conv}_share_qk_{share_qk}_tie_word_embeddings_{tie_word_embeddings}"
     );
+    let abs_dir = project_root.join(&rel_dir);
 
-    let path = PathBuf::from(dir.clone());
-    fs::create_dir_all(&path).expect("Failed to create directory");
+    fs::create_dir_all(&abs_dir).expect("Failed to create directory");
 
     generate_validation_data(
-        dir.clone(),
+        rel_dir.clone(),
         b,
         l,
         h,
@@ -116,7 +117,7 @@ fn run_sweep(
     )
     .expect("Failed to generate validation data");
 
-    run_rust_validation(dir);
+    run_rust_validation(abs_dir.to_string_lossy().to_string());
 }
 
 // ============================================================================
