@@ -20,13 +20,6 @@
 //! - Stage 3: Update backward (z1_bar → W, b, grad_l dependencies)
 //! - Stage 2: LN+L2 second derivative (grad_l → Z1)
 //! - Stage 1: MatMul backward (Z1 → inputs)
-//!
-//! # Memory Optimization
-//!
-//! This implementation reduces shared memory usage by:
-//! 1. Loading forward intermediates on-demand instead of all at once
-//! 2. Reusing CS×CS tiles across computations in stage 3
-//! 3. Using a tile pool with explicit variable renaming when tiles are repurposed
 
 use cubecl::prelude::*;
 use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index_2d};
@@ -103,13 +96,8 @@ fn atomic_add_rv<F: Float, L: Dim>(
 // Stage 4: Layer norm backward
 // =============================================================================
 
-/// Outputs from stage 4 (stored in tile pool).
-/// Note: grad_W_z1bar is accumulated directly into grad_L_W_last to save an F×F tile.
-/// NOTE: Uses EAcc (f32) for accumulation precision, will be cast to EVal when stored.
 #[derive(CubeType)]
 struct Stage4Outputs<P: ParamsTrait> {
-    // grad_z1_bar stored in dedicated tile passed by caller
-    // grad_W_z1bar accumulated into grad_L_W_last via temp_f_f tile
     grad_b_z1bar: RvbFA<P>,
     grad_ln_weight: RvbFA<P>,
     grad_ln_bias: RvbFA<P>,
@@ -133,7 +121,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
     let f_f = P::EVal::cast_from(P::F::VALUE as f32);
     let f_inv = P::EVal::cast_from(1.0f32 / (P::F::VALUE as f32));
 
-    // grad_ln_weight = sum(grad_output * x_hat_ln) - use EAcc precision
+    // grad_ln_weight = sum(grad_output * x_hat_ln)
     scratch1.copy_from(grad_output);
     scratch1.mul(x_hat_ln);
 
@@ -142,7 +130,7 @@ fn backward_stage4_ln<P: ParamsTrait>(
     let mut grad_ln_weight = P::rvb_f_a();
     cube::reduce_cols::<P::EVal, P::EAcc, P::CS, P::F, SumOp>(scratch1, &mut grad_ln_weight, buf);
 
-    // grad_ln_bias = sum(grad_output) - use EAcc precision
+    // grad_ln_bias = sum(grad_output)
     let mut grad_ln_bias = P::rvb_f_a();
     cube::reduce_cols::<P::EVal, P::EAcc, P::CS, P::F, SumOp>(grad_output, &mut grad_ln_bias, buf);
 
@@ -351,7 +339,7 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    // Store d_xk_attn to combined output (first contribution)
+    // Store first d_xk_attn contribution to combined output
     cube::store_rt_to_st(&d_xk_attn_reg, grad_xk_combined_out);
 
     sync_cube();
@@ -510,7 +498,6 @@ fn backward_stage3_part2<P: ParamsTrait>(
     let mut token_eta_rv = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(token_eta, &mut token_eta_rv, 0);
 
-    // Multiply cs_cs_b rows by token_eta (in-place)
     cs_cs_b.mul_col(&token_eta_rv);
 
     sync_cube();
@@ -844,7 +831,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 // Main backward stage function
 // =============================================================================
 
-/// Memory layout (optimized tile usage):
+/// Memory layout:
 /// For CS=mini_batch_size, F=head_dim:
 /// - 11 CS×F tiles: scratch1, scratch2, tile_grad_z1_bar, tile_b, tile_c,
 ///                  tile_grad_xk_combined, tile_e, tile_f, tile_grad_Z1,
@@ -855,17 +842,8 @@ fn backward_stage1_assemble<P: ParamsTrait>(
 ///
 /// Example sizes:
 /// - 16×32:  11*1KB + 2*0.5KB + 2*1KB + 2*2KB = 18KB
-/// - 16×64:  11*2KB + 2*0.5KB + 2*2KB + 2*8KB = 43KB (fits 64KB LDS!)
+/// - 16×64:  11*2KB + 2*0.5KB + 2*2KB + 2*8KB = 43KB (fits 64KB LDS)
 /// - 32×64: 11*4KB + 2*2KB + 2*4KB + 2*8KB = 72KB (exceeds 64KB)
-///
-/// temp_f_f is repurposed across stages:
-///
-/// F×F tile optimization: Instead of 3 separate F×F tiles (weight_init, grad_W_z1bar, dW_tile),
-/// we use a single temp_f_f tile that is repurposed across stages:
-/// 1. Stage 4: stores grad_W_z1bar
-/// 2. After stage 3.1: accumulate into grad_L_W_last, then load weight_init
-/// 3. Stage 3.2 and Stage 1: use as weight_init for matmuls
-/// 4. Stage 1: overwrite with dW_tile for final accumulation
 #[cube]
 #[allow(clippy::too_many_arguments)]
 pub fn fused_ttt_backward_stage<P: ParamsTrait>(
@@ -1119,7 +1097,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &stage2_out.grad_ln_bias,
         // Inputs
         &k_smem,
-        // Temp F×F tile: contains weight_init, will be overwritten with dW_tile
+        // contains weight_init, will be overwritten with dW_tile
         &mut temp_f_f,
         // Accumulators
         grad_L_W_last,
@@ -1239,7 +1217,6 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     sync_cube();
 
     // Process stages in reverse order (backward through time)
-    #[unroll]
     for stage in 0..num_stages {
         let stage_idx = num_stages - 1 - stage;
         let stage_offset = base_qkv + stage_idx * mini_batch_len;

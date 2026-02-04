@@ -401,7 +401,7 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     let mini_batch_len = comptime!(config.mini_batch_len);
     let head_dim = comptime!(config.head_dim);
 
-    // Stride to advance by one mini-batch in the sequence dimension (in scalars)
+    // Stride to advance by one mini-batch in the sequence dimension (scalars)
     let stage_stride = mini_batch_len * head_dim;
 
     // Compute base offsets
@@ -416,11 +416,11 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
 
     sync_cube();
 
-    // Initialize bias in register vector (EVal for tensor I/O)
+    // Initialize bias in register vector
     let mut bias_rv = P::rvb_f_v();
     cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
 
-    // Load layer norm params (EVal to match St types in layer_norm functions)
+    // Load layer norm params
     let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
     let mut ln_weight_rv = P::rvb_f_v();
     let mut ln_bias_rv = P::rvb_f_v();
