@@ -67,15 +67,22 @@ pub struct Runner {
     ttt_binary: String,
     /// State manager for persistence.
     state_manager: StateManager,
+    /// RUST_LOG value for child processes.
+    rust_log: Option<String>,
 }
 
 impl Runner {
     /// Create a new runner.
     #[must_use]
-    pub fn new(ttt_binary: impl Into<String>, state_manager: StateManager) -> Self {
+    pub fn new(
+        ttt_binary: impl Into<String>,
+        state_manager: StateManager,
+        rust_log: Option<String>,
+    ) -> Self {
         Self {
             ttt_binary: ttt_binary.into(),
             state_manager,
+            rust_log,
         }
     }
 
@@ -121,10 +128,14 @@ impl Runner {
 
         tracing::debug!("Spawning: {} {}", self.ttt_binary, args.join(" "));
 
-        let child = Command::new(&self.ttt_binary)
-            .args(&args)
+        let mut cmd = Command::new(&self.ttt_binary);
+        cmd.args(&args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(ref rust_log) = self.rust_log {
+            cmd.env("RUST_LOG", rust_log);
+        }
+        let child = cmd
             .spawn()
             .map_err(|e| RunError::Spawn(run.name.clone(), e))?;
 
@@ -158,10 +169,13 @@ impl Runner {
         let stdout_path = log_dir.join("stdout.log");
         let stderr_path = log_dir.join("stderr.log");
 
+        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+
         // Stream stdout to file and parse for progress
         let stdout = handle.child.stdout.take();
         let stdout_task = if let Some(stdout) = stdout {
             let path = stdout_path.clone();
+            let ts = timestamp.to_string();
             Some(tokio::spawn(async move {
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
@@ -171,6 +185,15 @@ impl Runner {
                     .open(&path)
                     .await
                     .ok();
+
+                // Write retry separator if file already has content
+                if let Some(ref mut f) = file {
+                    if f.metadata().await.map_or(false, |m| m.len() > 0) {
+                        let _ = f
+                            .write_all(format!("\n--- retry at {ts} ---\n\n").as_bytes())
+                            .await;
+                    }
+                }
 
                 while let Ok(Some(line)) = lines.next_line().await {
                     if let Some(ref mut f) = file {
@@ -194,6 +217,7 @@ impl Runner {
         let stderr = handle.child.stderr.take();
         let stderr_task = if let Some(stderr) = stderr {
             let path = stderr_path.clone();
+            let ts = timestamp.to_string();
             Some(tokio::spawn(async move {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
@@ -203,6 +227,15 @@ impl Runner {
                     .open(&path)
                     .await
                     .ok();
+
+                // Write retry separator if file already has content
+                if let Some(ref mut f) = file {
+                    if f.metadata().await.map_or(false, |m| m.len() > 0) {
+                        let _ = f
+                            .write_all(format!("\n--- retry at {ts} ---\n\n").as_bytes())
+                            .await;
+                    }
+                }
 
                 let mut tail = VecDeque::with_capacity(20);
                 while let Ok(Some(line)) = lines.next_line().await {

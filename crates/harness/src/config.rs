@@ -46,6 +46,9 @@ pub struct HarnessSettings {
     /// Runpod integration settings.
     #[serde(default)]
     pub runpod: RunpodSettings,
+    /// RUST_LOG value to pass to child training processes.
+    #[serde(default)]
+    pub rust_log: Option<String>,
 }
 
 /// What to do when a run fails.
