@@ -7,7 +7,7 @@ use ttt_core::{
 };
 
 use super::FusedTilePtrStreamingState;
-use crate::FusedPtrStreaming;
+use crate::FusedTilePtrStreaming;
 
 // Tolerance constants for ptr streaming kernel
 // Higher tolerance due to pointer-based memory access patterns
@@ -35,13 +35,12 @@ fn test_fused_tile_ptr_streaming_forward_vs_reference(
 
     let dims =
         TestDims::multi_stage(batch, heads, dim, mini_batch, stages).with_iterations(iterations);
-    test_fwd::<GpuBackend, FusedPtrStreaming<GpuBackend>, FusedTilePtrStreamingState<GpuBackend>, _>(
-        dims,
-        |m| m.into(),
-        RTOL,
-        ATOL,
-        "FusedTilePtrStreaming",
-    );
+    test_fwd::<
+        GpuBackend,
+        FusedTilePtrStreaming<GpuBackend>,
+        FusedTilePtrStreamingState<GpuBackend>,
+        _,
+    >(dims, |m| m.into(), RTOL, ATOL, "FusedTilePtrStreaming");
 }
 
 // =============================================================================
@@ -62,11 +61,10 @@ fn test_fused_tile_ptr_streaming_fmb_vs_reference(
         .unwrap();
 
     let dims = TestDims::new(batch, heads, dim, seq);
-    test_fmb::<GpuBackend, FusedPtrStreaming<GpuBackend>, FusedTilePtrStreamingState<GpuBackend>, _>(
-        dims,
-        |m| m.into(),
-        RTOL,
-        ATOL,
-        "FusedTilePtrStreaming",
-    );
+    test_fmb::<
+        GpuBackend,
+        FusedTilePtrStreaming<GpuBackend>,
+        FusedTilePtrStreamingState<GpuBackend>,
+        _,
+    >(dims, |m| m.into(), RTOL, ATOL, "FusedTilePtrStreaming");
 }

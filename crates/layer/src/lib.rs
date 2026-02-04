@@ -83,7 +83,7 @@ macro_rules! dispatch_ttt_layer_type {
             }
             #[cfg(feature = "streaming")]
             $crate::InnerModel::PtrStreamingLinear => {
-                $f::<$backend, ttt_fused::FusedPtrStreaming<$backend> $(, $other)*>($($args),*)
+                $f::<$backend, ttt_fused::FusedTilePtrStreaming<$backend> $(, $other)*>($($args),*)
             }
             #[cfg(not(feature = "streaming"))]
             $crate::InnerModel::D2dStreamingLinear | $crate::InnerModel::PtrStreamingLinear => {

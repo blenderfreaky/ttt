@@ -99,7 +99,7 @@ pub type FusedTileD2dStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, D2dStreamin
 
 /// Pointer-based streaming TTT-Linear kernel.
 #[cfg(all(feature = "rocm", feature = "streaming"))]
-pub type FusedPtrStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, PtrStreamingKernel>;
+pub type FusedTilePtrStreaming<B> = Fused<B, ttt_core::TTTLinear<B>, PtrStreamingKernel>;
 
 // ============================================================================
 // FusedTttBackend trait
