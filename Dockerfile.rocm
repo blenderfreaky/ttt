@@ -52,7 +52,7 @@ RUN cargo chef cook --release --no-default-features --features rocm --recipe-pat
 
 # Now copy actual source and build (only this rebuilds on code changes)
 COPY crates /app/crates
-RUN cargo build --release --no-default-features --features rocm
+RUN cargo build --release --no-default-features --features rocm --all-targets
 
 # =============================================================================
 # Stage 4: Runtime - final image with dev tools
