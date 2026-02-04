@@ -3,7 +3,7 @@
 use test_case::test_case;
 use ttt_core::{
     GpuAutodiffBackend, GpuBackend, TTTLinearState,
-    test_utils::{TestDims, test_backward_fmb, test_fmb, test_fwd},
+    test_utils::{TestDims, test_backward_fmb, test_backward_fwd, test_fmb, test_fwd},
 };
 
 use crate::{FusedTile, FusedTileMulti};
@@ -14,10 +14,6 @@ const RTOL: f32 = 1e-2;
 const ATOL: f32 = 1e-3;
 const BACKWARD_RTOL: f32 = 5e-2;
 const BACKWARD_ATOL: f32 = 1e-3;
-
-// =============================================================================
-// FusedTile: Forward tests (forward_mini_batch)
-// =============================================================================
 
 #[test_case(2, 2, 32, 8 ; "batch2_heads2_dim32_seq8")]
 #[test_case(1, 4, 32, 16 ; "batch1_heads4_dim32_seq16")]
@@ -33,10 +29,6 @@ fn test_fused_tile_forward_vs_reference(batch: usize, heads: usize, dim: usize, 
     );
 }
 
-// =============================================================================
-// FusedTile: Backward tests
-// =============================================================================
-
 #[test_case(2, 2, 32, 8 ; "batch2_heads2_dim32_seq8")]
 fn test_fused_tile_backward_vs_reference(batch: usize, heads: usize, dim: usize, seq: usize) {
     let dims = TestDims::new(batch, heads, dim, seq);
@@ -48,10 +40,6 @@ fn test_fused_tile_backward_vs_reference(batch: usize, heads: usize, dim: usize,
         "FusedTile",
     );
 }
-
-// =============================================================================
-// FusedTileMulti: Forward tests (forward - multi-stage)
-// =============================================================================
 
 #[test_case(2, 2, 32, 8, 4 ; "batch2_heads2_dim32_mini8_stages4")]
 #[test_case(1, 4, 32, 8, 2 ; "batch1_heads4_dim32_mini8_stages2")]
@@ -72,10 +60,6 @@ fn test_fused_tile_multi_forward_vs_reference(
     );
 }
 
-// =============================================================================
-// FusedTileMulti: Forward tests (forward_mini_batch - fallback path)
-// =============================================================================
-
 #[test_case(2, 2, 32, 8 ; "batch2_heads2_dim32_seq8")]
 fn test_fused_tile_multi_fmb_vs_reference(batch: usize, heads: usize, dim: usize, seq: usize) {
     let dims = TestDims::new(batch, heads, dim, seq);
@@ -88,11 +72,25 @@ fn test_fused_tile_multi_fmb_vs_reference(batch: usize, heads: usize, dim: usize
     );
 }
 
-// =============================================================================
-// FusedTileMulti: Backward tests
-// =============================================================================
+#[test_case(2, 2, 32, 8, 2 ; "batch2_heads2_dim32_mini8_stages2")]
+#[ignore]
+fn test_fused_tile_multi_fmb_backward_vs_reference(
+    batch: usize,
+    heads: usize,
+    dim: usize,
+    mini_batch: usize,
+    stages: usize,
+) {
+    let dims = TestDims::multi_stage(batch, heads, dim, mini_batch, stages);
+    test_backward_fmb::<GpuAutodiffBackend, FusedTileMulti<GpuAutodiffBackend>, _>(
+        dims,
+        |m| m.into(),
+        BACKWARD_RTOL,
+        BACKWARD_ATOL,
+        "FusedTileMulti",
+    );
+}
 
-// TODO: add backward tests for FusedTileMulti once forward is stable
 #[test_case(2, 2, 32, 8, 2 ; "batch2_heads2_dim32_mini8_stages2")]
 #[ignore]
 fn test_fused_tile_multi_backward_vs_reference(
@@ -103,7 +101,7 @@ fn test_fused_tile_multi_backward_vs_reference(
     stages: usize,
 ) {
     let dims = TestDims::multi_stage(batch, heads, dim, mini_batch, stages);
-    test_backward_fmb::<GpuAutodiffBackend, FusedTileMulti<GpuAutodiffBackend>, _>(
+    test_backward_fwd::<GpuAutodiffBackend, FusedTileMulti<GpuAutodiffBackend>, _>(
         dims,
         |m| m.into(),
         BACKWARD_RTOL,

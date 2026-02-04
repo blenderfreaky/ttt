@@ -255,17 +255,10 @@ fn bench_inner_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
 
     let inner: Inner = Inner::new(&model_config, &inner_config, device);
 
-    // Warmup
-    let warmup_inputs = create_inner_inputs::<B>(config, params, device);
-    let mut warmup_state = inner.init_state(params.batch_size);
-    for _ in 0..3 {
-        let output = inner.forward(&mut warmup_state, warmup_inputs.clone());
-        sync(output);
-    }
-
     let group_name = format!("inner_forward_{}", Inner::name());
     let mut group = c.benchmark_group(&group_name);
     group.throughput(Throughput::Elements(params.total_tokens() as u64));
+    group.measurement_time(Duration::from_secs(20));
 
     let bench_id = format!("{}_{}", config.name, params.id());
     group.bench_function(BenchmarkId::new("forward", &bench_id), |b| {
@@ -301,16 +294,10 @@ fn bench_inner_backward<
 
     let inner: Inner = Inner::new(&model_config, &inner_config, device);
 
-    // Warmup
-    let warmup_inputs = create_inner_inputs::<B>(config, params, device);
-    let mut warmup_state = inner.init_state(params.batch_size);
-    let output = inner.forward(&mut warmup_state, warmup_inputs);
-    let _grads = output.sum().backward();
-
     let group_name = format!("inner_backward_{}", Inner::name());
     let mut group = c.benchmark_group(&group_name);
     group.throughput(Throughput::Elements(params.total_tokens() as u64));
-    group.measurement_time(Duration::from_secs(30));
+    group.measurement_time(Duration::from_secs(20));
 
     let bench_id = format!("{}_{}", config.name, params.id());
     group.bench_function(BenchmarkId::new("backward", &bench_id), |b| {
@@ -342,16 +329,10 @@ fn bench_full_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
     let model: TTTTextGenerationModel<B, Inner> = text_gen_config.init(device);
 
-    // Warmup
-    let warmup_input = random_logits::<B>(params, device);
-    for _ in 0..3 {
-        let output = model.forward_inference(warmup_input.clone());
-        sync(output);
-    }
-
     let group_name = format!("full_forward_{}", Inner::name());
     let mut group = c.benchmark_group(&group_name);
     group.throughput(Throughput::Elements(params.total_tokens() as u64));
+    group.measurement_time(Duration::from_secs(20));
 
     let bench_id = format!("{}_{}", config.name, params.id());
     let input = random_logits::<B>(params, device);
@@ -380,16 +361,10 @@ fn bench_full_backward<
     let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
     let model: TTTTextGenerationModel<B, Inner> = text_gen_config.init(device);
 
-    // Warmup
-    let warmup_batch = create_training_batch::<B>(params, device);
-    let output = model.forward_training(warmup_batch);
-    let _grads = output.loss.backward();
-
     let group_name = format!("full_backward_{}", Inner::name());
     let mut group = c.benchmark_group(&group_name);
     group.throughput(Throughput::Elements(params.total_tokens() as u64));
-    group.measurement_time(Duration::from_secs(60));
-    group.sample_size(20);
+    group.measurement_time(Duration::from_secs(20));
 
     let bench_id = format!("{}_{}", config.name, params.id());
     group.bench_function(BenchmarkId::new("backward", &bench_id), |b| {

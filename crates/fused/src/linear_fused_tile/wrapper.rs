@@ -129,7 +129,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
                     .clone()
                     .slice([0..batch_size, 0..num_heads, 0..full_seq_len]);
 
-            // token_eta is constant across stages - slice to [mini_batch_size] if needed
+            // token_eta is constant across stages
             let token_eta = inputs.token_eta.clone().slice([0..mini_batch_size]);
             let (output, weight_updated, bias_updated) = fused_ttt_tile_forward_multi::<B>(
                 full_qkv.xq,

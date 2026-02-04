@@ -37,12 +37,12 @@ pub type GpuBackend<F = DType> =
     compile_error!("One of the features 'rocm', 'cuda', 'wgpu' or 'cpu' must be enabled");
 
 #[cfg(feature = "bf16")]
-pub type DType = bf16;
+pub type DType = half::bf16;
 
 #[cfg(feature = "f16")]
 pub type DType = f16;
 
-#[cfg(feature = "f32")]
+#[cfg(all(feature = "f32", not(any(feature = "f16", feature = "bf16"))))]
 pub type DType = f32;
 
 #[cfg(not(any(feature = "bf16", feature = "f16", feature = "f32")))]
