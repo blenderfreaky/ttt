@@ -1,0 +1,82 @@
+[harness]
+total_vram_gb = 192
+vram_margin = 0.10
+on_failure = "retry"
+max_retries = 2
+state_file = "./harness_state.json"
+
+[harness.runpod]
+enabled = true
+
+[defaults]
+tokenizer = "/workspace/tinystories-8k.json"
+size = "12m"
+batch = 64
+mini_batch_size = 16
+warmup_steps = 1000
+seq_len = 2048
+lr = 1e-3
+seed = 42
+out_prefix = "/workspace"
+
+# Individual training runs
+
+[[runs]]
+name = "mlp"
+inner = "mlp"
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "mlp4"
+inner = "mlp4"
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "linear-rope"
+inner = "linear"
+ttt_base_lr = 1.0
+
+[[runs]]
+name = "linear-none"
+inner = "linear"
+pos_encoding = "none"
+ttt_base_lr = 1.0
+
+[[runs]]
+name = "linear-abs"
+inner = "linear"
+pos_encoding = "absolute"
+ttt_base_lr = 1.0
+
+[[runs]]
+name = "mlp-exp-1"
+inner = "mlp"
+mlp_expansion = 1
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "linear-adam"
+inner = "linear-adam"
+ttt_base_lr = 1.0
+
+[[runs]]
+name = "mlp-exp-8"
+inner = "mlp"
+mlp_expansion = 8
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "mlp2"
+inner = "mlp2"
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "mlp3"
+inner = "mlp3"
+ttt_base_lr = 0.1
+
+[[runs]]
+name = "mlp4-exp-1"
+inner = "mlp4"
+mlp_expansion = 1
+ttt_base_lr = 0.1
