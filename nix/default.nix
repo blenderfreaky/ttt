@@ -84,10 +84,10 @@
         inherit cargoArtifacts;
         nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
         buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
-        cargoExtraArgs = "--no-default-features --features ${backend} --bench ttt_benchmark";
+        cargoExtraArgs = "--no-default-features --features ${backend} --bench ttt-bench-criterion";
         installPhaseCommand = ''
           mkdir -p $out/bin
-          find target/release/deps -name "ttt_benchmark-*" -type f -executable ! -name "*.d" -exec cp {} $out/bin/ttt_benchmark${binSuffix} \;
+          find target/release/deps -name "ttt-bench-criterion-*" -type f -executable ! -name "*.d" -exec cp {} $out/bin/ttt-bench-criterion${binSuffix} \;
         '';
         doCheck = false;
       }

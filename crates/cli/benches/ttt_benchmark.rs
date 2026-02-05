@@ -13,11 +13,11 @@
 //! # Usage
 //!
 //! Run all benchmarks:
-//!   cargo bench --bench ttt_benchmark
+//!   cargo bench --bench ttt-bench-criterion
 //!
 //! Run specific benchmark:
-//!   cargo bench --bench ttt_benchmark -- inner_forward_linear
-//!   cargo bench --bench ttt_benchmark -- full_forward
+//!   cargo bench --bench ttt-bench-criterion -- inner_forward_linear
+//!   cargo bench --bench ttt-bench-criterion -- full_forward
 
 use std::{sync::Arc, time::Duration};
 
