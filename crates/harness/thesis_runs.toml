@@ -1,6 +1,6 @@
 [harness]
-total_vram_gb = 19
-vram_margin = 0.10
+total_vram_gb = 20
+vram_margin = 0.40
 on_failure = "retry"
 max_retries = 2
 state_file = "./harness_state.json"
@@ -13,16 +13,17 @@ settle_grace_secs = 60
 enabled = true
 
 [defaults]
-tokenizer = "/workspace/tinystories-8k.json"
+tokenizer = "/workspace/tinystories-4k.json"
 size = "60m"
 batch = 32
 mini_batch_size = 32
-warmup_steps = 1000
-seq_len = 1024
+warmup_steps = 500
+max_seq_len = 1024
 lr = 1e-3
 grad_accum = 1
 seed = 42
-epochs = 3
+epochs = 2
+dtype = "bf16"
 out_prefix = "/workspace/runs"
 
 # Individual training runs
