@@ -384,6 +384,7 @@ impl Default for TrainConfig {
             beta1: default_beta1(),
             beta2: default_beta2(),
             weight_decay: default_weight_decay(),
+            grad_clip_norm: default_grad_clip_norm(),
         }
     }
 }

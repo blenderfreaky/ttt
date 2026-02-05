@@ -47,7 +47,7 @@ path = "src/bench.rs"
 
 [[bench]]
 name = "ttt-bench-criterion"
-path = "benches/ttt_benchmark.s"
+path = "benches/ttt_benchmark.rs"
 harness = false
 
 [[bench]]

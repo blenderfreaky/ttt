@@ -8,7 +8,7 @@ use burn::{
     grad_clipping::GradientClippingConfig,
     lr_scheduler::noam::NoamLrSchedulerConfig,
     module::{AutodiffModule, DisplaySettings, ModuleDisplay},
-    optim::{AdamConfig, AdamWConfig},
+    optim::AdamWConfig,
     prelude::*,
     record::{CompactRecorder, DefaultRecorder, Recorder},
     tensor::backend::AutodiffBackend,
@@ -70,14 +70,14 @@ impl TTTTrainingConfig {
         serde_json::from_str(&json).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     }
 
-    fn adam_config(&self) -> AdamConfig {
+    fn adam_config(&self) -> AdamWConfig {
         AdamWConfig::new()
             .with_beta_1(self.train.beta1)
             .with_beta_2(self.train.beta2)
-            .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(
-                self.train.weight_decay.into(),
+            .with_weight_decay(self.train.weight_decay)
+            .with_grad_clipping(Some(GradientClippingConfig::Norm(
+                self.train.grad_clip_norm,
             )))
-            .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
     }
 }
 
