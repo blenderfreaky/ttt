@@ -131,7 +131,7 @@ impl ModelConfigExt for ModelConfig {
                 .with_epsilon(1e-6)
                 .init(device),
             rot_enc: match self.ttt.pos_encoding {
-                PosEncoding::Rope => Some(
+                PosEncoding::Rope | PosEncoding::RopeGlobal => Some(
                     RotaryEmbeddingConfig::new(head_dim)
                         .with_base(f64::from(self.ttt.rope_theta))
                         .init(device),
@@ -172,18 +172,17 @@ impl<B: FusedTttBackend> TTT<B> {
             .permute([0, 2, 1, 3])
         });
 
-        // Apply rotary position encoding with position_ids % mini_batch_size
+        // Apply rotary position encoding
         // Use permute_qk/undo_permute_qk to match JAX/EasyLM format (see doc comment on permute_qk)
         let (xq, xk) = match &self.rot_enc {
             Some(rot_enc) => {
                 let xq = permute_qk(xq);
                 let xk = permute_qk(xk);
-                let (xq, xk) = rot_enc.apply(
-                    xq,
-                    xk,
-                    start_idx % self.config.ttt.mini_batch_size,
-                    self.config.ttt.mini_batch_size,
-                );
+                let (offset, wrap) = match self.config.ttt.pos_encoding {
+                    PosEncoding::RopeGlobal => (start_idx, None),
+                    _ => (start_idx % self.config.ttt.mini_batch_size, Some(self.config.ttt.mini_batch_size)),
+                };
+                let (xq, xk) = rot_enc.apply(xq, xk, offset, wrap);
                 (undo_permute_qk(xq), undo_permute_qk(xk))
             }
             None => (xq, xk),

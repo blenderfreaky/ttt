@@ -32,6 +32,7 @@ pub enum InnerModel {
 pub enum PosEncoding {
     #[default]
     Rope,
+    RopeGlobal,
     None,
     Absolute,
 }
@@ -97,6 +98,7 @@ impl std::fmt::Display for PosEncoding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Rope => write!(f, "rope"),
+            Self::RopeGlobal => write!(f, "rope-global"),
             Self::None => write!(f, "none"),
             Self::Absolute => write!(f, "absolute"),
         }

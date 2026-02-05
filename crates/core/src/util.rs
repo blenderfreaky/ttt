@@ -282,23 +282,29 @@ impl RotaryEmbeddingConfig {
 }
 
 impl<B: Backend> RotaryEmbedding<B> {
-    /// Compute cos and sin for positions with wrapping at mini_batch_size
+    /// Compute cos and sin for positions, optionally wrapping at mini_batch_size.
+    /// If `mini_batch_size` is `Some`, positions wrap at that boundary.
+    /// If `None`, positions are used as-is (global positions).
     /// Returns (cos, sin) each of shape [seq_len, head_dim]
     pub fn get_cos_sin(
         &self,
         seq_len: usize,
         offset: usize,
-        mini_batch_size: usize,
+        mini_batch_size: Option<usize>,
     ) -> (Tensor<B, 2>, Tensor<B, 2>) {
         let device = self.inv_freq.device();
 
-        // Position indices wrap at mini_batch_size boundaries
-        // e.g. for seq_len=32, offset=0, mini_batch_size=16: [0,1,...,15, 0,1,...,15]
+        // Position indices, optionally wrapping at mini_batch_size boundaries
+        // e.g. for seq_len=32, offset=0, mini_batch_size=Some(16): [0,1,...,15, 0,1,...,15]
+        // e.g. for seq_len=32, offset=0, mini_batch_size=None:     [0,1,...,31]
         // Compute entirely on device to avoid host-device transfer
         // Note: Do arithmetic in float space to avoid HIP backend bug with int remainder
-        let pos_tensor = (Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device).float()
-            + (offset as f32))
-            .remainder_scalar(mini_batch_size as f32);
+        let pos_tensor = Tensor::<B, 1, Int>::arange(0..seq_len as i64, &device).float()
+            + (offset as f32);
+        let pos_tensor = match mini_batch_size {
+            Some(mbs) => pos_tensor.remainder_scalar(mbs as f32),
+            None => pos_tensor,
+        };
 
         // Compute frequencies: pos @ inv_freq -> [seq_len, head_dim/2]
         // pos: [seq_len, 1], inv_freq: [1, head_dim/2]
@@ -317,14 +323,15 @@ impl<B: Backend> RotaryEmbedding<B> {
 
     /// Apply rotary position embedding to query and key tensors
     /// q, k: [batch_size, num_heads, seq_len, head_dim]
-    /// Positions wrap at mini_batch_size boundaries
+    /// If `mini_batch_size` is `Some`, positions wrap at that boundary.
+    /// If `None`, positions are used as-is (global positions).
     /// Returns: (q_rotated, k_rotated) with same shape
     pub fn apply(
         &self,
         q: Tensor<B, 4>,
         k: Tensor<B, 4>,
         offset: usize,
-        mini_batch_size: usize,
+        mini_batch_size: Option<usize>,
     ) -> (Tensor<B, 4>, Tensor<B, 4>) {
         let [_batch_size, _num_heads, seq_len, _head_dim] = q.shape().dims();
 
