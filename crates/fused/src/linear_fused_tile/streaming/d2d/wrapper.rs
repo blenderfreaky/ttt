@@ -3,14 +3,7 @@
 //! This implements the FusedKernel trait for `TttD2dStreamingKernel`, which uses
 //! a persistent GPU kernel with a global registry for state management.
 
-use std::{
-    fmt::Debug,
-    ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{fmt::Debug, ops::Range, sync::Arc};
 
 use burn::{
     module::Ignored,
@@ -196,13 +189,8 @@ impl FusedKernel for TttD2dStreamingKernel {
 // High-level API for streaming kernel
 // ============================================================================
 
-/// Global counter for generating unique stream IDs.
-static STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-/// Generate a unique stream ID for a new streaming session.
-pub fn next_stream_id() -> u64 {
-    STREAM_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-}
+// Use shared stream ID counter from parent module
+use super::super::next_stream_id;
 
 /// High-level API for the D2D streaming TTT-Linear forward pass.
 ///

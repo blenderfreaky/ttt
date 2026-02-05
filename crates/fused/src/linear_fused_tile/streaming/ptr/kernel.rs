@@ -62,6 +62,21 @@ pub const BUF_XK: usize = 3;
 pub const BUF_XV: usize = 4;
 pub const BUF_ETA: usize = 5;
 
+/// Inject HIP code for system-level memory fence.
+/// This ensures all preceding memory operations are visible to other streams and the host.
+#[cube]
+fn memory_fence_system() {
+    use cubecl::intrinsic;
+    intrinsic!(|scope| {
+        scope.register(cubecl::ir::NonSemantic::Comment {
+            content: r#"*/
+__threadfence_system();
+/*"#
+            .to_string(),
+        });
+    });
+}
+
 /// Inject HIP code to load from pointer table into Array parameters.
 #[cube]
 #[allow(unused_variables)]
@@ -220,7 +235,20 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
 
     if comptime!(debug) {
         if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
-            debug_print!("PTR_STREAM: kernel start ctrl_idx=%u\n", ctrl_idx);
+            debug_print!(
+                "PTR_STREAM: kernel start ctrl_idx=%u cubes=(%u,%u)\n",
+                ctrl_idx,
+                CUBE_COUNT_X,
+                CUBE_COUNT_Y
+            );
+        }
+        // Print startup for all cubes to see which are running
+        if UNIT_POS == 0 {
+            debug_print!(
+                "PTR_STREAM: cube start b=%u h=%u\n",
+                batch_idx as u32,
+                head_idx as u32
+            );
         }
     }
 
@@ -269,6 +297,8 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
         let mut status: u32 = 0u32;
         if UNIT_POS == 0 {
             loop {
+                // System fence to invalidate cache and see fresh values from host
+                memory_fence_system();
                 status = Atomic::load(&control[ctrl_idx]);
                 if comptime!(debug) {
                     if batch_idx == 0 && head_idx == 0 {
@@ -280,7 +310,7 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
                     break;
                 }
                 // Small sleep to reduce memory bus contention
-                gpu_sleep(10u32);
+                gpu_sleep(1000u32);
             }
         }
 
@@ -303,6 +333,13 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
             }
             break;
         }
+
+        // Clear status to IDLE immediately to prevent host from seeing stale DONE
+        // This ensures the host's poll for DONE won't see values from previous iterations
+        if UNIT_POS == 0 {
+            Atomic::store(&control[ctrl_idx], 0u32); // IDLE
+        }
+        memory_fence_system();
 
         if comptime!(debug) {
             if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
@@ -420,6 +457,10 @@ pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
         if UNIT_POS == 0 {
             Atomic::store(&control[ctrl_idx], 2u32); // DONE
         }
+
+        // System fence to ensure DONE is visible to host before we loop back to polling.
+        // This also invalidates our cache so we can see the host's next READY write.
+        memory_fence_system();
 
         if comptime!(debug) {
             if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {

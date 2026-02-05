@@ -11,7 +11,11 @@ use std::{
 };
 
 use burn_backend::Shape;
-use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
+use burn_cubecl::{
+    CubeRuntime, FloatElement,
+    ops::numeric::{empty_device, zeros_client},
+    tensor::CubeTensor,
+};
 use cubecl::prelude::*;
 use thundercube::{
     prelude::{D4, D8, D16, D32, D64, LINE_SIZE},
@@ -26,8 +30,8 @@ use super::{
         helpers::Params,
     },
     kernel::{
-        CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, D2dStreamingKernelConfig,
-        fused_ttt_d2d_streaming_kernel,
+        CTRL_ARRAY_SIZE, D2dStreamingKernelConfig, STATUS_DONE, STATUS_IDLE, STATUS_READY,
+        STATUS_SHUTDOWN, fused_ttt_d2d_streaming_kernel,
     },
 };
 use crate::FusedTttConfig;
@@ -83,7 +87,7 @@ impl D2dStreamingConfig {
             head_dim,
             epsilon_scaled: (epsilon / 1e-9) as u32,
             threads,
-            debug: false,
+            debug: std::env::var("D2D_STREAM_DEBUG").is_ok(),
         }
     }
 
@@ -113,9 +117,9 @@ impl D2dStreamingConfig {
         StreamKey::new(self.stream_id)
     }
 
-    /// Total number of cubes (batch * heads)
+    /// Total number of cubes (single cube iterates through all batch/head pairs)
     pub fn num_cubes(&self) -> usize {
-        self.batch_size * self.num_heads
+        1
     }
 
     /// Size of control array
@@ -337,6 +341,15 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         ln_weight: CubeTensor<R>,
         ln_bias: CubeTensor<R>,
     ) -> Self {
+        // Create kernel_client FIRST so we can allocate control on its stream.
+        // This ensures the kernel sees initialized zeros without cross-stream sync.
+        let mut kernel_client = client.clone();
+        let kernel_stream_id = next_persistent_kernel_stream_id();
+        trace!("[HOST] using kernel stream ID: {}", kernel_stream_id);
+        unsafe {
+            kernel_client.set_stream(kernel_stream_id);
+        }
+
         // Allocate streaming buffers (single mini-batch sized)
         let xq = empty_device::<R, F>(
             client.clone(),
@@ -364,10 +377,14 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
             Shape::from(config.qkv_shape()),
         );
 
-        // Control array as a 1D tensor of u32 (we'll treat it as Atomic<u32> in kernel)
+        // Allocate control on kernel_client's stream with zeros - kernel will see this
         let ctrl_len = config.ctrl_array_len();
-        let control =
-            empty_device::<R, u32>(client.clone(), device.clone(), Shape::from([ctrl_len]));
+        let control = zeros_client::<R>(
+            kernel_client.clone(),
+            device.clone(),
+            Shape::from([ctrl_len]),
+            burn_backend::DType::U32,
+        );
 
         // Forward intermediates (single mini-batch)
         let fwd_shape = config.qkv_shape();
@@ -443,17 +460,6 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
 
         // Create async stream for memory transfers
         let stream = AsyncStream::new();
-
-        // Create a separate client for the persistent kernel with its own stream ID.
-        // This prevents the persistent kernel from blocking normal operations on the main client.
-        let mut kernel_client = client.clone();
-        let kernel_stream_id = next_persistent_kernel_stream_id();
-        trace!("[HOST] using kernel stream ID: {}", kernel_stream_id);
-        // SAFETY: We're setting a unique stream ID that won't conflict with normal operations.
-        // The kernel will run on this separate stream.
-        unsafe {
-            kernel_client.set_stream(kernel_stream_id);
-        }
 
         // Get all cached pointers BEFORE launching the kernel.
         // This is critical: get_resource() triggers cross-stream synchronization,
@@ -559,9 +565,7 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         }
         state.stream.sync();
 
-        // Initialize control array to IDLE
-        trace!("[HOST] reset_control...");
-        state.reset_control();
+        // Control is already initialized to zeros (IDLE) by zeros_client
 
         // Launch the persistent kernel
         trace!("[HOST] launch_kernel...");
@@ -572,22 +576,16 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         state
     }
 
-    /// Reset all control flags to zero (idle state).
-    fn reset_control(&mut self) {
-        let zeros = vec![0u32; self.config.ctrl_array_len()];
-        self.stream.write(self.cached_ctrl_ptr, 0, &zeros);
-    }
-
     /// Launch the persistent streaming kernel.
+    /// Launches single cube that iterates through all (batch, head) pairs internally.
     fn launch_kernel<F: FloatElement>(&self) {
         let kernel_config = self.config.kernel_config();
-        let batch_size = self.config.batch_size as u32;
-        let num_heads = self.config.num_heads as u32;
         let mini_batch_len = self.config.mini_batch_len;
         let head_dim = self.config.head_dim;
         let threads = self.config.threads;
 
-        let cube_count = CubeCount::Static(batch_size, num_heads, 1);
+        // Launch single cube - iterates through all (batch, head) pairs internally
+        let cube_count = CubeCount::Static(1, 1, 1);
         let vectorization = LINE_SIZE;
 
         // Get handle refs with longer lifetime
@@ -629,14 +627,9 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
             bias_ref.as_tensor_arg(vectorization),
         );
 
-        // Control array as ArrayArg for Array<u32> kernel parameter
-        let control_arg = unsafe {
-            ArrayArg::from_raw_parts::<u32>(
-                &self.tensors.control.handle,
-                self.config.ctrl_array_len(),
-                1,
-            )
-        };
+        // Control tensor for Tensor<Atomic<u32>> kernel parameter
+        let control_ref = self.tensors.control.as_handle_ref();
+        let control_arg = control_ref.as_tensor_arg(1);
 
         let fwd_intermediates = ForwardIntermediatesLaunch::<F, R>::new(
             x_hat_fused_ref.as_tensor_arg(vectorization),
@@ -663,6 +656,40 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
             fwd_intermediates,
             kernel_config
         );
+    }
+
+    /// Wait for all cubes to complete using two-phase polling.
+    /// This prevents reading stale DONE values from previous iterations.
+    fn wait_for_cubes_done(&self) {
+        let num_cubes = self.config.num_cubes();
+        let ctrl_ptr = self.cached_ctrl_ptr;
+
+        for cube in 0..num_cubes {
+            // First, wait for status to NOT be DONE (kernel started processing and cleared it)
+            loop {
+                let status = self.stream.read(ctrl_ptr, cube, 1);
+                if status[0] != STATUS_DONE {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+
+            // Now poll for DONE
+            loop {
+                let status = self.stream.read(ctrl_ptr, cube, 1);
+                if status[0] == STATUS_DONE {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+        }
+
+        trace!("[HOST] all cubes done, resetting to IDLE");
+        // Sync and reset to IDLE
+        self.stream.sync();
+        let idle_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_IDLE).collect();
+        self.stream.write(ctrl_ptr, 0, &idle_signals);
+        self.stream.sync();
     }
 
     /// Feed a mini-batch to the kernel using D2D copies and wait for output.
@@ -708,32 +735,14 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
             self.config.num_cubes()
         );
 
-        // Set READY flag for all cubes (write full control block like working example)
-        for cube in 0..self.config.num_cubes() {
-            let base = cube * CTRL_ARRAY_SIZE;
-            self.stream.write(ctrl_ptr, base, &[1u32, 0, 0]);
-        }
+        // Set READY status for all cubes
+        let num_cubes = self.config.num_cubes();
+        let ready_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_READY).collect();
+        self.stream.write(ctrl_ptr, 0, &ready_signals);
+        self.stream.sync();
         trace!("[HOST] READY set, polling DONE...");
 
-        // Wait for all cubes to complete (poll DONE flag, read all 3 like working example)
-        for cube in 0..self.config.num_cubes() {
-            trace!("[HOST] polling cube {}", cube);
-            let base = cube * CTRL_ARRAY_SIZE;
-            loop {
-                let flags = self.stream.read(ctrl_ptr, base, 3);
-                if flags[CTRL_DONE] != 0 {
-                    break;
-                }
-                std::hint::spin_loop();
-            }
-            trace!("[HOST] cube {} done", cube);
-        }
-
-        trace!("[HOST] all cubes done, clearing DONE flags");
-        for cube in 0..self.config.num_cubes() {
-            let base = cube * CTRL_ARRAY_SIZE;
-            self.stream.write(ctrl_ptr, base, &[0u32, 0, 0]);
-        }
+        self.wait_for_cubes_done();
 
         // Copy results to separate buffers that can be read without blocking on persistent kernel
         // Use cached pointers to avoid get_resource() which would sync with kernel stream
@@ -773,54 +782,6 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         &self.tensors.result_output
     }
 
-    /// Feed a mini-batch to the kernel and wait for output (CPU round-trip version).
-    ///
-    /// This is slower than `forward_d2d` but works when you have data on the CPU.
-    pub fn forward(&mut self, xq: &[f32], xk: &[f32], xv: &[f32], ttt_lr_eta: &[f32]) -> Vec<f32> {
-        // Use cached pointers to avoid get_resource() which would sync with kernel stream
-        let xq_ptr = self.cached_xq_ptr;
-        let xk_ptr = self.cached_xk_ptr;
-        let xv_ptr = self.cached_xv_ptr;
-        let eta_ptr = self.cached_eta_ptr;
-        let ctrl_ptr = self.cached_ctrl_ptr;
-        let output_ptr = self.cached_output_ptr;
-
-        // Write input data
-        self.stream.write(xq_ptr, 0, xq);
-        self.stream.write(xk_ptr, 0, xk);
-        self.stream.write(xv_ptr, 0, xv);
-        self.stream.write(eta_ptr, 0, ttt_lr_eta);
-
-        // Set READY flag for all cubes
-        for cube in 0..self.config.num_cubes() {
-            let base = cube * CTRL_ARRAY_SIZE;
-            self.stream.write(ctrl_ptr, base + CTRL_READY, &[1u32]);
-        }
-
-        // Wait for all cubes to complete (poll DONE flag)
-        for cube in 0..self.config.num_cubes() {
-            let done_offset = cube * CTRL_ARRAY_SIZE + CTRL_DONE;
-            loop {
-                let status = self.stream.read(ctrl_ptr, done_offset, 1);
-                if status[0] != 0 {
-                    break;
-                }
-                std::hint::spin_loop();
-            }
-        }
-
-        // Read output
-        let output = self.stream.read(output_ptr, 0, self.config.qkv_len());
-
-        // Reset control flags to idle (clear DONE)
-        for cube in 0..self.config.num_cubes() {
-            let base = cube * CTRL_ARRAY_SIZE;
-            self.stream.write(ctrl_ptr, base + CTRL_DONE, &[0u32]);
-        }
-
-        output
-    }
-
     /// Shutdown the kernel and return final weight/bias.
     pub fn shutdown(self) -> (Vec<f32>, Vec<f32>) {
         trace!(
@@ -832,61 +793,11 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         let weight_ptr = self.cached_weight_ptr;
         let bias_ptr = self.cached_bias_ptr;
 
-        // Read current control state before shutdown
-        let ctrl_before = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
-        trace!("[HOST] shutdown: control before = {:?}", ctrl_before);
-
-        // Signal shutdown to all cubes by writing full control array
-        // Format: [READY=0, DONE=0, SHUTDOWN=1] for each cube
-        for cube in 0..self.config.num_cubes() {
-            let base = cube * CTRL_ARRAY_SIZE;
-            self.stream.write(ctrl_ptr, base, &[0u32, 0, 1]);
-        }
-
-        // Read control state after writing shutdown
-        let ctrl_after = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
-        trace!("[HOST] shutdown: control after = {:?}", ctrl_after);
-
-        // Poll for kernel to acknowledge shutdown (READY should become MAX)
-        trace!("[HOST] shutdown: polling for kernel to acknowledge (READY=MAX)...");
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(5);
-        let mut all_acknowledged = false;
-
-        while start.elapsed() < timeout {
-            let ctrl = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
-            // Check if all cubes have set READY to MAX
-            all_acknowledged = (0..self.config.num_cubes()).all(|cube| {
-                let base = cube * CTRL_ARRAY_SIZE;
-                ctrl[base + CTRL_READY] == u32::MAX
-            });
-            if all_acknowledged {
-                trace!(
-                    "[HOST] shutdown: all cubes acknowledged, control = {:?}",
-                    ctrl
-                );
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        if !all_acknowledged {
-            let ctrl = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
-            trace!(
-                "[HOST] shutdown: TIMEOUT! kernel did not acknowledge. control = {:?}",
-                ctrl
-            );
-            // Try reading with longer interval
-            for i in 0..5 {
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                let ctrl = self.stream.read(ctrl_ptr, 0, self.config.ctrl_array_len());
-                trace!(
-                    "[HOST] shutdown: after {}ms more, control = {:?}",
-                    (i + 1) * 100,
-                    ctrl
-                );
-            }
-        }
+        // Signal SHUTDOWN to all cubes
+        let num_cubes = self.config.num_cubes();
+        let shutdown_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_SHUTDOWN).collect();
+        self.stream.write(ctrl_ptr, 0, &shutdown_signals);
+        self.stream.sync();
 
         // Wait for kernel to finish on the kernel_client's stream
         trace!("[HOST] shutdown: waiting for kernel to finish via wait_for_sync");
@@ -920,11 +831,11 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         // Use cached pointer to avoid get_resource() which would sync with kernel stream
         let ctrl_ptr = self.cached_ctrl_ptr;
 
-        // Signal shutdown to all cubes
-        for cube in 0..self.config.num_cubes() {
-            let base = cube * CTRL_ARRAY_SIZE;
-            self.stream.write(ctrl_ptr, base, &[0u32, 0, 1]);
-        }
+        // Signal SHUTDOWN to all cubes
+        let num_cubes = self.config.num_cubes();
+        let shutdown_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_SHUTDOWN).collect();
+        self.stream.write(ctrl_ptr, 0, &shutdown_signals);
+        self.stream.sync();
 
         // Wait for kernel to finish
         trace!("[HOST] signal_shutdown: waiting for kernel to finish");

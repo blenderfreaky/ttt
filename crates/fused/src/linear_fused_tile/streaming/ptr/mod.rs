@@ -21,5 +21,5 @@ pub use kernel::{
 };
 pub use wrapper::{
     FusedTilePtrStreamingState, PtrStreamHandle, PtrStreamingKernelConfig, TttPtrStreamingKernel,
-    fused_ttt_ptr_streaming_forward, next_ptr_stream_id,
+    fused_ttt_ptr_streaming_forward,
 };

@@ -6,10 +6,16 @@
 //!
 //! ## Control Protocol
 //!
-//! Communication between host and kernel uses a control array with indices per cube:
-//! - `control[base + CTRL_READY]`: Host sets to 1 when input is available
-//! - `control[base + CTRL_DONE]`: Kernel sets to 1 when output is ready
-//! - `control[base + CTRL_SHUTDOWN]`: Host sets to 1 to signal kernel exit
+//! Communication between host and kernel uses a single status per cube:
+//! - IDLE (0): Kernel is waiting for work
+//! - READY (1): Host has provided input, kernel should process
+//! - DONE (2): Kernel has finished, output is ready
+//! - SHUTDOWN (3): Host signals kernel to exit
+//!
+//! ## Batch Iteration
+//!
+//! To avoid workgroup starvation on AMD GPUs, we launch fewer cubes (num_heads)
+//! and each cube iterates through all batches for its assigned head.
 
 #![allow(non_camel_case_types, non_snake_case)]
 
@@ -21,6 +27,21 @@ use super::super::super::{
     helpers::ParamsTrait,
 };
 use crate::FusedTttConfig;
+
+/// Inject HIP code for system-level memory fence.
+/// This ensures all preceding memory operations are visible to other streams and the host.
+#[cube]
+fn memory_fence_system() {
+    use cubecl::intrinsic;
+    intrinsic!(|scope| {
+        scope.register(cubecl::ir::NonSemantic::Comment {
+            content: r#"*/
+__threadfence_system();
+/*"#
+            .to_string(),
+        });
+    });
+}
 
 /// Configuration for streaming kernel with debug flag.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -35,12 +56,14 @@ impl D2dStreamingKernelConfig {
     }
 }
 
-/// Control array indices (per cube):
-/// [READY, DONE, SHUTDOWN]
-pub const CTRL_READY: usize = 0;
-pub const CTRL_DONE: usize = 1;
-pub const CTRL_SHUTDOWN: usize = 2;
-pub const CTRL_ARRAY_SIZE: usize = 3;
+/// Control flags - single status per cube (matches PTR protocol)
+pub const CTRL_STATUS: usize = 0;
+pub const CTRL_ARRAY_SIZE: usize = 1;
+
+pub const STATUS_IDLE: u32 = 0;
+pub const STATUS_READY: u32 = 1;
+pub const STATUS_DONE: u32 = 2;
+pub const STATUS_SHUTDOWN: u32 = 3;
 
 /// Streaming input/output buffers for a single mini-batch.
 ///
@@ -66,140 +89,139 @@ pub struct D2dStreamingBuffers<F: Float> {
 ///
 /// The kernel runs in a persistent loop:
 /// 1. Wait for CTRL_READY flag from host
-/// 2. Process the mini-batch using `fused_ttt_forward_stage`
+/// 2. Iterate through all batches for this head, processing each mini-batch
 /// 3. Set CTRL_DONE flag for host
 /// 4. Repeat until CTRL_SHUTDOWN is received
 ///
 /// Weight and bias are kept in shared memory between stages.
-/// Forward intermediates are written to global memory with stage-based offsets.
+/// Each cube handles one head and iterates through all batches internally.
 #[cube(launch)]
 pub fn fused_ttt_d2d_streaming_kernel<P: ParamsTrait>(
     // Input/output streaming buffers
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,
-    // Control array for synchronization [status, stage_idx, shutdown, reserved] per cube
-    control: &mut Array<u32>,
+    // Control array for synchronization - one status per cube (head)
+    control: &mut Tensor<Atomic<u32>>,
     // Forward intermediates storage
     fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     #[comptime] config: D2dStreamingKernelConfig,
 ) {
-    let batch_idx = CUBE_POS_X as usize;
-    let head_idx = CUBE_POS_Y as usize;
-    let num_heads = CUBE_COUNT_Y as usize;
+    // Single cube iterates through all (batch, head) pairs to avoid workgroup starvation
+    let batch_count = inputs.xq.shape(0); // [batch, heads, seq, dim]
+    let num_heads = inputs.xq.shape(1);
     let epsilon = comptime!(config.fused.epsilon());
-    let mini_batch_len = comptime!(config.fused.mini_batch_len);
-    let head_dim = comptime!(config.fused.head_dim);
     let debug = comptime!(config.debug);
 
-    // Control array index for this cube
-    let ctrl_base = (batch_idx * num_heads + head_idx) * (CTRL_ARRAY_SIZE as usize);
+    // Single cube = single control index (CUBE_POS_X is always 0)
+    let ctrl_idx = CUBE_POS_X as usize;
 
     if comptime!(debug) {
-        if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
-            debug_print!(
-                "STREAM: kernel start batch=%u head=%u\n",
-                batch_idx,
-                head_idx
-            );
-        }
-    }
-
-    // Stride to advance by one mini-batch in the sequence dimension (in scalars)
-    let _stage_stride = mini_batch_len * head_dim;
-
-    // Compute base offsets for this (batch, head) pair
-    let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
-    let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
-    let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
-    let base_eta = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
-
-    // Initialize weight in shared memory from inputs.weight
-    let mut weight_smem = P::st_ff();
-    cube::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
-
-    sync_cube();
-
-    // Initialize bias in register vector from inputs.bias
-    let mut bias_rv = P::rvb_f_v();
-    cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
-
-    // Load layer norm params (constant across all stages)
-    let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-    let mut ln_weight_rv = P::rvb_f_v();
-    let mut ln_bias_rv = P::rvb_f_v();
-    cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
-    cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
-
-    if comptime!(debug) {
-        if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
-            debug_print!("STREAM: init done, entering main loop x=%u\n", batch_idx);
+        if UNIT_POS == 0 {
+            debug_print!("STREAM: kernel start cubes=%u\n", CUBE_COUNT_X);
         }
     }
 
     // Main processing loop
     loop {
-        // Only thread 0 polls for control flags, then broadcasts via sync_cube
+        // Poll for status change (only thread 0)
+        // Wait for READY (1) or SHUTDOWN (3), skip IDLE (0) and DONE (2)
         if UNIT_POS == 0 {
             loop {
-                // Check for shutdown first
-                if control[ctrl_base + CTRL_SHUTDOWN] != 0 {
-                    // Signal shutdown to other threads via READY = MAX
-                    control[ctrl_base + CTRL_READY] = u32::MAX;
-                    if comptime!(debug) {
-                        debug_print!("STREAM: shutdown received cube=%u\n", ctrl_base);
-                    }
-                    break;
-                }
-                // Check for ready
-                if control[ctrl_base + CTRL_READY] != 0 {
+                // System fence to invalidate cache and see fresh values from host
+                memory_fence_system();
+                let s = Atomic::load(&control[ctrl_idx]);
+                // Only break on READY (1) or SHUTDOWN (3)
+                if s == STATUS_READY || s == STATUS_SHUTDOWN {
                     break;
                 }
                 gpu_sleep(50u32);
             }
         }
 
+        // Broadcast status to all threads
         sync_cube();
+        let status = Atomic::load(&control[ctrl_idx]);
 
-        // Check if we should shutdown (thread 0 set READY to MAX)
-        if control[ctrl_base + CTRL_READY] == u32::MAX {
+        if status == STATUS_SHUTDOWN {
+            if comptime!(debug) {
+                if UNIT_POS == 0 {
+                    debug_print!("STREAM: shutdown received ctrl=%u\n", ctrl_idx);
+                }
+            }
             break;
         }
 
-        // Process the mini-batch
-        fused_ttt_forward_stage::<P>(
-            inputs,
-            outputs,
-            fwd_intermediates,
-            &mut weight_smem,
-            &mut bias_rv,
-            &ln_weight_rv,
-            &ln_bias_rv,
-            base_qkv,
-            base_eta,
-            epsilon,
-        );
-
-        sync_cube();
-
-        // Signal completion - only thread 0 writes
+        // Clear status to IDLE immediately to prevent host from seeing stale DONE
         if UNIT_POS == 0 {
-            control[ctrl_base + CTRL_READY] = 0;
-            control[ctrl_base + CTRL_DONE] = 1;
+            Atomic::store(&control[ctrl_idx], STATUS_IDLE);
         }
+        memory_fence_system();
+
+        // Iterate through all (batch, head) pairs - batch outer to match memory layout
+        for batch_idx in 0..batch_count {
+            for head_idx in 0..num_heads {
+                // Load layer norm params for this head
+                let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
+                let mut ln_weight_rv = P::rvb_f_v();
+                let mut ln_bias_rv = P::rvb_f_v();
+                cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
+                cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
+                // Compute base offsets for this (batch, head) pair
+                let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
+                let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
+                let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
+                let base_eta = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
+
+                // Initialize weight in shared memory from inputs.weight for this batch
+                let mut weight_smem = P::st_ff();
+                cube::load_st_direct(&inputs.weight, &mut weight_smem, base_weight, 0, 0);
+
+                sync_cube();
+
+                // Initialize bias in register vector from inputs.bias for this batch
+                let mut bias_rv = P::rvb_f_v();
+                cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
+
+                // Process the mini-batch
+                fused_ttt_forward_stage::<P>(
+                    inputs,
+                    outputs,
+                    fwd_intermediates,
+                    &mut weight_smem,
+                    &mut bias_rv,
+                    &ln_weight_rv,
+                    &ln_bias_rv,
+                    base_qkv,
+                    base_eta,
+                    epsilon,
+                );
+
+                sync_cube();
+
+                // Store updated weight and bias back to global memory
+                let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
+                let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
+                cube::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
+                cube::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
+
+                sync_cube();
+            }
+        }
+
+        // Mark as done after processing all (batch, head) pairs
+        if UNIT_POS == 0 {
+            Atomic::store(&control[ctrl_idx], STATUS_DONE);
+        }
+
+        // System fence to ensure DONE is visible to host
+        memory_fence_system();
 
         sync_cube();
     }
 
-    // Shutdown: store final weight and bias to global memory
-    let base_weight_out = index_2d(&outputs.weight_out, batch_idx, head_idx);
-    let base_bias_out = index_2d(&outputs.bias_out, batch_idx, head_idx);
-
-    cube::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
-    cube::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
-
     if comptime!(debug) {
-        if UNIT_POS == 0 && batch_idx == 0 && head_idx == 0 {
-            debug_print!("STREAM: kernel exit x=%u\n", batch_idx);
+        if UNIT_POS == 0 {
+            debug_print!("STREAM: kernel exit cubes=%u\n", CUBE_COUNT_X);
         }
     }
 }

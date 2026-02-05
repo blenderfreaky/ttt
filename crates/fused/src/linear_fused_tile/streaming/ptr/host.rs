@@ -9,7 +9,11 @@ use std::{
 };
 
 use burn::tensor::Shape;
-use burn_cubecl::{CubeRuntime, FloatElement, ops::numeric::empty_device, tensor::CubeTensor};
+use burn_cubecl::{
+    CubeRuntime, FloatElement,
+    ops::numeric::{empty_device, zeros_client},
+    tensor::CubeTensor,
+};
 use cubecl::{frontend::ArrayArg, prelude::*};
 use thundercube::{
     prelude::{D4, D8, D16, D32, D64, LINE_SIZE},
@@ -58,7 +62,7 @@ impl PtrStreamingConfig {
             head_dim,
             epsilon,
             threads,
-            debug: true, // Enable debug output
+            debug: std::env::var("PTR_STREAM_DEBUG").is_ok(),
         }
     }
 
@@ -227,6 +231,15 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let mini_batch_len = config.mini_batch_len;
         let head_dim = config.head_dim;
 
+        // Create kernel_client FIRST so we can allocate control on its stream.
+        // This ensures the kernel sees initialized zeros without cross-stream sync.
+        let mut kernel_client = client.clone();
+        let kernel_stream_id = next_persistent_kernel_stream_id();
+        trace!("ptr_stream: using kernel stream ID: {}", kernel_stream_id);
+        unsafe {
+            kernel_client.set_stream(kernel_stream_id);
+        }
+
         // Helper to allocate a tensor
         let alloc = |shape: Vec<usize>| {
             empty_device::<R, F>(client.clone(), device.clone(), Shape::from(shape))
@@ -234,13 +247,16 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let alloc_u64 = |shape: Vec<usize>| {
             empty_device::<R, u64>(client.clone(), device.clone(), Shape::from(shape))
         };
-        let alloc_u32 = |shape: Vec<usize>| {
-            empty_device::<R, u32>(client.clone(), device.clone(), Shape::from(shape))
-        };
 
         // --- Allocate all tensors ---
         let ptr_table = alloc_u64(vec![PTR_TABLE_SIZE]);
-        let control = alloc_u32(vec![num_cubes * CTRL_ARRAY_SIZE]);
+        // Allocate control on kernel_client's stream with zeros - kernel will see this
+        let control = zeros_client::<R>(
+            kernel_client.clone(),
+            device.clone(),
+            Shape::from([num_cubes * CTRL_ARRAY_SIZE]),
+            burn_backend::DType::U32,
+        );
 
         // Array buffers for HIP pointer loads
         let qkv_buf_size_per_cube = mini_batch_len * head_dim;
@@ -343,10 +359,6 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         let bias_ptr: GpuPtr<'static, f32> =
             unsafe { std::mem::transmute(stream.ptr::<f32, R>(&client, &bias.handle)) };
 
-        // Initialize control to IDLE
-        let zeros = vec![STATUS_IDLE; num_cubes * CTRL_ARRAY_SIZE];
-        stream.write(control_ptr, 0, &zeros);
-
         // Write output address to pointer table
         let output_addr = output_ptr.address();
         stream.write(ptr_table_ptr, PTR_OUTPUT, &[output_addr]);
@@ -424,16 +436,6 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             x_hat_ln,
             std_ln,
         };
-
-        // Create a separate client for the persistent kernel with its own stream ID.
-        // This prevents the persistent kernel from blocking normal operations on the main client.
-        let mut kernel_client = client.clone();
-        let kernel_stream_id = next_persistent_kernel_stream_id();
-        trace!("ptr_stream: using kernel stream ID: {}", kernel_stream_id);
-        // SAFETY: We're setting a unique stream ID that won't conflict with normal operations.
-        unsafe {
-            kernel_client.set_stream(kernel_stream_id);
-        }
 
         let state = Self {
             config,
@@ -606,52 +608,50 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
             self.config.num_cubes()
         );
 
-        // Signal READY to all cubes
+        // Signal READY to all cubes and sync to ensure visibility across streams
         let num_cubes = self.config.num_cubes();
         let ready_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_READY).collect();
         self.stream.write(self.control_ptr, 0, &ready_signals);
+        self.stream.sync();
     }
 
-    /// Wait for processing to complete and return output data.
-    pub fn wait_for_done(&self) -> Vec<f32> {
-        trace!("ptr_stream: wait_for_done start");
+    /// Wait for all cubes to complete using two-phase polling.
+    /// This prevents reading stale DONE values from previous iterations.
+    fn wait_for_cubes_done(&self) {
         let num_cubes = self.config.num_cubes();
-
-        // Poll until all cubes report DONE
-        loop {
-            let status = self.stream.read(self.control_ptr, 0, num_cubes);
-            trace!("ptr_stream: status: {:?}", status);
-            if status.iter().all(|&s| s == STATUS_DONE) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_micros(10));
+        if self.config.debug {
+            eprintln!("HOST: waiting for {} cubes DONE", num_cubes);
         }
 
-        trace!("ptr_stream: all cubes DONE, resetting to IDLE");
+        for cube in 0..num_cubes {
+            // First, wait for status to NOT be DONE (kernel started processing and cleared it)
+            loop {
+                let status = self.stream.read(self.control_ptr, cube, 1);
+                if status[0] != STATUS_DONE {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
 
-        // Reset control to IDLE
+            // Now poll for DONE
+            loop {
+                let status = self.stream.read(self.control_ptr, cube, 1);
+                if status[0] == STATUS_DONE {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+        }
+
+        if self.config.debug {
+            eprintln!("HOST: all cubes DONE, writing IDLE");
+        }
+
+        // Sync and reset to IDLE
+        self.stream.sync();
         let idle_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_IDLE).collect();
         self.stream.write(self.control_ptr, 0, &idle_signals);
-
-        // Read output
-        let output_len = self.config.batch_size
-            * self.config.num_heads
-            * self.config.mini_batch_len
-            * self.config.head_dim;
-        trace!("ptr_stream: reading output ({} elements)", output_len);
-        self.stream.read(self.output_ptr, 0, output_len)
-    }
-
-    /// Convenience method: feed and wait.
-    pub fn forward(
-        &mut self,
-        xq: &CubeTensor<R>,
-        xk: &CubeTensor<R>,
-        xv: &CubeTensor<R>,
-        ttt_lr_eta: &CubeTensor<R>,
-    ) -> Vec<f32> {
-        self.feed_mini_batch(xq, xk, xv, ttt_lr_eta);
-        self.wait_for_done()
+        self.stream.sync();
     }
 
     /// Feed inputs and wait, returning the output tensor directly.
@@ -662,25 +662,11 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
         xv: &CubeTensor<R>,
         ttt_lr_eta: &CubeTensor<R>,
     ) -> &CubeTensor<R> {
-        self.feed_mini_batch(xq, xk, xv, ttt_lr_eta);
-        // Wait for done but don't read to CPU
-        let num_cubes = self.config.num_cubes();
-        for cube in 0..num_cubes {
-            loop {
-                let status = self.stream.read(self.control_ptr, cube, 1);
-                if status[0] == STATUS_DONE {
-                    break;
-                }
-                std::hint::spin_loop();
-            }
+        if self.config.debug {
+            eprintln!("HOST: forward_tensor start");
         }
-        // Sync the AsyncStream to ensure control flag reads/writes are complete.
-        // The kernel writes output data BEFORE setting DONE (with atomic release),
-        // so if we read DONE, the output is ready.
-        self.stream.sync();
-        // Reset to IDLE
-        let idle_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_IDLE).collect();
-        self.stream.write(self.control_ptr, 0, &idle_signals);
+        self.feed_mini_batch(xq, xk, xv, ttt_lr_eta);
+        self.wait_for_cubes_done();
         &self.tensors.output
     }
 

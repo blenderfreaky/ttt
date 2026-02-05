@@ -3,14 +3,7 @@
 //! This implements the FusedKernel trait for `TttPtrStreamingKernel`, which uses
 //! a persistent GPU kernel with true zero-copy input via pointer tables.
 
-use std::{
-    fmt::Debug,
-    ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::{fmt::Debug, ops::Range, sync::Arc};
 
 use burn::{
     module::Ignored,
@@ -173,19 +166,20 @@ impl FusedKernel for TttPtrStreamingKernel {
         let output = state.forward_tensor(&xq, &xk, &xv, &ttt_lr_eta);
 
         trace!("ptr streaming forward complete");
-        // Make a true copy of the output; the kernel reuses its buffer for each mini-batch
-        // so we need to copy the data before it gets overwritten by the next call.
-        // Note: into_contiguous skips copy if already contiguous, so we force a copy
-        // using mul_scalar by 1.0 which allocates a new output buffer.
+        // Make true copies of output, weight, and bias; the kernel reuses its buffers
+        // and burn's tensor tracking can cause issues if we share memory with the kernel.
+        // We force copies using mul_scalar by 1.0 which allocates new output buffers.
         use burn_cubecl::ops::numeric::mul_scalar;
         use cubecl::prelude::InputScalar;
         let dtype = output.dtype;
         let output = mul_scalar(output.clone(), InputScalar::new(1.0f32, dtype));
+        let weight_out = mul_scalar(state.tensors.weight.clone(), InputScalar::new(1.0f32, dtype));
+        let bias_out = mul_scalar(state.tensors.bias.clone(), InputScalar::new(1.0f32, dtype));
 
         let outputs = TttTileOutputs {
             output,
-            weight_out: state.tensors.weight.clone(),
-            bias_out: state.tensors.bias.clone(),
+            weight_out,
+            bias_out,
             x_hat_fused: state.tensors.x_hat_fused.clone(),
             std_fused: state.tensors.std_fused.clone(),
             grad_output_fused: state.tensors.grad_output_fused.clone(),
@@ -210,13 +204,8 @@ impl FusedKernel for TttPtrStreamingKernel {
 // High-level API
 // ============================================================================
 
-/// Global counter for generating unique stream IDs for ptr streaming.
-static PTR_STREAM_ID_COUNTER: AtomicU64 = AtomicU64::new(1_000_000);
-
-/// Generate a unique stream ID for a new ptr streaming session.
-pub fn next_ptr_stream_id() -> u64 {
-    PTR_STREAM_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-}
+// Use shared stream ID counter from parent module
+use super::super::next_stream_id;
 
 /// High-level API for the ptr streaming TTT-Linear forward pass.
 #[allow(clippy::too_many_arguments)]
@@ -287,7 +276,7 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, PtrStreamin
     fn init_state(&self, batch_size: usize) -> Self::State {
         FusedTilePtrStreamingState {
             inner: self.inner.init_state(batch_size),
-            stream_handle: Ignored(PtrStreamHandle::new(next_ptr_stream_id())),
+            stream_handle: Ignored(PtrStreamHandle::new(next_stream_id())),
         }
     }
 

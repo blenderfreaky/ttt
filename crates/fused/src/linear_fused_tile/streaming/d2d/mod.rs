@@ -15,10 +15,10 @@ pub use host::{
     remove_d2d_streaming_state_by_id, shutdown_d2d_streaming_state,
 };
 pub use kernel::{
-    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN, D2dStreamingBuffers,
-    fused_ttt_d2d_streaming_kernel,
+    CTRL_ARRAY_SIZE, CTRL_STATUS, D2dStreamingBuffers, STATUS_DONE, STATUS_IDLE, STATUS_READY,
+    STATUS_SHUTDOWN, fused_ttt_d2d_streaming_kernel,
 };
 pub use wrapper::{
     D2dStreamingKernelConfig, FusedTileD2dStreamingState, StreamHandle, TttD2dStreamingKernel,
-    fused_ttt_d2d_streaming_forward, next_stream_id,
+    fused_ttt_d2d_streaming_forward,
 };

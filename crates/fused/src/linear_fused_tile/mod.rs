@@ -205,10 +205,10 @@ pub use layer_norm::{
 };
 #[cfg(all(feature = "rocm", feature = "streaming"))]
 pub use streaming::{
-    CTRL_ARRAY_SIZE, CTRL_DONE, CTRL_READY, CTRL_SHUTDOWN, D2dStreamingConfig,
-    D2dStreamingKernelConfig, PTR_CTRL_ARRAY_SIZE, PTR_TABLE_SIZE, PtrStreamingConfig,
-    PtrStreamingKernelConfig, PtrStreamingTensors, STATUS_DONE, STATUS_IDLE, STATUS_READY,
-    STATUS_SHUTDOWN, TttD2dStreamingKernel, TttD2dStreamingState, TttPtrStreamingKernel,
-    TttPtrStreamingState, fused_ttt_d2d_streaming_kernel, fused_ttt_streaming_ptr_kernel,
+    CTRL_ARRAY_SIZE, CTRL_STATUS, D2dStreamingConfig, D2dStreamingKernelConfig,
+    PTR_CTRL_ARRAY_SIZE, PTR_TABLE_SIZE, PtrStreamingConfig, PtrStreamingKernelConfig,
+    PtrStreamingTensors, STATUS_DONE, STATUS_IDLE, STATUS_READY, STATUS_SHUTDOWN,
+    TttD2dStreamingKernel, TttD2dStreamingState, TttPtrStreamingKernel, TttPtrStreamingState,
+    fused_ttt_d2d_streaming_kernel, fused_ttt_streaming_ptr_kernel,
     get_or_create_d2d_streaming_state,
 };
