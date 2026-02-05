@@ -21,11 +21,13 @@
 //! - `TTTTextGenerationModel` - Text generation model wrapper
 //! - `TTTTextGenerator` - Inference wrapper
 
+pub mod eval;
 pub mod inference;
 pub mod text_generation;
 pub mod training;
 
 // Re-export commonly used items
+pub use eval::{EvalResult, eval_pretokenized};
 pub use inference::{TTTTextGenerator, generate, interactive};
 pub use text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 pub use training::{TTTTrainingConfig, train_dataset, train_dataset_pretokenized};

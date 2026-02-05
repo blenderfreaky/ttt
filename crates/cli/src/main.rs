@@ -6,11 +6,11 @@ use clap_complete::{Shell, generate};
 use half::{bf16, f16};
 use ttt::{FusedTttBackend, artifact_info, metrics_export};
 use ttt_common::{DType, ModelArch, TrainParams};
-use ttt_core::{TrainingBackend, config::ModelConfig};
+use ttt_core::{GpuBackend, TrainingBackend, config::ModelConfig};
 use ttt_data::{Tokenizer, TokenizerTrait};
 use ttt_training::{
-    TTTTrainingConfig, generate as inference_generate, interactive, train_dataset,
-    train_dataset_pretokenized,
+    TTTTrainingConfig, eval_pretokenized, generate as inference_generate, interactive,
+    train_dataset, train_dataset_pretokenized,
 };
 
 /// Load a tokenizer from a HuggingFace model name or local file path.
@@ -62,6 +62,27 @@ enum Commands {
         /// Show detailed metrics for each epoch
         #[arg(long, short)]
         verbose: bool,
+    },
+    /// Evaluate a trained model on validation data
+    Eval {
+        /// Artifact directory containing the trained model
+        artifact_dir: String,
+        /// Override max sequence length (default: use training config value).
+        /// Use this to test how the model performs at longer contexts.
+        #[arg(long)]
+        max_seq_len: Option<usize>,
+        /// Number of validation samples to evaluate on
+        #[arg(long, default_value = "1000")]
+        samples: usize,
+        /// Batch size for evaluation
+        #[arg(long, default_value = "32")]
+        batch: usize,
+        /// Tokenizer: HuggingFace model name or local file path
+        #[arg(long, default_value = "gpt2")]
+        tokenizer: String,
+        /// Evaluate a specific checkpoint epoch instead of the final model
+        #[arg(long)]
+        checkpoint: Option<usize>,
     },
     /// Export training metrics to CSV for plotting
     ExportMetrics {
@@ -315,6 +336,60 @@ fn main() {
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("Error starting interactive session: {}", e);
+                }
+            }
+        }
+        Commands::Eval {
+            artifact_dir,
+            max_seq_len,
+            samples,
+            batch,
+            tokenizer,
+            checkpoint,
+        } => {
+            let device = Default::default();
+            let tokenizer_instance = load_tokenizer(&tokenizer);
+
+            // Load config to determine dtype
+            let config = TTTTrainingConfig::load(format!("{artifact_dir}/config.json"))
+                .unwrap_or_else(|e| panic!("Failed to load config: {e}"));
+
+            match config.model_config.ttt.dtype {
+                DType::F32 => {
+                    eval_pretokenized::<GpuBackend<f32>>(
+                        &device,
+                        &artifact_dir,
+                        &tokenizer_instance,
+                        &tokenizer,
+                        max_seq_len,
+                        samples,
+                        batch,
+                        checkpoint,
+                    );
+                }
+                DType::F16 => {
+                    eval_pretokenized::<GpuBackend<f16>>(
+                        &device,
+                        &artifact_dir,
+                        &tokenizer_instance,
+                        &tokenizer,
+                        max_seq_len,
+                        samples,
+                        batch,
+                        checkpoint,
+                    );
+                }
+                DType::BF16 => {
+                    eval_pretokenized::<GpuBackend<bf16>>(
+                        &device,
+                        &artifact_dir,
+                        &tokenizer_instance,
+                        &tokenizer,
+                        max_seq_len,
+                        samples,
+                        batch,
+                        checkpoint,
+                    );
                 }
             }
         }
