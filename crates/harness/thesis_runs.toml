@@ -19,12 +19,12 @@ batch = 32
 mini_batch_size = 32
 warmup_steps = 500
 max_seq_len = 1024
-lr = 1e-3
-grad_accum = 1
+lr = 4e-3
+grad_accum = 2
 seed = 42
-epochs = 2
+epochs = 4
 dtype = "bf16"
-out_prefix = "/workspace/runs"
+out_prefix = "/workspace/runs-2"
 
 # Individual training runs
 
@@ -94,11 +94,11 @@ layer_type = "mlp"
 mlp_expansion = 1
 ttt_base_lr = 0.1
 
-[[runs]]
-name = "mlp4-exp-8"
-layer_type = "mlp4"
-mlp_expansion = 8
-ttt_base_lr = 0.1
+# [[runs]]
+# name = "mlp4-exp-8"
+# layer_type = "mlp4"
+# mlp_expansion = 8
+# ttt_base_lr = 0.1
 
 [[runs]]
 name = "linear-adam-low-lr"
