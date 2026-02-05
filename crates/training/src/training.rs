@@ -5,9 +5,10 @@ use burn::{
         dataloader::{DataLoaderBuilder, batcher::Batcher},
         dataset::{Dataset, transform::SamplerDataset},
     },
+    grad_clipping::GradientClippingConfig,
     lr_scheduler::noam::NoamLrSchedulerConfig,
     module::{AutodiffModule, DisplaySettings, ModuleDisplay},
-    optim::AdamConfig,
+    optim::{AdamConfig, AdamWConfig},
     prelude::*,
     record::{CompactRecorder, DefaultRecorder, Recorder},
     tensor::backend::AutodiffBackend,
@@ -70,12 +71,13 @@ impl TTTTrainingConfig {
     }
 
     fn adam_config(&self) -> AdamConfig {
-        AdamConfig::new()
+        AdamWConfig::new()
             .with_beta_1(self.train.beta1)
             .with_beta_2(self.train.beta2)
             .with_weight_decay(Some(burn::optim::decay::WeightDecayConfig::new(
                 self.train.weight_decay.into(),
             )))
+            .with_grad_clipping(Some(GradientClippingConfig::Norm(1.0)))
     }
 }
 

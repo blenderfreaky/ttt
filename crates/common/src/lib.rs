@@ -326,8 +326,11 @@ pub struct TrainConfig {
     #[cfg_attr(feature = "clap", arg(long, default_value = "0.999", hide = true))]
     pub beta2: f32,
     #[serde(default = "default_weight_decay")]
-    #[cfg_attr(feature = "clap", arg(long, default_value = "0.0", hide = true))]
+    #[cfg_attr(feature = "clap", arg(long, default_value = "0.01", hide = true))]
     pub weight_decay: f32,
+    #[serde(default = "default_grad_clip_norm")]
+    #[cfg_attr(feature = "clap", arg(long, default_value = "1.0", hide = true))]
+    pub grad_clip_norm: f32,
 }
 
 fn default_batch() -> usize {
@@ -361,7 +364,10 @@ fn default_beta2() -> f32 {
     0.999
 }
 fn default_weight_decay() -> f32 {
-    0.0
+    0.01
+}
+fn default_grad_clip_norm() -> f32 {
+    1.0
 }
 
 impl Default for TrainConfig {
