@@ -49,6 +49,10 @@ required-features = ["test-utils", "rocm"]
 name = "hello_world"
 required-features = ["test-utils"]
 
+[[example]]
+name = "smem_liveness"
+required-features = ["test-utils"]
+
 [features]
 default = ["test-utils"]
 rocm = ["cubecl/hip", "dep:cubecl-hip-sys"]
