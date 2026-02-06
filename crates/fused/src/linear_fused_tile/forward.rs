@@ -5,9 +5,7 @@ use thundercube::{cube::ReduceBuf, prelude::*, reduction_ops::SumOp, util::index
 
 use super::{
     helpers::{ParamsTrait, RvbFV, StFF, build_eta_attn_fused, build_eta_matrix},
-    layer_norm::{
-        layer_norm_forward_stream_intermediates, layer_norm_l2_grad_stream_intermediates,
-    },
+    layer_norm::{layer_norm_forward, layer_norm_l2_grad},
 };
 use crate::FusedTttConfig;
 
@@ -30,26 +28,6 @@ pub struct Outputs<F: Float> {
     pub weight_out: Tensor<Line<F>>,
     pub bias_out: Tensor<Line<F>>,
 }
-
-/// Forward intermediates saved for backward pass.
-/// These are computed during forward and passed to backward to avoid recomputation.
-#[derive(CubeType, CubeLaunch)]
-pub struct ForwardIntermediates<F: Float> {
-    /// x_hat from fused LN (normalized Z1) [B, NH, CS, F]
-    pub x_hat_fused: Tensor<Line<F>>,
-    /// std from fused LN [B, NH, CS]
-    pub std_fused: Tensor<Line<F>>,
-    /// grad_output from fused LN (y - target) [B, NH, CS, F]
-    pub grad_output_fused: Tensor<Line<F>>,
-    /// grad_x_hat from fused LN (grad_output * ln_weight) [B, NH, CS, F]
-    pub grad_x_hat_fused: Tensor<Line<F>>,
-    /// grad_l_wrt_Z1 from fused LN [B, NH, CS, F]
-    pub grad_l_wrt_Z1: Tensor<Line<F>>,
-    /// x_hat from output LN (normalized Z1_bar) [B, NH, CS, F]
-    pub x_hat_ln: Tensor<Line<F>>,
-    /// std from output LN [B, NH, CS]
-    pub std_ln: Tensor<Line<F>>,
-}
 /// Process one mini-batch stage of the TTT-Linear forward pass.
 ///
 /// This is the inner loop body.
@@ -58,7 +36,6 @@ pub struct ForwardIntermediates<F: Float> {
 /// # Arguments
 /// * `inputs` - Input tensors (xq, xk, xv indexed by stage_offset)
 /// * `outputs` - Output tensor (indexed by stage_offset)
-/// * `fwd_intermediates` - Output tensors for forward intermediates (for backward pass)
 /// * `weight_smem` - Weight matrix in shared memory [F, F], updated in place
 /// * `bias_rv` - Bias vector in registers [F], updated in place (EVal for tensor I/O)
 /// * `ln_weight_rv` - Layer norm weight [F]
@@ -71,7 +48,6 @@ pub struct ForwardIntermediates<F: Float> {
 pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,
-    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     weight_smem: &mut StFF<P>,
     bias_rv: &mut RvbFV<P>,
     ln_weight_rv: &RvbFV<P>,
@@ -125,35 +101,14 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 3: grad_l_wrt_z1 = layer_norm_l2_grad(z1, reconstruction_target)
-    let std_fused_rv = layer_norm_l2_grad_stream_intermediates::<P::EVal, P::EAcc, P::CS, P::F>(
+    layer_norm_l2_grad::<P::EVal, P::EAcc, P::CS, P::F>(
         &mut z1_smem,
         &v_direct_smem,
         ln_weight_rv,
         ln_bias_rv,
         &mut temp_cs_f_smem,
-        &mut k_direct_smem,
         &mut reduce_buf,
-        &mut fwd_intermediates.x_hat_fused,
-        &mut fwd_intermediates.grad_output_fused,
-        &mut fwd_intermediates.grad_x_hat_fused,
-        stage_offset,
         epsilon,
-    );
-
-    sync_cube();
-
-    // Store std_fused and grad_l_wrt_Z1
-    cube::broadcast::store_rv_direct(
-        &std_fused_rv,
-        &mut fwd_intermediates.std_fused,
-        ttt_lr_eta_idx,
-    );
-    cube::store_st_direct(
-        &z1_smem,
-        &mut fwd_intermediates.grad_l_wrt_Z1,
-        stage_offset,
-        0,
-        0,
     );
 
     sync_cube();
@@ -214,21 +169,13 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Step 8: layer_norm + add xq
-    // Streams x_hat_ln directly to global memory
-    let std_ln_rv = layer_norm_forward_stream_intermediates::<P::EVal, P::EAcc, P::CS, P::F>(
+    layer_norm_forward::<P::EVal, P::EAcc, P::CS, P::F>(
         &mut temp_cs_f_smem,
         ln_weight_rv,
         ln_bias_rv,
         &mut reduce_buf,
-        &mut fwd_intermediates.x_hat_ln,
-        stage_offset,
         epsilon,
     );
-
-    sync_cube();
-
-    // Store std_ln
-    cube::broadcast::store_rv_direct(&std_ln_rv, &mut fwd_intermediates.std_ln, ttt_lr_eta_idx);
 
     sync_cube();
 
@@ -325,7 +272,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,
-    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     #[comptime] config: FusedTttConfig,
 ) {
     let batch_idx = CUBE_POS_X as usize;
@@ -359,7 +305,6 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     fused_ttt_forward_stage::<P>(
         inputs,
         outputs,
-        fwd_intermediates,
         &mut weight_smem,
         &mut bias_rv,
         &ln_weight_rv,
@@ -391,7 +336,6 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,
-    fwd_intermediates: &mut ForwardIntermediates<P::EVal>,
     num_stages: u32,
     #[comptime] config: FusedTttConfig,
 ) {
@@ -435,7 +379,6 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
         fused_ttt_forward_stage::<P>(
             inputs,
             outputs,
-            fwd_intermediates,
             &mut weight_smem,
             &mut bias_rv,
             &ln_weight_rv,

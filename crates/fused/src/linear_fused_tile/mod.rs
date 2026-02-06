@@ -190,11 +190,11 @@ mod tests;
 
 pub use api::{fused_ttt_tile_forward, fused_ttt_tile_forward_multi};
 pub use forward::{
-    ForwardIntermediates, Inputs, Outputs, fused_ttt_forward_kernel,
+    Inputs, Outputs, fused_ttt_forward_kernel,
     fused_ttt_forward_kernel_multi, fused_ttt_forward_stage,
 };
 pub use launch::{
-    FwdIntermediates, TttGradInputs, TttSavedTensors, TttTileKernel, TttTileMultiKernel, backward,
+    TttGradInputs, TttSavedTensors, TttTileKernel, TttTileMultiKernel, backward,
     backward_multi, forward, forward_multi, launch_tile_backward, launch_tile_backward_multi,
     launch_tile_forward, launch_tile_forward_multi,
 };

@@ -39,7 +39,7 @@ impl_reduction_ops! {
 /// - `x` contains x_hat (normalized, zero mean, unit variance)
 /// - returned `std` contains the standard deviation per row
 #[cube]
-fn normalize_to_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+pub fn normalize_to_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
     x: &mut St<FVal, R, C>,
     buf: &mut ReduceBuf<FAcc>,
     #[comptime] epsilon: f32,
@@ -87,7 +87,7 @@ fn normalize_to_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
 /// * `std` - Standard deviation per row [R]
 /// * `temp` - Scratch tile [R, C]
 #[cube]
-fn compute_grad_x_from_grad_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
+pub fn compute_grad_x_from_grad_x_hat<FVal: Float, FAcc: Float, R: Dim, C: Dim>(
     grad_x_hat: &St<FVal, R, C>,
     x_hat: &mut St<FVal, R, C>,
     std: &Rv<FVal, R>,

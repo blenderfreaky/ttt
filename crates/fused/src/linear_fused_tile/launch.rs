@@ -15,13 +15,10 @@ use ttt_kernels::{TensorBundle, kernel::FusedKernel, tensor_bundle, util::empty_
 
 use super::{
     backward::{
-        GradOutputsLaunch, SavedTensorsLaunch, fused_ttt_backward_kernel,
-        fused_ttt_backward_kernel_multi,
+        GradOutputsLaunch, RecomputationInputsLaunch, SavedTensorsLaunch,
+        fused_ttt_backward_kernel, fused_ttt_backward_kernel_multi,
     },
-    forward::{
-        ForwardIntermediatesLaunch, InputsLaunch, OutputsLaunch, fused_ttt_forward_kernel,
-        fused_ttt_forward_kernel_multi,
-    },
+    forward::{InputsLaunch, OutputsLaunch, fused_ttt_forward_kernel, fused_ttt_forward_kernel_multi},
     helpers::Params,
 };
 use crate::{
@@ -31,25 +28,15 @@ use crate::{
 
 tensor_bundle! {
     /// Saved state for backward pass.
-    /// Contains 6 saved inputs + 7 forward intermediates = 13 tensors.
+    /// Contains all inputs needed for activation recomputation.
+    /// No forward intermediates are saved - they are recomputed during backward.
     pub struct TttSavedState {
-        // Saved inputs (subset needed for backward)
-        xq, xk, weight_init, token_eta, ttt_lr_eta, ln_weight,
-        // Forward intermediates
-        x_hat_fused, std_fused, grad_output_fused, grad_x_hat_fused, grad_l_wrt_Z1, x_hat_ln, std_ln
+        // Saved inputs for recomputation
+        xq, xk, xv,           // All three projections (xv for target = xv - xk)
+        weight_init, bias,    // Initial weight and bias for recomputation
+        token_eta, ttt_lr_eta,
+        ln_weight, ln_bias    // Layer norm params for recomputation
     }
-}
-
-/// Forward intermediates needed for backward pass.
-#[derive(Debug, Clone)]
-pub struct FwdIntermediates<T> {
-    pub x_hat_fused: T,
-    pub std_fused: T,
-    pub grad_output_fused: T,
-    pub grad_x_hat_fused: T,
-    pub grad_l_wrt_Z1: T,
-    pub x_hat_ln: T,
-    pub std_ln: T,
 }
 
 // TODO: 64 subtiles (full cubes?)
@@ -81,14 +68,6 @@ pub fn launch_tile_forward<R: Runtime, F: Float + CubeElement>(
     output: TensorHandleRef<R>,
     weight_out: TensorHandleRef<R>,
     bias_out: TensorHandleRef<R>,
-    // Forward intermediates
-    x_hat_fused: TensorHandleRef<R>,
-    std_fused: TensorHandleRef<R>,
-    grad_output_fused: TensorHandleRef<R>,
-    grad_x_hat_fused: TensorHandleRef<R>,
-    grad_l_wrt_Z1: TensorHandleRef<R>,
-    x_hat_ln: TensorHandleRef<R>,
-    std_ln: TensorHandleRef<R>,
     config: FusedTttConfig,
 ) {
     let batch_size = xq.shape[0] as u32;
@@ -120,16 +99,6 @@ pub fn launch_tile_forward<R: Runtime, F: Float + CubeElement>(
         bias_out.as_tensor_arg(vectorization),
     );
 
-    let fwd_intermediates_launch = ForwardIntermediatesLaunch::<F, R>::new(
-        x_hat_fused.as_tensor_arg(vectorization),
-        std_fused.as_tensor_arg(vectorization),
-        grad_output_fused.as_tensor_arg(vectorization),
-        grad_x_hat_fused.as_tensor_arg(vectorization),
-        grad_l_wrt_Z1.as_tensor_arg(vectorization),
-        x_hat_ln.as_tensor_arg(vectorization),
-        std_ln.as_tensor_arg(vectorization),
-    );
-
     tile_dispatch!(
         fused_ttt_forward_kernel,
         client,
@@ -139,7 +108,6 @@ pub fn launch_tile_forward<R: Runtime, F: Float + CubeElement>(
         config.threads,
         inputs_launch,
         outputs_launch,
-        fwd_intermediates_launch,
         config
     );
 }
@@ -147,24 +115,21 @@ pub fn launch_tile_forward<R: Runtime, F: Float + CubeElement>(
 /// Launch the tiled TTT backward kernel.
 ///
 /// Supports same tile configurations as forward.
+/// Recomputes forward intermediates from saved inputs instead of loading them.
 #[allow(clippy::too_many_arguments)]
 pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
     client: &ComputeClient<R>,
-    // Saved tensors from forward
+    // Saved tensors from forward (for backward computation)
     xq: TensorHandleRef<R>,
     xk: TensorHandleRef<R>,
     weight_init: TensorHandleRef<R>,
     token_eta: TensorHandleRef<R>,
     ttt_lr_eta: TensorHandleRef<R>,
     ln_weight: TensorHandleRef<R>,
-    // Forward intermediates
-    x_hat_fused: TensorHandleRef<R>,
-    std_fused: TensorHandleRef<R>,
-    grad_output_fused: TensorHandleRef<R>,
-    grad_x_hat_fused: TensorHandleRef<R>,
-    grad_l_wrt_Z1: TensorHandleRef<R>,
-    x_hat_ln: TensorHandleRef<R>,
-    std_ln: TensorHandleRef<R>,
+    // Additional inputs for recomputation
+    xv: TensorHandleRef<R>,
+    bias: TensorHandleRef<R>,
+    ln_bias: TensorHandleRef<R>,
     // Upstream gradient
     grad_output: TensorHandleRef<R>,
     // Output gradients
@@ -198,14 +163,10 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
         ln_weight.as_tensor_arg(vectorization),
     );
 
-    let fwd_launch = ForwardIntermediatesLaunch::<F, R>::new(
-        x_hat_fused.as_tensor_arg(vectorization),
-        std_fused.as_tensor_arg(vectorization),
-        grad_output_fused.as_tensor_arg(vectorization),
-        grad_x_hat_fused.as_tensor_arg(vectorization),
-        grad_l_wrt_Z1.as_tensor_arg(vectorization),
-        x_hat_ln.as_tensor_arg(vectorization),
-        std_ln.as_tensor_arg(vectorization),
+    let recompute_launch = RecomputationInputsLaunch::<F, R>::new(
+        xv.as_tensor_arg(vectorization),
+        bias.as_tensor_arg(vectorization),
+        ln_bias.as_tensor_arg(vectorization),
     );
 
     let grad_output_arg = grad_output.as_tensor_arg(vectorization);
@@ -230,7 +191,7 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
         head_dim,
         config.threads,
         saved_launch,
-        fwd_launch,
+        recompute_launch,
         grad_output_arg,
         grads_launch,
         config
@@ -242,29 +203,19 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
 /// Supports multiple tile configurations based on (seq_len, head_dim):
 /// - 8×32, 8×64, 16×32, 16×64, 16×128, 32×32, 32×64
 ///
-/// Returns both the outputs and forward intermediates needed for backward.
+/// Returns the outputs. Forward intermediates are recomputed during backward.
 pub fn forward<R: CubeRuntime, F: FloatElement>(
     inputs: TttInputs<CubeTensor<R>>,
     config: FusedTttConfig,
-) -> (TttOutputs<CubeTensor<R>>, FwdIntermediates<CubeTensor<R>>) {
+) -> TttOutputs<CubeTensor<R>> {
     let inputs = inputs.map(into_contiguous);
 
     let shape = inputs.xq.shape.clone();
-    let [batch_size, num_heads, seq_len, _head_dim] = shape.dims();
 
     // Allocate output tensors
     let output = empty_like::<R, F>(&inputs.xq, shape.clone());
     let weight_out = empty_like::<R, F>(&inputs.weight, inputs.weight.shape.clone());
     let bias_out = empty_like::<R, F>(&inputs.bias, inputs.bias.shape.clone());
-
-    // Allocate forward intermediate tensors
-    let x_hat_fused = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let std_fused = empty_like::<R, F>(&inputs.ttt_lr_eta, [batch_size, num_heads, seq_len]);
-    let grad_output_fused = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let grad_x_hat_fused = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let grad_l_wrt_Z1 = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let x_hat_ln = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let std_ln = empty_like::<R, F>(&inputs.ttt_lr_eta, [batch_size, num_heads, seq_len]);
 
     launch_tile_forward::<R, F>(
         &inputs.xq.client,
@@ -280,43 +231,28 @@ pub fn forward<R: CubeRuntime, F: FloatElement>(
         output.as_handle_ref(),
         weight_out.as_handle_ref(),
         bias_out.as_handle_ref(),
-        x_hat_fused.as_handle_ref(),
-        std_fused.as_handle_ref(),
-        grad_output_fused.as_handle_ref(),
-        grad_x_hat_fused.as_handle_ref(),
-        grad_l_wrt_Z1.as_handle_ref(),
-        x_hat_ln.as_handle_ref(),
-        std_ln.as_handle_ref(),
         config,
     );
 
-    (
-        TttOutputs {
-            output,
-            weight: weight_out,
-            bias: bias_out,
-        },
-        FwdIntermediates {
-            x_hat_fused,
-            std_fused,
-            grad_output_fused,
-            grad_x_hat_fused,
-            grad_l_wrt_Z1,
-            x_hat_ln,
-            std_ln,
-        },
-    )
+    TttOutputs {
+        output,
+        weight: weight_out,
+        bias: bias_out,
+    }
 }
 
-/// Saved tensors needed for backward pass.
+/// Saved tensors needed for backward pass (for recomputation).
 #[derive(Debug, Clone)]
 pub struct TttSavedTensors<T> {
     pub xq: T,
     pub xk: T,
+    pub xv: T,
     pub weight_init: T,
+    pub bias: T,
     pub token_eta: T,
     pub ttt_lr_eta: T,
     pub ln_weight: T,
+    pub ln_bias: T,
 }
 
 /// Gradient inputs for backward pass.
@@ -334,11 +270,10 @@ pub struct TttGradInputs<T> {
 
 /// Backward pass using the tiled kernel.
 ///
-/// Takes saved tensors from forward, forward intermediates, and upstream gradients,
-/// returns gradients w.r.t. all inputs.
+/// Recomputes forward intermediates from saved inputs.
+/// Takes saved tensors and upstream gradients, returns gradients w.r.t. all inputs.
 pub fn backward<R: CubeRuntime, F: FloatElement>(
     saved: TttSavedTensors<CubeTensor<R>>,
-    fwd: FwdIntermediates<CubeTensor<R>>,
     grad_output: CubeTensor<R>,
     epsilon: f32,
     threads: usize,
@@ -386,13 +321,9 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         saved.token_eta.as_handle_ref(),
         saved.ttt_lr_eta.as_handle_ref(),
         saved.ln_weight.as_handle_ref(),
-        fwd.x_hat_fused.as_handle_ref(),
-        fwd.std_fused.as_handle_ref(),
-        fwd.grad_output_fused.as_handle_ref(),
-        fwd.grad_x_hat_fused.as_handle_ref(),
-        fwd.grad_l_wrt_Z1.as_handle_ref(),
-        fwd.x_hat_ln.as_handle_ref(),
-        fwd.std_ln.as_handle_ref(),
+        saved.xv.as_handle_ref(),
+        saved.bias.as_handle_ref(),
+        saved.ln_bias.as_handle_ref(),
         grad_output.as_handle_ref(),
         grad_xq.as_handle_ref(),
         grad_xk.as_handle_ref(),
@@ -424,6 +355,7 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
 /// Launch the multi-stage tiled TTT backward kernel.
 ///
 /// Processes `num_stages` mini-batches in reverse order (backward through time).
+/// Recomputes forward intermediates from saved inputs.
 #[allow(clippy::too_many_arguments)]
 pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
     client: &ComputeClient<R>,
@@ -434,14 +366,10 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
     token_eta: TensorHandleRef<R>,
     ttt_lr_eta: TensorHandleRef<R>,
     ln_weight: TensorHandleRef<R>,
-    // Forward intermediates
-    x_hat_fused: TensorHandleRef<R>,
-    std_fused: TensorHandleRef<R>,
-    grad_output_fused: TensorHandleRef<R>,
-    grad_x_hat_fused: TensorHandleRef<R>,
-    grad_l_wrt_Z1: TensorHandleRef<R>,
-    x_hat_ln: TensorHandleRef<R>,
-    std_ln: TensorHandleRef<R>,
+    // Additional inputs for recomputation
+    xv: TensorHandleRef<R>,
+    bias: TensorHandleRef<R>,
+    ln_bias: TensorHandleRef<R>,
     // Upstream gradient
     grad_output: TensorHandleRef<R>,
     // Output gradients
@@ -476,14 +404,10 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
         ln_weight.as_tensor_arg(vectorization),
     );
 
-    let fwd_launch = ForwardIntermediatesLaunch::<F, R>::new(
-        x_hat_fused.as_tensor_arg(vectorization),
-        std_fused.as_tensor_arg(vectorization),
-        grad_output_fused.as_tensor_arg(vectorization),
-        grad_x_hat_fused.as_tensor_arg(vectorization),
-        grad_l_wrt_Z1.as_tensor_arg(vectorization),
-        x_hat_ln.as_tensor_arg(vectorization),
-        std_ln.as_tensor_arg(vectorization),
+    let recompute_launch = RecomputationInputsLaunch::<F, R>::new(
+        xv.as_tensor_arg(vectorization),
+        bias.as_tensor_arg(vectorization),
+        ln_bias.as_tensor_arg(vectorization),
     );
 
     let grad_output_arg = grad_output.as_tensor_arg(vectorization);
@@ -508,7 +432,7 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
         head_dim,
         config.threads,
         saved_launch,
-        fwd_launch,
+        recompute_launch,
         grad_output_arg,
         grads_launch,
         ScalarArg::new(num_stages as u32),
@@ -520,9 +444,9 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
 ///
 /// Processes the full sequence in reverse order by dividing it into
 /// mini-batches and processing them backward through time.
+/// Recomputes forward intermediates from saved inputs.
 pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
     saved: TttSavedTensors<CubeTensor<R>>,
-    fwd: FwdIntermediates<CubeTensor<R>>,
     grad_output: CubeTensor<R>,
     mini_batch_len: usize,
     epsilon: f32,
@@ -580,13 +504,9 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         saved.token_eta.as_handle_ref(),
         saved.ttt_lr_eta.as_handle_ref(),
         saved.ln_weight.as_handle_ref(),
-        fwd.x_hat_fused.as_handle_ref(),
-        fwd.std_fused.as_handle_ref(),
-        fwd.grad_output_fused.as_handle_ref(),
-        fwd.grad_x_hat_fused.as_handle_ref(),
-        fwd.grad_l_wrt_Z1.as_handle_ref(),
-        fwd.x_hat_ln.as_handle_ref(),
-        fwd.std_ln.as_handle_ref(),
+        saved.xv.as_handle_ref(),
+        saved.bias.as_handle_ref(),
+        saved.ln_bias.as_handle_ref(),
         grad_output.as_handle_ref(),
         grad_xq.as_handle_ref(),
         grad_xk.as_handle_ref(),
@@ -635,14 +555,6 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
     output: TensorHandleRef<R>,
     weight_out: TensorHandleRef<R>,
     bias_out: TensorHandleRef<R>,
-    // Forward intermediates
-    x_hat_fused: TensorHandleRef<R>,
-    std_fused: TensorHandleRef<R>,
-    grad_output_fused: TensorHandleRef<R>,
-    grad_x_hat_fused: TensorHandleRef<R>,
-    grad_l_wrt_Z1: TensorHandleRef<R>,
-    x_hat_ln: TensorHandleRef<R>,
-    std_ln: TensorHandleRef<R>,
     config: FusedTttConfig,
     num_stages: usize,
 ) {
@@ -675,16 +587,6 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
         bias_out.as_tensor_arg(vectorization),
     );
 
-    let fwd_intermediates_launch = ForwardIntermediatesLaunch::<F, R>::new(
-        x_hat_fused.as_tensor_arg(vectorization),
-        std_fused.as_tensor_arg(vectorization),
-        grad_output_fused.as_tensor_arg(vectorization),
-        grad_x_hat_fused.as_tensor_arg(vectorization),
-        grad_l_wrt_Z1.as_tensor_arg(vectorization),
-        x_hat_ln.as_tensor_arg(vectorization),
-        std_ln.as_tensor_arg(vectorization),
-    );
-
     tile_dispatch!(
         fused_ttt_forward_kernel_multi,
         client,
@@ -694,7 +596,6 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
         config.threads,
         inputs_launch,
         outputs_launch,
-        fwd_intermediates_launch,
         ScalarArg::new(num_stages as u32),
         config
     );
@@ -709,15 +610,15 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
 /// * `inputs` - Input tensors with seq_len = mini_batch_len * num_stages
 /// * `mini_batch_len` - Size of each mini-batch (must be a supported tile size)
 ///
-/// Returns both the outputs and forward intermediates needed for backward.
+/// Returns the outputs. Forward intermediates are recomputed during backward.
 pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
     inputs: TttInputs<CubeTensor<R>>,
     config: FusedTttConfig,
-) -> (TttOutputs<CubeTensor<R>>, FwdIntermediates<CubeTensor<R>>) {
+) -> TttOutputs<CubeTensor<R>> {
     let inputs = inputs.map(into_contiguous);
 
     let shape = inputs.xq.shape.clone();
-    let [batch_size, num_heads, seq_len, _head_dim] = shape.dims();
+    let [_batch_size, _num_heads, seq_len, _head_dim] = shape.dims();
     let mini_batch_len = config.mini_batch_len;
 
     assert_eq!(
@@ -734,15 +635,6 @@ pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
     let weight_out = empty_like::<R, F>(&inputs.weight, inputs.weight.shape.clone());
     let bias_out = empty_like::<R, F>(&inputs.bias, inputs.bias.shape.clone());
 
-    // Allocate forward intermediate tensors
-    let x_hat_fused = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let std_fused = empty_like::<R, F>(&inputs.ttt_lr_eta, [batch_size, num_heads, seq_len]);
-    let grad_output_fused = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let grad_x_hat_fused = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let grad_l_wrt_Z1 = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let x_hat_ln = empty_like::<R, F>(&inputs.xq, shape.clone());
-    let std_ln = empty_like::<R, F>(&inputs.ttt_lr_eta, [batch_size, num_heads, seq_len]);
-
     launch_tile_forward_multi::<R, F>(
         &inputs.xq.client,
         inputs.xq.as_handle_ref(),
@@ -757,33 +649,15 @@ pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
         output.as_handle_ref(),
         weight_out.as_handle_ref(),
         bias_out.as_handle_ref(),
-        x_hat_fused.as_handle_ref(),
-        std_fused.as_handle_ref(),
-        grad_output_fused.as_handle_ref(),
-        grad_x_hat_fused.as_handle_ref(),
-        grad_l_wrt_Z1.as_handle_ref(),
-        x_hat_ln.as_handle_ref(),
-        std_ln.as_handle_ref(),
         config,
         num_stages,
     );
 
-    (
-        TttOutputs {
-            output,
-            weight: weight_out,
-            bias: bias_out,
-        },
-        FwdIntermediates {
-            x_hat_fused,
-            std_fused,
-            grad_output_fused,
-            grad_x_hat_fused,
-            grad_l_wrt_Z1,
-            x_hat_ln,
-            std_ln,
-        },
-    )
+    TttOutputs {
+        output,
+        weight: weight_out,
+        bias: bias_out,
+    }
 }
 
 impl FusedKernel for TttTileKernel {
@@ -797,32 +671,19 @@ impl FusedKernel for TttTileKernel {
         config: FusedTttConfig,
     ) -> (TttOutputs<CubeTensor<R>>, TttSavedState<CubeTensor<R>>) {
         // Clone inputs needed for saved state before moving into forward
-        let saved_inputs = TttSavedTensors {
+        let saved = TttSavedState {
             xq: inputs.xq.clone(),
             xk: inputs.xk.clone(),
+            xv: inputs.xv.clone(),
             weight_init: inputs.weight.clone(),
+            bias: inputs.bias.clone(),
             token_eta: inputs.token_eta.clone(),
             ttt_lr_eta: inputs.ttt_lr_eta.clone(),
             ln_weight: inputs.ln_weight.clone(),
+            ln_bias: inputs.ln_bias.clone(),
         };
 
-        let (outputs, fwd) = forward::<R, F>(inputs, config);
-
-        let saved = TttSavedState {
-            xq: saved_inputs.xq,
-            xk: saved_inputs.xk,
-            weight_init: saved_inputs.weight_init,
-            token_eta: saved_inputs.token_eta,
-            ttt_lr_eta: saved_inputs.ttt_lr_eta,
-            ln_weight: saved_inputs.ln_weight,
-            x_hat_fused: fwd.x_hat_fused,
-            std_fused: fwd.std_fused,
-            grad_output_fused: fwd.grad_output_fused,
-            grad_x_hat_fused: fwd.grad_x_hat_fused,
-            grad_l_wrt_Z1: fwd.grad_l_wrt_Z1,
-            x_hat_ln: fwd.x_hat_ln,
-            std_ln: fwd.std_ln,
-        };
+        let outputs = forward::<R, F>(inputs, config);
 
         (outputs, saved)
     }
@@ -839,24 +700,17 @@ impl FusedKernel for TttTileKernel {
         let saved_tensors = TttSavedTensors {
             xq: saved.xq,
             xk: saved.xk,
+            xv: saved.xv,
             weight_init: saved.weight_init,
+            bias: saved.bias,
             token_eta: saved.token_eta,
             ttt_lr_eta: saved.ttt_lr_eta,
             ln_weight: saved.ln_weight,
-        };
-
-        let fwd = FwdIntermediates {
-            x_hat_fused: saved.x_hat_fused,
-            std_fused: saved.std_fused,
-            grad_output_fused: saved.grad_output_fused,
-            grad_x_hat_fused: saved.grad_x_hat_fused,
-            grad_l_wrt_Z1: saved.grad_l_wrt_Z1,
-            x_hat_ln: saved.x_hat_ln,
-            std_ln: saved.std_ln,
+            ln_bias: saved.ln_bias,
         };
 
         let grad_inputs =
-            backward::<R, F>(saved_tensors, fwd, grad_outputs.output, epsilon, threads);
+            backward::<R, F>(saved_tensors, grad_outputs.output, epsilon, threads);
 
         // TODO: token_eta gradient is currently zeros (not computed by backward kernel)
         let grad_token_eta = empty_like::<R, F>(&grad_inputs.grad_xq, token_eta_shape);
@@ -892,32 +746,19 @@ impl FusedKernel for TttTileMultiKernel {
         );
 
         // Clone inputs needed for saved state before moving into forward
-        let saved_inputs = TttSavedTensors {
+        let saved = TttSavedState {
             xq: inputs.xq.clone(),
             xk: inputs.xk.clone(),
+            xv: inputs.xv.clone(),
             weight_init: inputs.weight.clone(),
+            bias: inputs.bias.clone(),
             token_eta: inputs.token_eta.clone(),
             ttt_lr_eta: inputs.ttt_lr_eta.clone(),
             ln_weight: inputs.ln_weight.clone(),
+            ln_bias: inputs.ln_bias.clone(),
         };
 
-        let (outputs, fwd) = forward_multi::<R, F>(inputs, config);
-
-        let saved = TttSavedState {
-            xq: saved_inputs.xq,
-            xk: saved_inputs.xk,
-            weight_init: saved_inputs.weight_init,
-            token_eta: saved_inputs.token_eta,
-            ttt_lr_eta: saved_inputs.ttt_lr_eta,
-            ln_weight: saved_inputs.ln_weight,
-            x_hat_fused: fwd.x_hat_fused,
-            std_fused: fwd.std_fused,
-            grad_output_fused: fwd.grad_output_fused,
-            grad_x_hat_fused: fwd.grad_x_hat_fused,
-            grad_l_wrt_Z1: fwd.grad_l_wrt_Z1,
-            x_hat_ln: fwd.x_hat_ln,
-            std_ln: fwd.std_ln,
-        };
+        let outputs = forward_multi::<R, F>(inputs, config);
 
         (outputs, saved)
     }
@@ -940,25 +781,17 @@ impl FusedKernel for TttTileMultiKernel {
         let saved_tensors = TttSavedTensors {
             xq: saved.xq,
             xk: saved.xk,
+            xv: saved.xv,
             weight_init: saved.weight_init,
+            bias: saved.bias,
             token_eta: saved.token_eta,
             ttt_lr_eta: saved.ttt_lr_eta,
             ln_weight: saved.ln_weight,
-        };
-
-        let fwd = FwdIntermediates {
-            x_hat_fused: saved.x_hat_fused,
-            std_fused: saved.std_fused,
-            grad_output_fused: saved.grad_output_fused,
-            grad_x_hat_fused: saved.grad_x_hat_fused,
-            grad_l_wrt_Z1: saved.grad_l_wrt_Z1,
-            x_hat_ln: saved.x_hat_ln,
-            std_ln: saved.std_ln,
+            ln_bias: saved.ln_bias,
         };
 
         let grad_inputs = backward_multi::<R, F>(
             saved_tensors,
-            fwd,
             grad_outputs.output,
             mini_batch_len,
             epsilon,
