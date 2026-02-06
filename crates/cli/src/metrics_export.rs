@@ -179,82 +179,92 @@ fn collect_split_metrics(dir: &Path, split: &str, config: &ExportConfig) -> Vec<
         return Vec::new();
     }
 
-    let mut rows = Vec::new();
+    let num_metrics = config.metrics.len();
+
+    // Phase 1: Load raw data across all epochs with global_step assignment
+    let mut per_metric_raw: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_metrics];
+    let mut epoch_boundaries: Vec<(usize, usize)> = Vec::new(); // (epoch, start_global_step)
     let mut global_step_offset = 0;
 
-    for (epoch, epoch_path) in epochs {
-        // Load all requested metrics for this epoch
-        let mut metric_data: Vec<Option<Vec<(usize, f64)>>> = Vec::new();
+    for (epoch, epoch_path) in &epochs {
+        epoch_boundaries.push((*epoch, global_step_offset));
+        let mut max_step_this_epoch: usize = 0;
 
-        for metric_type in &config.metrics {
+        for (metric_idx, metric_type) in config.metrics.iter().enumerate() {
             let log_path = epoch_path.join(metric_type.filename());
-            let data = parse_metric_log_with_steps(&log_path);
-
-            // Apply smoothing and downsampling
-            let data = data.map(|mut d| {
-                if let Some(window) = config.window {
-                    d = apply_rolling_average(&d, window);
+            if let Some(data) = parse_metric_log_with_steps(&log_path) {
+                for &(step, value) in &data {
+                    let global_step = global_step_offset + step;
+                    per_metric_raw[metric_idx].push((global_step, value));
+                    max_step_this_epoch = max_step_this_epoch.max(step);
                 }
-                if let Some(target) = config.target_points {
-                    d = downsample_buckets(&d, target);
-                }
-                d
-            });
-
-            metric_data.push(data);
+            }
         }
 
-        // Find the maximum number of steps across all metrics
-        let max_steps = metric_data
-            .iter()
-            .filter_map(|d| d.as_ref().map(|v| v.len()))
-            .max()
-            .unwrap_or(0);
+        global_step_offset += max_step_this_epoch;
+    }
 
-        if max_steps == 0 {
+    // Phase 2: Apply smoothing and downsampling across the FULL series (not per-epoch)
+    let per_metric_processed: Vec<Vec<(usize, f64)>> = per_metric_raw
+        .into_iter()
+        .map(|mut data| {
+            if let Some(window) = config.window {
+                data = apply_rolling_average(&data, window);
+            }
+            if let Some(target) = config.target_points {
+                data = downsample_buckets(&data, target);
+            }
+            data
+        })
+        .collect();
+
+    // Phase 3: Build rows from processed data
+    let index_maps: Vec<std::collections::HashMap<usize, f64>> = per_metric_processed
+        .iter()
+        .map(|data| data.iter().cloned().collect())
+        .collect();
+
+    let mut all_global_steps: Vec<usize> = index_maps
+        .iter()
+        .flat_map(|m| m.keys().cloned())
+        .collect();
+    all_global_steps.sort();
+    all_global_steps.dedup();
+
+    let mut rows = Vec::new();
+    for &global_step in &all_global_steps {
+        let values: Vec<Option<f64>> = index_maps
+            .iter()
+            .map(|m| m.get(&global_step).cloned())
+            .collect();
+
+        if values.iter().all(|v| v.is_none()) {
             continue;
         }
 
-        // Build index maps for each metric (step -> value)
-        let index_maps: Vec<std::collections::HashMap<usize, f64>> = metric_data
+        // Determine epoch from boundaries (last boundary whose start <= global_step)
+        let epoch = epoch_boundaries
             .iter()
-            .map(|d| {
-                d.as_ref()
-                    .map(|v| v.iter().cloned().collect())
-                    .unwrap_or_default()
-            })
-            .collect();
+            .rev()
+            .find(|(_, start)| global_step >= *start)
+            .map(|(e, _)| *e)
+            .unwrap_or(1);
 
-        // Get all unique steps across all metrics, sorted
-        let mut all_steps: Vec<usize> = index_maps.iter().flat_map(|m| m.keys().cloned()).collect();
-        all_steps.sort();
-        all_steps.dedup();
+        // Compute local step within epoch
+        let epoch_start = epoch_boundaries
+            .iter()
+            .rev()
+            .find(|(_, start)| global_step >= *start)
+            .map(|(_, start)| *start)
+            .unwrap_or(0);
 
-        let max_step = all_steps.last().copied();
-
-        // Create rows for each step
-        for step in all_steps {
-            let values: Vec<Option<f64>> =
-                index_maps.iter().map(|m| m.get(&step).cloned()).collect();
-
-            // Skip rows where all values are None
-            if values.iter().all(|v| v.is_none()) {
-                continue;
-            }
-
-            rows.push(MetricRow {
-                experiment: experiment.clone(),
-                epoch,
-                step,
-                global_step: global_step_offset + step,
-                values,
-            });
-        }
-
-        // Update global step offset for next epoch
-        if let Some(max_step) = max_step {
-            global_step_offset += max_step;
-        }
+        rows.push(MetricRow {
+            experiment: experiment.clone(),
+            epoch,
+            step: global_step - epoch_start,
+            global_step,
+            values,
+        });
     }
 
     rows
