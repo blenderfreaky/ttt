@@ -859,7 +859,9 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     saved: &SavedTensors<P::EVal>,
     recomp: &RecomputationInputs<P::EVal>,
     grad_L_XQW: &Tensor<Line<P::EVal>>,
-    weight_stage: &StFF<P>,
+    // Weight at this stage. After recomputation section, reused as scratch F×F tile
+    // to avoid a separate temp_f_f allocation (saves 8KB shared memory).
+    weight_stage: &mut StFF<P>,
     bias_stage: &RvbFV<P>,
     grad_L_W_last: &mut StFF<P>,
     grad_L_b_last: &mut RvbFA<P>,
@@ -868,32 +870,33 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     grads: &mut GradOutputs<P::EVal>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
+    // External tiles (allocated by caller, shared with forward_simulate in multi-stage)
+    scratch1: &mut StCsF<P>,
+    scratch2: &mut StCsF<P>,
+    k_smem: &mut StFCs<P>,
+    tile_b: &mut StCsF<P>,
+    tile_c: &mut StCsF<P>,
+    buf: &mut ReduceBuf<P::EAcc>,
     #[comptime] epsilon: f32,
 ) {
-    let mut buf = ReduceBuf::<P::EAcc>::new();
-
-    let mut scratch1 = P::st_cs_f();
-    let mut scratch2 = P::st_cs_f();
     let mut cs_cs_a = P::st_cs_cs();
     let mut cs_cs_b = P::st_cs_cs();
     let mut tile_grad_z1_bar = P::st_cs_f();
-    let mut tile_b = P::st_cs_f();
-    let mut tile_c = P::st_cs_f();
     let mut tile_grad_xk_combined = P::st_cs_f();
     let mut tile_e = P::st_cs_f();
     let mut tile_f = P::st_cs_f();
     let mut tile_grad_Z1 = P::st_cs_f();
     let mut tile_grad_target = P::st_cs_f();
-    let mut temp_f_f = P::st_ff();
+    // temp_f_f removed: weight_stage is reused after recomputation section
 
     // =========================================================================
     // Load persistent data
     // =========================================================================
 
     let mut q_smem = P::st_f_cs();
-    let mut k_smem = P::st_f_cs();
+    // k_smem passed from caller (shared with forward_simulate)
     cube::load_st_transpose(&saved.xq, &mut q_smem, stage_offset, 0, 0);
-    cube::load_st_transpose(&saved.xk, &mut k_smem, stage_offset, 0, 0);
+    cube::load_st_transpose(&saved.xk, k_smem, stage_offset, 0, 0);
 
     // LN weight and bias
     let base_ln = index_2d(&saved.ln_weight, CUBE_POS_Y as usize, 0);
@@ -925,7 +928,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // z1 = xk @ W_stage
     let mut z1_reg = P::rt_cs_f();
     z1_reg.zero();
-    cube::mma_AtB(&mut z1_reg, &k_smem, weight_stage);
+    cube::mma_AtB(&mut z1_reg, k_smem, weight_stage);
 
     sync_cube();
 
@@ -961,7 +964,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // First normalize z1 -> x_hat, get std
     let std_fused = normalize_to_x_hat::<P::EVal, P::EAcc, P::CS, P::F>(
         &mut grad_l_smem,
-        &mut buf,
+        buf,
         epsilon,
     );
 
@@ -998,11 +1001,11 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // Compute grad_x from grad_x_hat -> overwrites grad_l_smem (which has x_hat) with grad_l
     compute_grad_x_from_grad_x_hat::<P::EVal, P::EAcc, P::CS, P::F>(
-        &scratch1,
+        scratch1,
         &mut grad_l_smem,
         &std_fused,
-        &mut scratch2,
-        &mut buf,
+        scratch2,
+        buf,
     );
 
     sync_cube();
@@ -1034,7 +1037,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Step 3: Build (eta * attn) fused
     build_eta_attn_fused::<P>(
         &q_smem,
-        &k_smem,
+        k_smem,
         &saved.token_eta,
         &saved.ttt_lr_eta,
         &mut cs_cs_a,
@@ -1063,14 +1066,14 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     z1_bar_reg.sub(&eta_attn_grad_reg);
 
     // Store z1_bar into scratch1 for layer norm
-    cube::store_rt_to_st(&z1_bar_reg, &mut scratch1);
+    cube::store_rt_to_st(&z1_bar_reg, scratch1);
 
     sync_cube();
 
     // Normalize z1_bar to get x_hat_ln and std_ln
     let std_ln = normalize_to_x_hat::<P::EVal, P::EAcc, P::CS, P::F>(
-        &mut scratch1,
-        &mut buf,
+        scratch1,
+        buf,
         epsilon,
     );
 
@@ -1082,21 +1085,22 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // scratch1 holds x_hat_ln; use tile_b as scratch for stage4
     // Load upstream gradient
-    cube::load_st_direct(grad_L_XQW, &mut tile_c, stage_offset, 0, 0);
+    cube::load_st_direct(grad_L_XQW, tile_c, stage_offset, 0, 0);
 
     sync_cube();
 
+    // weight_stage is dead after z1_bar recomputation; reuse as scratch F×F tile
     let stage4_out = backward_stage4_ln::<P>(
-        &tile_c,       // grad_output
-        &scratch1,     // x_hat_ln
+        tile_c,        // grad_output
+        scratch1,      // x_hat_ln
         &std_ln,
         &q_smem,
         &ln_weight_rv,
-        &mut buf,
-        &mut tile_b,   // scratch (was unused)
-        &mut scratch2,
+        buf,
+        tile_b,        // scratch
+        scratch2,
         &mut tile_grad_z1_bar,
-        &mut temp_f_f,
+        weight_stage,  // reused as temp F×F
     );
 
     // =========================================================================
@@ -1105,8 +1109,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // Reload xk, xq (reuse scratch1 -> xk, tile_c -> xq; these tiles are dead now)
     // scratch1 held x_hat_ln (consumed by stage4), tile_c held grad_output (consumed by stage4)
-    cube::load_st_direct(&saved.xk, &mut scratch1, stage_offset, 0, 0);
-    cube::load_st_direct(&saved.xq, &mut tile_c, stage_offset, 0, 0);
+    cube::load_st_direct(&saved.xk, scratch1, stage_offset, 0, 0);
+    cube::load_st_direct(&saved.xq, tile_c, stage_offset, 0, 0);
 
     sync_cube();
 
@@ -1116,17 +1120,17 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         grad_L_W_last,
         grad_L_b_last,
         &q_smem,
-        &k_smem,
-        &scratch1,  // xk_smem
-        &tile_c,    // xq_smem
+        k_smem,
+        scratch1,   // xk_smem
+        tile_c,     // xq_smem
         &saved.token_eta,
         &saved.ttt_lr_eta,
         &last_eta_rv,
         last_token_eta,
         ttt_lr_eta_idx,
-        &mut buf,
-        &mut tile_b,   // scratch (tile_b is free)
-        &mut scratch2,
+        buf,
+        tile_b,        // scratch
+        scratch2,
         &mut cs_cs_a,
         &mut cs_cs_b,
         &mut tile_e,                // grad_grad_l output
@@ -1137,13 +1141,13 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    grad_L_W_last.add(&temp_f_f);
+    grad_L_W_last.add(weight_stage);
 
     sync_cube();
 
-    // Load weight_init into temp_f_f for stage 3 part 2
+    // Load weight_init into weight_stage (reused as temp F×F) for stage 3 part 2
     let base_weight_init = index_2d(&saved.weight_init, CUBE_POS_X as usize, CUBE_POS_Y as usize);
-    cube::load_st_direct(&saved.weight_init, &mut temp_f_f, base_weight_init, 0, 0);
+    cube::load_st_direct(&saved.weight_init, weight_stage, base_weight_init, 0, 0);
 
     sync_cube();
 
@@ -1155,15 +1159,15 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &tile_grad_z1_bar,
         &grad_l_smem,
         &q_smem,
-        &k_smem,
-        &scratch1,  // xk_smem
-        &temp_f_f,  // weight_init loaded into temp_f_f
+        k_smem,
+        scratch1,      // xk_smem
+        weight_stage,  // weight_init loaded into reused F×F tile
         &saved.token_eta,
         &saved.ttt_lr_eta,
         ttt_lr_eta_idx,
         &stage3_part1_out.grad_eta_term1,
-        &mut buf,
-        &mut tile_b,   // scratch (tile_b is free)
+        buf,
+        tile_b,        // scratch
         &mut cs_cs_a,
         &mut cs_cs_b,
         &mut tile_f,   // grad_xq_mini output
@@ -1188,7 +1192,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     let mut sum_gxh_xh_acc = P::rvb_cs_a();
-    cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::F>(&scratch1, &mut sum_gxh_xh_acc, &mut buf);
+    cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::F>(scratch1, &mut sum_gxh_xh_acc, buf);
     let sum_gxh_xh = sum_gxh_xh_acc.cast::<P::EVal>();
 
     let stage2_out = backward_stage2_ln_l2::<P>(
@@ -1200,9 +1204,9 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &grad_l_smem,
         &ln_weight_rv,
         &sum_gxh_xh,
-        &mut buf,
-        &mut scratch1,
-        &mut scratch2,
+        buf,
+        scratch1,
+        scratch2,
         &mut tile_grad_Z1,
         &mut tile_grad_target,
     );
@@ -1222,7 +1226,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &stage4_out.grad_ln_weight,
         &stage4_out.grad_ln_bias,
         // Stage 3 outputs
-        &tile_c,   // grad_xq_mini (copied from tile_f)
+        tile_c,    // grad_xq_mini (copied from tile_f)
         &tile_grad_xk_combined,
         &stage3_out.grad_ttt_lr_eta,
         // Stage 2 outputs
@@ -1231,9 +1235,9 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &stage2_out.grad_ln_weight,
         &stage2_out.grad_ln_bias,
         // Inputs
-        &k_smem,
+        k_smem,
         // contains weight_init, will be overwritten with dW_tile
-        &mut temp_f_f,
+        weight_stage,
         // Accumulators
         grad_L_W_last,
         grad_L_b_last,
@@ -1243,8 +1247,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         grads,
         stage_offset,
         ttt_lr_eta_idx,
-        &mut buf,
-        &mut scratch1, // scratch for stage1
+        buf,
+        scratch1, // scratch for stage1
     );
 }
 
@@ -1292,13 +1296,21 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
     let mut grad_L_ln_bias_acc = P::rvb_f_a();
     grad_L_ln_bias_acc.fill(P::EAcc::new(0.0));
 
+    // Shared scratch tiles
+    let mut scratch1 = P::st_cs_f();
+    let mut scratch2 = P::st_cs_f();
+    let mut ext_k_smem = P::st_f_cs();
+    let mut tile_b = P::st_cs_f();
+    let mut tile_c = P::st_cs_f();
+    let mut ext_buf = ReduceBuf::<P::EAcc>::new();
+
     sync_cube();
 
     fused_ttt_backward_stage::<P>(
         saved,
         recomp,
         grad_output,
-        &weight_stage,
+        &mut weight_stage,
         &bias_stage,
         &mut grad_L_W_last,
         &mut grad_L_b_last,
@@ -1307,6 +1319,12 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
         grads,
         base_qkv,
         ttt_lr_eta_idx,
+        &mut scratch1,
+        &mut scratch2,
+        &mut ext_k_smem,
+        &mut tile_b,
+        &mut tile_c,
+        &mut ext_buf,
         epsilon,
     );
 
@@ -1337,6 +1355,9 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
 ///
 /// weight_out = weight - last_eta * XK^T @ grad_l
 /// bias_out = bias - last_eta @ grad_l
+///
+/// Uses external scratch tiles (shared with backward stage) to avoid
+/// exceeding shared memory limits in the multi-stage kernel.
 #[cube]
 #[allow(clippy::too_many_arguments)]
 fn forward_simulate_weight_update<P: ParamsTrait>(
@@ -1348,27 +1369,28 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     ln_bias_rv: &RvbFV<P>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
+    // External tiles (shared with backward stage to avoid duplicate smem allocs)
+    k_smem: &mut StFCs<P>,
+    scratch_a: &mut StCsF<P>,
+    scratch_b: &mut StCsF<P>,
+    scratch_c: &mut StCsF<P>,
+    scratch_d: &mut StCsF<P>,
+    buf: &mut ReduceBuf<P::EAcc>,
     #[comptime] epsilon: f32,
 ) {
-    let mut buf = ReduceBuf::<P::EAcc>::new();
-    let mut k_smem = P::st_f_cs();
-    let mut q_smem = P::st_f_cs();
-    let mut xk_smem = P::st_cs_f();
-    let mut v_direct_smem = P::st_cs_f();
-    let mut z1_smem = P::st_cs_f();
-    let mut temp_smem = P::st_cs_f();
+    // scratch_a = xk_smem, scratch_b = v_direct_smem, scratch_c = z1_smem, scratch_d = temp_smem
 
     // Load XK transposed and direct
-    cube::load_st_transpose(&saved.xk, &mut k_smem, stage_offset, 0, 0);
-    cube::load_st_direct(&saved.xk, &mut xk_smem, stage_offset, 0, 0);
-    cube::load_st_direct(&recomp.xv, &mut v_direct_smem, stage_offset, 0, 0);
+    cube::load_st_transpose(&saved.xk, k_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&saved.xk, scratch_a, stage_offset, 0, 0);
+    cube::load_st_direct(&recomp.xv, scratch_b, stage_offset, 0, 0);
 
     sync_cube();
 
     // z1 = xk @ W + b
     let mut z1_reg = P::rt_cs_f();
     z1_reg.zero();
-    cube::mma_AtB(&mut z1_reg, &k_smem, weight_smem);
+    cube::mma_AtB(&mut z1_reg, k_smem, weight_smem);
 
     sync_cube();
 
@@ -1382,29 +1404,29 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     }
     z1_reg.add_row(&bias_reg);
 
-    cube::store_rt_to_st(&z1_reg, &mut z1_smem);
+    cube::store_rt_to_st(&z1_reg, scratch_c);
 
     sync_cube();
 
     // target = xv - xk
-    v_direct_smem.sub(&xk_smem);
+    scratch_b.sub(scratch_a);
 
     sync_cube();
 
     // grad_l = layer_norm_l2_grad(z1, target)
     layer_norm_l2_grad::<P::EVal, P::EAcc, P::CS, P::F>(
-        &mut z1_smem,
-        &v_direct_smem,
+        scratch_c,
+        scratch_b,
         ln_weight_rv,
         ln_bias_rv,
-        &mut temp_smem,
-        &mut buf,
+        scratch_d,
+        buf,
         epsilon,
     );
 
     sync_cube();
 
-    // z1_smem now contains grad_l
+    // scratch_c now contains grad_l
 
     // Weight update: W -= last_eta * XK^T @ grad_l
     let last_token_idx = P::CS::VALUE - 1;
@@ -1417,20 +1439,20 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     cube::broadcast::load_rv_direct(&saved.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta_scalar);
 
-    // Reload k transposed (reuse q_smem slot)
-    cube::load_st_transpose(&saved.xk, &mut q_smem, stage_offset, 0, 0);
+    // Reload k transposed (reuse k_smem)
+    cube::load_st_transpose(&saved.xk, k_smem, stage_offset, 0, 0);
 
     sync_cube();
 
     // Scale by last_eta
-    q_smem.mul_row(&last_eta_rv);
+    k_smem.mul_row(&last_eta_rv);
 
     sync_cube();
 
     // weight_update = scaled_xk^T @ grad_l
     let mut weight_update_reg = P::rt_ff();
     weight_update_reg.zero();
-    cube::mma_AB(&mut weight_update_reg, &q_smem, &z1_smem);
+    cube::mma_AB(&mut weight_update_reg, k_smem, scratch_c);
 
     sync_cube();
 
@@ -1443,19 +1465,19 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     sync_cube();
 
     // Bias update: b -= last_eta @ grad_l
-    temp_smem.copy_from(&z1_smem);
+    scratch_d.copy_from(scratch_c);
 
     sync_cube();
 
-    temp_smem.mul_col(&last_eta_rv);
+    scratch_d.mul_col(&last_eta_rv);
 
     sync_cube();
 
     let mut bias_update_rv = P::rvb_f_a();
     cube::reduce_cols::<P::EVal, P::EAcc, P::CS, P::F, SumOp>(
-        &temp_smem,
+        scratch_d,
         &mut bias_update_rv,
-        &mut buf,
+        buf,
     );
 
     let bias_update_val = bias_update_rv.cast::<P::EVal>();
@@ -1511,6 +1533,15 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     let mut grad_L_ln_bias_acc = P::rvb_f_a();
     grad_L_ln_bias_acc.fill(P::EAcc::new(0.0));
 
+    // Shared scratch tiles - reused by both forward_simulate and backward_stage
+    // to avoid exceeding shared memory limits.
+    let mut scratch1 = P::st_cs_f();
+    let mut scratch2 = P::st_cs_f();
+    let mut ext_k_smem = P::st_f_cs();
+    let mut tile_b = P::st_cs_f();
+    let mut tile_c = P::st_cs_f();
+    let mut ext_buf = ReduceBuf::<P::EAcc>::new();
+
     sync_cube();
 
     // Process stages in reverse order (backward through time)
@@ -1532,7 +1563,6 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
         for fwd_stage in 0..stage_idx {
             let fwd_offset = base_qkv + fwd_stage * stage_stride;
             let fwd_ttt_lr_eta_idx = base_ttt_lr_eta + fwd_stage * mini_batch_len;
-
             forward_simulate_weight_update::<P>(
                 saved,
                 recomp,
@@ -1542,17 +1572,21 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
                 &ln_bias_rv,
                 fwd_offset,
                 fwd_ttt_lr_eta_idx,
+                &mut ext_k_smem,
+                &mut scratch1,
+                &mut scratch2,
+                &mut tile_b,
+                &mut tile_c,
+                &mut ext_buf,
                 epsilon,
             );
-
-            sync_cube();
         }
 
         fused_ttt_backward_stage::<P>(
             saved,
             recomp,
             grad_output,
-            &weight_stage,
+            &mut weight_stage,
             &bias_stage,
             &mut grad_L_W_last,
             &mut grad_L_b_last,
@@ -1561,6 +1595,13 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
             grads,
             stage_offset,
             ttt_lr_eta_idx,
+            // Shared scratch tiles (same as forward_simulate)
+            &mut scratch1,
+            &mut scratch2,
+            &mut ext_k_smem,
+            &mut tile_b,
+            &mut tile_c,
+            &mut ext_buf,
             epsilon,
         );
 
