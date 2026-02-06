@@ -169,56 +169,23 @@ fn collect_epochs(metrics_dir: &Path) -> Vec<(usize, PathBuf)> {
     epochs
 }
 
-/// Collect metrics from one artifact directory for one split.
-fn collect_split_metrics(dir: &Path, split: &str, config: &ExportConfig) -> Vec<MetricRow> {
-    let experiment = experiment_name(dir);
-    let metrics_dir = dir.join(split);
-    let epochs = collect_epochs(&metrics_dir);
-
-    if epochs.is_empty() {
-        return Vec::new();
+/// Apply smoothing and downsampling to metric data.
+fn smooth_and_downsample(mut data: Vec<(usize, f64)>, config: &ExportConfig) -> Vec<(usize, f64)> {
+    if let Some(window) = config.window {
+        data = apply_rolling_average(&data, window);
     }
-
-    let num_metrics = config.metrics.len();
-
-    // Phase 1: Load raw data across all epochs with global_step assignment
-    let mut per_metric_raw: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_metrics];
-    let mut epoch_boundaries: Vec<(usize, usize)> = Vec::new(); // (epoch, start_global_step)
-    let mut global_step_offset = 0;
-
-    for (epoch, epoch_path) in &epochs {
-        epoch_boundaries.push((*epoch, global_step_offset));
-        let mut max_step_this_epoch: usize = 0;
-
-        for (metric_idx, metric_type) in config.metrics.iter().enumerate() {
-            let log_path = epoch_path.join(metric_type.filename());
-            if let Some(data) = parse_metric_log_with_steps(&log_path) {
-                for &(step, value) in &data {
-                    let global_step = global_step_offset + step;
-                    per_metric_raw[metric_idx].push((global_step, value));
-                    max_step_this_epoch = max_step_this_epoch.max(step);
-                }
-            }
-        }
-
-        global_step_offset += max_step_this_epoch;
+    if let Some(target) = config.target_points {
+        data = downsample_buckets(&data, target);
     }
+    data
+}
 
-    // Phase 2: Apply smoothing and downsampling across the FULL series (not per-epoch)
-    let per_metric_processed: Vec<Vec<(usize, f64)>> = per_metric_raw
-        .into_iter()
-        .map(|mut data| {
-            if let Some(window) = config.window {
-                data = apply_rolling_average(&data, window);
-            }
-            if let Some(target) = config.target_points {
-                data = downsample_buckets(&data, target);
-            }
-            data
-        })
-        .collect();
-
-    // Phase 3: Build rows from processed data
+/// Build MetricRows from processed per-metric data and epoch boundaries.
+fn build_rows(
+    experiment: &str,
+    per_metric_processed: &[Vec<(usize, f64)>],
+    epoch_boundaries: &[(usize, usize)],
+) -> Vec<MetricRow> {
     let index_maps: Vec<std::collections::HashMap<usize, f64>> = per_metric_processed
         .iter()
         .map(|data| data.iter().cloned().collect())
@@ -243,23 +210,15 @@ fn collect_split_metrics(dir: &Path, split: &str, config: &ExportConfig) -> Vec<
         }
 
         // Determine epoch from boundaries (last boundary whose start <= global_step)
-        let epoch = epoch_boundaries
+        let (epoch, epoch_start) = epoch_boundaries
             .iter()
             .rev()
             .find(|(_, start)| global_step >= *start)
-            .map(|(e, _)| *e)
-            .unwrap_or(1);
-
-        // Compute local step within epoch
-        let epoch_start = epoch_boundaries
-            .iter()
-            .rev()
-            .find(|(_, start)| global_step >= *start)
-            .map(|(_, start)| *start)
-            .unwrap_or(0);
+            .copied()
+            .unwrap_or((1, 0));
 
         rows.push(MetricRow {
-            experiment: experiment.clone(),
+            experiment: experiment.to_string(),
             epoch,
             step: global_step - epoch_start,
             global_step,
@@ -268,6 +227,75 @@ fn collect_split_metrics(dir: &Path, split: &str, config: &ExportConfig) -> Vec<
     }
 
     rows
+}
+
+/// Collect metrics from one artifact directory for one split.
+///
+/// For training metrics, smoothing/downsampling spans across epoch boundaries to avoid
+/// staircase artifacts. For validation metrics, it's applied per-epoch since each epoch
+/// evaluates a single checkpoint and cross-epoch blending would be misleading.
+fn collect_split_metrics(dir: &Path, split: &str, config: &ExportConfig) -> Vec<MetricRow> {
+    let experiment = experiment_name(dir);
+    let metrics_dir = dir.join(split);
+    let epochs = collect_epochs(&metrics_dir);
+
+    if epochs.is_empty() {
+        return Vec::new();
+    }
+
+    let num_metrics = config.metrics.len();
+    let cross_epoch = split == "train";
+
+    // Phase 1: Load raw data across all epochs with global_step assignment
+    let mut per_metric_raw: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_metrics];
+    let mut epoch_boundaries: Vec<(usize, usize)> = Vec::new(); // (epoch, start_global_step)
+    let mut global_step_offset = 0;
+
+    // For per-epoch processing (validation), we also track per-epoch raw data
+    let mut per_epoch_metric_raw: Vec<Vec<Vec<(usize, f64)>>> = Vec::new();
+
+    for (epoch, epoch_path) in &epochs {
+        epoch_boundaries.push((*epoch, global_step_offset));
+        let mut max_step_this_epoch: usize = 0;
+        let mut this_epoch_data: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_metrics];
+
+        for (metric_idx, metric_type) in config.metrics.iter().enumerate() {
+            let log_path = epoch_path.join(metric_type.filename());
+            if let Some(data) = parse_metric_log_with_steps(&log_path) {
+                for &(step, value) in &data {
+                    let global_step = global_step_offset + step;
+                    per_metric_raw[metric_idx].push((global_step, value));
+                    this_epoch_data[metric_idx].push((global_step, value));
+                    max_step_this_epoch = max_step_this_epoch.max(step);
+                }
+            }
+        }
+
+        per_epoch_metric_raw.push(this_epoch_data);
+        global_step_offset += max_step_this_epoch;
+    }
+
+    if cross_epoch {
+        // Phase 2a (train): Smooth/downsample across the FULL series
+        let per_metric_processed: Vec<Vec<(usize, f64)>> = per_metric_raw
+            .into_iter()
+            .map(|data| smooth_and_downsample(data, config))
+            .collect();
+
+        build_rows(&experiment, &per_metric_processed, &epoch_boundaries)
+    } else {
+        // Phase 2b (valid): Smooth/downsample per-epoch, then concatenate
+        let mut per_metric_processed: Vec<Vec<(usize, f64)>> = vec![Vec::new(); num_metrics];
+
+        for epoch_data in per_epoch_metric_raw {
+            for (metric_idx, data) in epoch_data.into_iter().enumerate() {
+                let processed = smooth_and_downsample(data, config);
+                per_metric_processed[metric_idx].extend(processed);
+            }
+        }
+
+        build_rows(&experiment, &per_metric_processed, &epoch_boundaries)
+    }
 }
 
 /// Write CSV output.

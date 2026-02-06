@@ -13,12 +13,11 @@ use serde::Serialize;
 use tracing_subscriber::EnvFilter;
 use ttt_common::{InnerModel, ModelArch, ModelSize, TTTConfig};
 use ttt_core::{
-    TTTInnerModel,
-    config::ModelConfig,
+    TTTInnerModel, config::ModelConfig,
     test_utils::{TestDims, generate_test_inputs},
 };
 use ttt_fused::FusedTttBackend;
-use ttt_layer::dispatch_ttt_layer_type;
+use ttt_layer::{ModelConfigModelExt, dispatch_ttt_layer_type};
 
 // Backend types for runtime dtype selection
 #[cfg(feature = "rocm")]
@@ -104,6 +103,10 @@ struct Args {
 
     #[arg(long, default_value = "float32")]
     dtype: String,
+
+    /// Benchmark just the inner TTT model (single layer) instead of the full model
+    #[arg(long, default_value = "false")]
+    inner_only: bool,
 }
 
 #[derive(Serialize)]
@@ -112,6 +115,7 @@ struct BenchResult {
     model_size: String,
     ttt_type: String,
     backward: bool,
+    inner_only: bool,
     batch: usize,
     seq_len: usize,
     mini_batch: usize,
@@ -120,42 +124,25 @@ struct BenchResult {
     throughput: f64,
 }
 
-fn make_dims(args: &Args, config: &ModelConfig) -> TestDims {
-    TestDims {
-        batch_size: args.batch,
-        num_heads: config.arch.num_heads,
-        head_dim: config.head_dim(),
-        seq_len: args.seq_len,
-        mini_batch_size: args.mini_batch,
-        iterations: 1,
-    }
-}
-
-fn sync<B: FusedTttBackend, const D: usize>(tensor: Tensor<B, D>) {
-    let _ = tensor.into_data();
-}
-
 fn bench_fwd<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     args: &Args,
     config: &ModelConfig,
     device: &B::Device,
 ) -> f64 {
     let inner_config = Arc::new(Inner::Config::default());
-    let inner: Inner = Inner::new(config, &inner_config, device);
-    let dims = make_dims(args, config);
+    let model = config.init_with_inner_model::<B, Inner>(&inner_config, device);
+    let input_ids = Tensor::<B, 2, Int>::ones([args.batch, args.seq_len], device);
 
     for _ in 0..args.warmup {
-        let inputs = generate_test_inputs(dims, device);
-        let mut state = inner.init_state(args.batch);
-        sync(inner.forward(&mut state, inputs));
+        let logits = model.forward(input_ids.clone(), 0);
+        let _ = logits.into_data();
     }
 
     let mut total = 0.0;
     for _ in 0..args.repeats {
-        let inputs = generate_test_inputs(dims, device);
-        let mut state = inner.init_state(args.batch);
         let start = Instant::now();
-        sync(inner.forward(&mut state, inputs));
+        let logits = model.forward(input_ids.clone(), 0);
+        let _ = logits.into_data();
         total += start.elapsed().as_secs_f64();
     }
     (total / args.repeats as f64) * 1000.0
@@ -170,8 +157,75 @@ fn bench_bwd<
     device: &B::Device,
 ) -> f64 {
     let inner_config = Arc::new(Inner::Config::default());
+    let model = config.init_with_inner_model::<B, Inner>(&inner_config, device);
+    let input_ids = Tensor::<B, 2, Int>::ones([args.batch, args.seq_len], device);
+
+    for _ in 0..args.warmup {
+        let _grads = model.forward(input_ids.clone(), 0).sum().backward();
+        let _ = B::sync(device);
+    }
+
+    let mut total = 0.0;
+    for _ in 0..args.repeats {
+        let start = Instant::now();
+        let _grads = model.forward(input_ids.clone(), 0).sum().backward();
+        let _ = B::sync(device);
+        total += start.elapsed().as_secs_f64();
+    }
+    (total / args.repeats as f64) * 1000.0
+}
+
+fn bench_fwd_inner<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
+    args: &Args,
+    config: &ModelConfig,
+    device: &B::Device,
+) -> f64 {
+    let inner_config = Arc::new(Inner::Config::default());
     let inner: Inner = Inner::new(config, &inner_config, device);
-    let dims = make_dims(args, config);
+    let dims = TestDims {
+        batch_size: args.batch,
+        num_heads: config.arch.num_heads,
+        head_dim: config.head_dim(),
+        seq_len: args.seq_len,
+        mini_batch_size: args.mini_batch,
+        iterations: 1,
+    };
+
+    for _ in 0..args.warmup {
+        let inputs = generate_test_inputs(dims, device);
+        let mut state = inner.init_state(args.batch);
+        let _ = inner.forward(&mut state, inputs).into_data();
+    }
+
+    let mut total = 0.0;
+    for _ in 0..args.repeats {
+        let inputs = generate_test_inputs(dims, device);
+        let mut state = inner.init_state(args.batch);
+        let start = Instant::now();
+        let _ = inner.forward(&mut state, inputs).into_data();
+        total += start.elapsed().as_secs_f64();
+    }
+    (total / args.repeats as f64) * 1000.0
+}
+
+fn bench_bwd_inner<
+    B: burn::tensor::backend::AutodiffBackend + FusedTttBackend,
+    Inner: TTTInnerModel<B>,
+>(
+    args: &Args,
+    config: &ModelConfig,
+    device: &B::Device,
+) -> f64 {
+    let inner_config = Arc::new(Inner::Config::default());
+    let inner: Inner = Inner::new(config, &inner_config, device);
+    let dims = TestDims {
+        batch_size: args.batch,
+        num_heads: config.arch.num_heads,
+        head_dim: config.head_dim(),
+        seq_len: args.seq_len,
+        mini_batch_size: args.mini_batch,
+        iterations: 1,
+    };
 
     for _ in 0..args.warmup {
         let inputs = generate_test_inputs(dims, device);
@@ -192,12 +246,13 @@ fn bench_bwd<
     (total / args.repeats as f64) * 1000.0
 }
 
-fn make_config(model_size: &str, mini_batch: usize) -> ModelConfig {
-    let vocab_size = 1000;
+fn make_config(model_size: &str, mini_batch: usize, seq_len: usize) -> ModelConfig {
+    let vocab_size = 32000; // match JAX/PyTorch reference configs
     let size = parse_model_size(model_size);
     let arch = Arc::new(ModelArch::from_size(size, vocab_size));
     let ttt = Arc::new(TTTConfig {
         mini_batch_size: mini_batch,
+        max_seq_len: seq_len,
         ..TTTConfig::default()
     });
     ModelConfig::new(arch, ttt)
@@ -209,36 +264,48 @@ fn main() {
         .init();
 
     let args = Args::parse();
-    let config = make_config(&args.model_size, args.mini_batch);
+    let config = make_config(&args.model_size, args.mini_batch, args.seq_len);
     let layer_type = parse_layer_type(&args.ttt_type);
 
-    let (time_ms, dtype_str) = match (args.dtype.as_str(), args.backward) {
-        ("float32", false) => {
+    let (time_ms, dtype_str) = match (args.dtype.as_str(), args.backward, args.inner_only) {
+        ("float32", false, false) => {
             let device: <BackendF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendF32, layer_type>(
-                &args, &config, &device
-            ));
+            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendF32, layer_type>(&args, &config, &device));
             (t, "float32")
         }
-        ("float32", true) => {
+        ("float32", true, false) => {
             let device: <AutodiffF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffF32, layer_type>(
-                &args, &config, &device
-            ));
+            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffF32, layer_type>(&args, &config, &device));
             (t, "float32")
         }
-        ("bfloat16", false) => {
+        ("float32", false, true) => {
+            let device: <BackendF32 as Backend>::Device = Default::default();
+            let t = dispatch_ttt_layer_type!(bench_fwd_inner::<BackendF32, layer_type>(&args, &config, &device));
+            (t, "float32")
+        }
+        ("float32", true, true) => {
+            let device: <AutodiffF32 as Backend>::Device = Default::default();
+            let t = dispatch_ttt_layer_type!(bench_bwd_inner::<AutodiffF32, layer_type>(&args, &config, &device));
+            (t, "float32")
+        }
+        ("bfloat16", false, false) => {
             let device: <BackendBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendBf16, layer_type>(
-                &args, &config, &device
-            ));
+            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendBf16, layer_type>(&args, &config, &device));
             (t, "bfloat16")
         }
-        ("bfloat16", true) => {
+        ("bfloat16", true, false) => {
             let device: <AutodiffBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffBf16, layer_type>(
-                &args, &config, &device
-            ));
+            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffBf16, layer_type>(&args, &config, &device));
+            (t, "bfloat16")
+        }
+        ("bfloat16", false, true) => {
+            let device: <BackendBf16 as Backend>::Device = Default::default();
+            let t = dispatch_ttt_layer_type!(bench_fwd_inner::<BackendBf16, layer_type>(&args, &config, &device));
+            (t, "bfloat16")
+        }
+        ("bfloat16", true, true) => {
+            let device: <AutodiffBf16 as Backend>::Device = Default::default();
+            let t = dispatch_ttt_layer_type!(bench_bwd_inner::<AutodiffBf16, layer_type>(&args, &config, &device));
             (t, "bfloat16")
         }
         _ => panic!("Unknown dtype: {}. Use: float32, bfloat16", args.dtype),
@@ -251,6 +318,7 @@ fn main() {
         model_size: args.model_size.clone(),
         ttt_type: args.ttt_type.clone(),
         backward: args.backward,
+        inner_only: args.inner_only,
         batch: args.batch,
         seq_len: args.seq_len,
         mini_batch: args.mini_batch,
@@ -262,7 +330,7 @@ fn main() {
     if args.json {
         println!("{}", serde_json::to_string(&result).unwrap());
     } else {
-        println!("Burn TTT Benchmark");
+        println!("Burn TTT Benchmark{}", if args.inner_only { " (inner only)" } else { "" });
         println!("==================");
         println!("Model: {} / {}", args.model_size, args.ttt_type);
         println!("Dtype: {}", dtype_str);
