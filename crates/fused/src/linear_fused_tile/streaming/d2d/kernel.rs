@@ -139,7 +139,9 @@ pub fn fused_ttt_d2d_streaming_kernel<P: ParamsTrait>(
         }
 
         // Broadcast status to all threads
+        // All threads need the fence to see host writes, not just thread 0
         sync_cube();
+        memory_fence_system();
         let status = Atomic::load(&control[ctrl_idx]);
 
         if status == STATUS_SHUTDOWN {
@@ -157,20 +159,18 @@ pub fn fused_ttt_d2d_streaming_kernel<P: ParamsTrait>(
         }
         memory_fence_system();
 
-        // Iterate through all (batch, head) pairs - batch outer to match memory layout
+        // Iterate through all (batch, head) pairs
         for batch_idx in 0..batch_count {
             for head_idx in 0..num_heads {
-                // Load layer norm params for this head
-                let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
-                let mut ln_weight_rv = P::rvb_f_v();
-                let mut ln_bias_rv = P::rvb_f_v();
-                cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
-                cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
-                // Compute base offsets for this (batch, head) pair
+                // Ensure all threads start iteration together
+                sync_cube();
+
+                // Compute base offsets (index_2d returns scalar offsets)
                 let base_qkv = index_2d(&inputs.xq, batch_idx, head_idx);
                 let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
                 let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
                 let base_eta = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
+                let base_ln = index_2d(&inputs.ln_weight, head_idx, 0);
 
                 // Initialize weight in shared memory from inputs.weight for this batch
                 let mut weight_smem = P::st_ff();
@@ -178,9 +178,15 @@ pub fn fused_ttt_d2d_streaming_kernel<P: ParamsTrait>(
 
                 sync_cube();
 
-                // Initialize bias in register vector from inputs.bias for this batch
+                // Initialize bias in register vector
                 let mut bias_rv = P::rvb_f_v();
                 cube::broadcast::load_rv_direct(&inputs.bias, &mut bias_rv, base_bias);
+
+                // Load layer norm params for this head
+                let mut ln_weight_rv = P::rvb_f_v();
+                let mut ln_bias_rv = P::rvb_f_v();
+                cube::broadcast::load_rv_direct(&inputs.ln_weight, &mut ln_weight_rv, base_ln);
+                cube::broadcast::load_rv_direct(&inputs.ln_bias, &mut ln_bias_rv, base_ln);
 
                 // Process the mini-batch
                 fused_ttt_forward_stage::<P>(
@@ -204,7 +210,9 @@ pub fn fused_ttt_d2d_streaming_kernel<P: ParamsTrait>(
                 cube::store_st_direct(&weight_smem, &mut outputs.weight_out, base_weight_out, 0, 0);
                 cube::broadcast::store_rv_direct(&bias_rv, &mut outputs.bias_out, base_bias_out);
 
+                // Ensure stores are visible before next iteration
                 sync_cube();
+                memory_fence_system();
             }
         }
 

@@ -735,6 +735,49 @@ impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
     }
 }
 
+/// Access a pointer-based streaming state by ID for benchmarking.
+pub fn with_ptr_streaming_state<R: CubeRuntime + 'static, T>(
+    stream_id: u64,
+    f: impl FnOnce(&TttPtrStreamingState<R>) -> T,
+) -> T {
+    let mut registry = PTR_STREAMING_REGISTRY.lock().unwrap();
+    let state = registry
+        .get_mut(&stream_id)
+        .expect("ptr streaming state not found")
+        .downcast_mut::<R>()
+        .expect("type mismatch");
+    f(state)
+}
+
+impl<R: CubeRuntime + 'static> TttPtrStreamingState<R> {
+    /// Benchmark pure kernel compute time.
+    /// Assumes data is already in the buffers from a prior forward call.
+    /// Runs `iterations` cycles of READY→DONE.
+    /// Returns per-iteration time in microseconds.
+    pub fn bench_compute(&self, warmup: usize, iterations: usize) -> f64 {
+        let num_cubes = self.config.num_cubes();
+        let ready_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_READY).collect();
+
+        // Warmup
+        for _ in 0..warmup {
+            self.stream.write(self.control_ptr, 0, &ready_signals);
+            self.stream.sync();
+            self.wait_for_cubes_done();
+        }
+
+        // Timed iterations
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            self.stream.write(self.control_ptr, 0, &ready_signals);
+            self.stream.sync();
+            self.wait_for_cubes_done();
+        }
+        let elapsed = start.elapsed();
+
+        elapsed.as_micros() as f64 / iterations as f64
+    }
+}
+
 impl<R: CubeRuntime + 'static> Drop for TttPtrStreamingState<R> {
     fn drop(&mut self) {
         self.signal_shutdown();

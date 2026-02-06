@@ -35,7 +35,7 @@ use std::marker::PhantomData;
 use bytemuck::Pod;
 use cubecl::prelude::*;
 use cubecl_hip_sys::{
-    HIP_SUCCESS, hipDeviceptr_t, hipMemcpyAsync, hipMemcpyDtoDAsync,
+    HIP_SUCCESS, hipDeviceptr_t, hipDeviceSynchronize, hipMemcpyAsync, hipMemcpyDtoDAsync,
     hipMemcpyKind_hipMemcpyDeviceToHost, hipMemcpyKind_hipMemcpyHostToDevice, hipStream_t,
     hipStreamCreate, hipStreamDestroy, hipStreamSynchronize,
 };
@@ -281,6 +281,8 @@ impl Default for AsyncStream {
 impl Drop for AsyncStream {
     fn drop(&mut self) {
         unsafe {
+            // Sync before destroy to ensure no pending operations block other streams
+            hipStreamSynchronize(self.stream);
             hipStreamDestroy(self.stream);
         }
     }

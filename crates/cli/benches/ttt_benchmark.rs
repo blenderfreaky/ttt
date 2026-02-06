@@ -39,7 +39,7 @@ pub fn device<B: FusedTttBackend>() -> B::Device {
 
 /// Force async operations to complete before returning.
 fn sync<B: Backend, const D: usize>(tensor: Tensor<B, D>) {
-    let _ = tensor.into_data();
+    B::sync(&tensor.device()).unwrap();
 }
 
 #[derive(Clone, Debug)]

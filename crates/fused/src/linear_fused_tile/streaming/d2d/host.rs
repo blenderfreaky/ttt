@@ -328,6 +328,21 @@ pub fn shutdown_d2d_streaming_state<R: CubeRuntime + 'static>(
     remove_d2d_streaming_state::<R>(stream_id).map(|state| state.shutdown())
 }
 
+/// Access a streaming state by ID for benchmarking.
+pub fn with_streaming_state<R: CubeRuntime + 'static, T>(
+    stream_id: u64,
+    f: impl FnOnce(&TttD2dStreamingState<R>) -> T,
+) -> T {
+    let key = StreamKey::new(stream_id);
+    let mut registry = STREAMING_REGISTRY.lock().unwrap();
+    let state = registry
+        .get_mut(&key)
+        .expect("streaming state not found")
+        .downcast_mut::<R>()
+        .expect("type mismatch");
+    f(state)
+}
+
 impl<R: CubeRuntime> TttD2dStreamingState<R> {
     /// Create a new streaming state and launch the persistent kernel.
     #[allow(clippy::too_many_arguments)]
@@ -351,6 +366,11 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         }
 
         // Allocate streaming buffers (single mini-batch sized)
+        eprintln!(
+            "[HOST] Creating streaming state: batch={}, heads={}, seq={}, dim={}, qkv_shape={:?}",
+            config.batch_size, config.num_heads, config.mini_batch_len, config.head_dim,
+            config.qkv_shape()
+        );
         let xq = empty_device::<R, F>(
             client.clone(),
             device.clone(),
@@ -460,8 +480,10 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
 
         // Create async stream for memory transfers
         let stream = AsyncStream::new();
+        eprintln!("[HOST] async stream created");
 
         // Get all cached pointers BEFORE launching the kernel.
+        eprintln!("[HOST] getting cached pointers...");
         // This is critical: get_resource() triggers cross-stream synchronization,
         // so we must obtain all pointers before the persistent kernel starts.
         // After the kernel launches, accessing kernel-written buffers via get_resource()
@@ -492,6 +514,7 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         let cached_result_bias_ptr: GpuPtr<'static, f32> = unsafe {
             std::mem::transmute(stream.ptr::<f32, R>(&client, &tensors.result_bias.handle))
         };
+        eprintln!("[HOST] cached pointers obtained");
 
         let mut state = Self {
             config,
@@ -568,9 +591,9 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         // Control is already initialized to zeros (IDLE) by zeros_client
 
         // Launch the persistent kernel
-        trace!("[HOST] launch_kernel...");
+        eprintln!("[HOST] launching kernel...");
         state.launch_kernel::<F>();
-        trace!("[HOST] kernel launched!");
+        eprintln!("[HOST] kernel launched!");
         state.is_initialized = true;
 
         state
@@ -703,12 +726,15 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         xv: &CubeTensor<R>,
         ttt_lr_eta: &CubeTensor<R>,
     ) -> &CubeTensor<R> {
-        trace!("[HOST] forward_d2d start");
+        eprintln!("[HOST] forward_d2d start");
         // Get GPU pointers for source tensors (these are new each call, not kernel-written)
+        eprintln!("[HOST] forward_d2d getting src_xq ptr...");
         let src_xq: GpuPtr<f32> = self.stream.ptr(&self.client, &xq.handle);
+        eprintln!("[HOST] forward_d2d got src_xq ptr");
         let src_xk: GpuPtr<f32> = self.stream.ptr(&self.client, &xk.handle);
         let src_xv: GpuPtr<f32> = self.stream.ptr(&self.client, &xv.handle);
         let src_eta: GpuPtr<f32> = self.stream.ptr(&self.client, &ttt_lr_eta.handle);
+        eprintln!("[HOST] forward_d2d got all src ptrs");
 
         // Use cached pointers for destination buffers (avoid get_resource on kernel-written buffers)
         let dst_xq = self.cached_xq_ptr;
@@ -717,7 +743,7 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         let dst_eta = self.cached_eta_ptr;
         let ctrl_ptr = self.cached_ctrl_ptr;
 
-        trace!("[HOST] D2D copy...");
+        eprintln!("[HOST] forward_d2d starting D2D copies...");
         // D2D copy input data to streaming buffers
         self.stream
             .copy_d2d(dst_xq, 0, src_xq, 0, self.config.qkv_len());
@@ -727,9 +753,20 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
             .copy_d2d(dst_xv, 0, src_xv, 0, self.config.qkv_len());
         self.stream
             .copy_d2d(dst_eta, 0, src_eta, 0, self.config.eta_len());
+        eprintln!("[HOST] forward_d2d D2D copies issued");
 
         // Sync to ensure copies are complete before signaling kernel
         self.stream.sync();
+        eprintln!("[HOST] forward_d2d D2D copies synced");
+
+        // DEBUG: Verify D2D copy by reading back and comparing
+        let src_data = self.stream.read(src_xq, 0, 8);  // First 8 values (head 0)
+        let dst_data = self.stream.read(dst_xq, 0, 8);
+        eprintln!("[HOST] D2D verify head0: src={:?}, dst={:?}", &src_data[..4], &dst_data[..4]);
+        let src_data_h1 = self.stream.read(src_xq, 256, 8);  // First 8 values of head 1
+        let dst_data_h1 = self.stream.read(dst_xq, 256, 8);
+        eprintln!("[HOST] D2D verify head1: src={:?}, dst={:?}", &src_data_h1[..4], &dst_data_h1[..4]);
+
         trace!(
             "[HOST] D2D done, setting READY for {} cubes",
             self.config.num_cubes()
@@ -743,6 +780,12 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         trace!("[HOST] READY set, polling DONE...");
 
         self.wait_for_cubes_done();
+
+        // DEBUG: Check output after kernel
+        let out_h0 = self.stream.read(self.cached_output_ptr, 0, 4);
+        let out_h1 = self.stream.read(self.cached_output_ptr, 256, 4);
+        eprintln!("[HOST] Output head0: {:?}", out_h0);
+        eprintln!("[HOST] Output head1: {:?}", out_h1);
 
         // Copy results to separate buffers that can be read without blocking on persistent kernel
         // Use cached pointers to avoid get_resource() which would sync with kernel stream
@@ -817,6 +860,34 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         (weight, bias)
     }
 
+    /// Benchmark pure kernel compute time.
+    /// Assumes data is already in the buffers from a prior forward_d2d call.
+    /// Runs `iterations` cycles of READY→DONE.
+    /// Returns per-iteration time in microseconds.
+    pub fn bench_compute(&self, warmup: usize, iterations: usize) -> f64 {
+        let ctrl_ptr = self.cached_ctrl_ptr;
+        let num_cubes = self.config.num_cubes();
+        let ready_signals: Vec<u32> = (0..num_cubes).map(|_| STATUS_READY).collect();
+
+        // Warmup
+        for _ in 0..warmup {
+            self.stream.write(ctrl_ptr, 0, &ready_signals);
+            self.stream.sync();
+            self.wait_for_cubes_done();
+        }
+
+        // Timed iterations
+        let start = std::time::Instant::now();
+        for _ in 0..iterations {
+            self.stream.write(ctrl_ptr, 0, &ready_signals);
+            self.stream.sync();
+            self.wait_for_cubes_done();
+        }
+        let elapsed = start.elapsed();
+
+        elapsed.as_micros() as f64 / iterations as f64
+    }
+
     /// Signal shutdown to the kernel without waiting for final state.
     /// Called by Drop to ensure the kernel is stopped.
     fn signal_shutdown(&self) {
@@ -824,7 +895,7 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
             return;
         }
 
-        trace!(
+        eprintln!(
             "[HOST] signal_shutdown: signaling SHUTDOWN to {} cubes",
             self.config.num_cubes()
         );
@@ -837,15 +908,27 @@ impl<R: CubeRuntime> TttD2dStreamingState<R> {
         self.stream.write(ctrl_ptr, 0, &shutdown_signals);
         self.stream.sync();
 
+        // Verify the write
+        let readback = self.stream.read(ctrl_ptr, 0, num_cubes);
+        eprintln!("[HOST] signal_shutdown: control after write = {:?}", readback);
+
         // Wait for kernel to finish
-        trace!("[HOST] signal_shutdown: waiting for kernel to finish");
+        eprintln!("[HOST] signal_shutdown: waiting for kernel to finish");
         if let Err(e) = wait_for_sync(&self.kernel_client) {
-            trace!(
+            eprintln!(
                 "[HOST] signal_shutdown: sync error (may be expected): {:?}",
                 e
             );
         }
-        trace!("[HOST] signal_shutdown: done");
+        // Also sync the main client to ensure all GPU work is done
+        eprintln!("[HOST] signal_shutdown: syncing main client");
+        if let Err(e) = wait_for_sync(&self.client) {
+            eprintln!(
+                "[HOST] signal_shutdown: main client sync error: {:?}",
+                e
+            );
+        }
+        eprintln!("[HOST] signal_shutdown: done");
     }
 }
 

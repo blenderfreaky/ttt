@@ -109,3 +109,18 @@ ttt_base_lr = 0.1
 name = "linear-adam-high-lr"
 layer_type = "linear-adam"
 ttt_base_lr = 5.0
+
+# new
+
+[[runs]]
+name = "linear-adam-low-train-lr"
+layer_type = "linear-adam"
+ttt_base_lr = 0.1
+lr = 2e-3
+grad_accum = 4
+
+[[runs]]
+name = "linear-rope-global"
+layer_type = "linear"
+pos_encoding = "rope-global"
+ttt_base_lr = 1.0

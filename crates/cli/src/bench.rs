@@ -134,15 +134,15 @@ fn bench_fwd<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     let input_ids = Tensor::<B, 2, Int>::ones([args.batch, args.seq_len], device);
 
     for _ in 0..args.warmup {
-        let logits = model.forward(input_ids.clone(), 0);
-        let _ = logits.into_data();
+        let _logits = model.forward(input_ids.clone(), 0);
+        let _ = B::sync(device);
     }
 
     let mut total = 0.0;
     for _ in 0..args.repeats {
         let start = Instant::now();
-        let logits = model.forward(input_ids.clone(), 0);
-        let _ = logits.into_data();
+        let _logits = model.forward(input_ids.clone(), 0);
+        let _ = B::sync(device);
         total += start.elapsed().as_secs_f64();
     }
     (total / args.repeats as f64) * 1000.0
@@ -191,18 +191,24 @@ fn bench_fwd_inner<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
         iterations: 1,
     };
 
+    // Pre-allocate inputs and state once, clone per iteration
+    let inputs = generate_test_inputs(dims, device);
+    let state = inner.init_state(args.batch);
+    let _ = B::sync(device);
+
     for _ in 0..args.warmup {
-        let inputs = generate_test_inputs(dims, device);
-        let mut state = inner.init_state(args.batch);
-        let _ = inner.forward(&mut state, inputs).into_data();
+        let mut s = state.clone();
+        let _out = inner.forward(&mut s, inputs.clone());
+        let _ = B::sync(device);
     }
 
     let mut total = 0.0;
     for _ in 0..args.repeats {
-        let inputs = generate_test_inputs(dims, device);
-        let mut state = inner.init_state(args.batch);
+        let mut s = state.clone();
+        let _ = B::sync(device);
         let start = Instant::now();
-        let _ = inner.forward(&mut state, inputs).into_data();
+        let _out = inner.forward(&mut s, inputs.clone());
+        let _ = B::sync(device);
         total += start.elapsed().as_secs_f64();
     }
     (total / args.repeats as f64) * 1000.0
@@ -227,19 +233,23 @@ fn bench_bwd_inner<
         iterations: 1,
     };
 
+    // Pre-allocate inputs and state once, clone per iteration
+    let inputs = generate_test_inputs(dims, device);
+    let state = inner.init_state(args.batch);
+    let _ = B::sync(device);
+
     for _ in 0..args.warmup {
-        let inputs = generate_test_inputs(dims, device);
-        let mut state = inner.init_state(args.batch);
-        let _grads = inner.forward(&mut state, inputs).sum().backward();
+        let mut s = state.clone();
+        let _grads = inner.forward(&mut s, inputs.clone()).sum().backward();
         let _ = B::sync(device);
     }
 
     let mut total = 0.0;
     for _ in 0..args.repeats {
-        let inputs = generate_test_inputs(dims, device);
-        let mut state = inner.init_state(args.batch);
+        let mut s = state.clone();
+        let _ = B::sync(device);
         let start = Instant::now();
-        let _grads = inner.forward(&mut state, inputs).sum().backward();
+        let _grads = inner.forward(&mut s, inputs.clone()).sum().backward();
         let _ = B::sync(device);
         total += start.elapsed().as_secs_f64();
     }
