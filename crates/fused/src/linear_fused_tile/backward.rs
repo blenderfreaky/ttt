@@ -884,7 +884,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut tile_grad_z1_bar = P::st_cs_f();
     let mut tile_grad_xk_combined = P::st_cs_f();
     let mut tile_e = P::st_cs_f();
-    let mut tile_f = P::st_cs_f();
+
     let mut tile_grad_Z1 = P::st_cs_f();
     let mut tile_grad_target = P::st_cs_f();
     // temp_f_f removed: weight_stage is reused after recomputation section
@@ -950,12 +950,11 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Compute target = xv - xk
-    let mut v_direct_smem = P::st_cs_f();
-    cube::load_st_direct(&recomp.xv, &mut v_direct_smem, stage_offset, 0, 0);
+    cube::load_st_direct(&recomp.xv, &mut tile_e, stage_offset, 0, 0);
 
     sync_cube();
 
-    v_direct_smem.sub(&xk_smem);
+    tile_e.sub(&xk_smem);
 
     sync_cube();
 
@@ -979,7 +978,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     scratch1.copy_from(&grad_l_smem);
     scratch1.mul_row(&ln_weight_rv);
     scratch1.add_row(&ln_bias_rv);
-    scratch1.sub(&v_direct_smem);
+    scratch1.sub(&tile_e);
 
     sync_cube();
 
@@ -1170,11 +1169,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         tile_b,        // scratch
         &mut cs_cs_a,
         &mut cs_cs_b,
-        &mut tile_f,   // grad_xq_mini output
+        tile_c,        // grad_xq_mini output
     );
-
-    // Copy grad_xq_mini into tile_c (which held xq_smem, now dead)
-    tile_c.copy_from(&tile_f);
 
     sync_cube();
 
@@ -1541,6 +1537,7 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     let mut tile_b = P::st_cs_f();
     let mut tile_c = P::st_cs_f();
     let mut ext_buf = ReduceBuf::<P::EAcc>::new();
+    let mut weight_stage = P::st_ff();
 
     sync_cube();
 
@@ -1550,8 +1547,7 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
         let stage_offset = base_qkv + stage_idx * stage_stride;
         let ttt_lr_eta_idx = base_ttt_lr_eta + stage_idx * mini_batch_len;
 
-        // Compute weight_stage by simulating forward from weight_init through stages 0..stage_idx-1
-        let mut weight_stage = P::st_ff();
+        // Reinitialize weight_stage from weight_init each iteration
         cube::load_st_direct(&saved.weight_init, &mut weight_stage, base_weight, 0, 0);
 
         sync_cube();
