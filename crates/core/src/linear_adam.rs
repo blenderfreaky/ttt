@@ -56,6 +56,9 @@ pub struct TTTLinearAdamConfig {
     /// Small constant for numerical stability
     #[config(default = 1e-8)]
     pub epsilon: f32,
+    /// Inner Adam learning rate (scales the adaptive update)
+    #[config(default = 0.001)]
+    pub lr: f32,
 }
 
 impl Default for TTTLinearAdamConfig {
@@ -67,13 +70,16 @@ impl Default for TTTLinearAdamConfig {
 impl<B: Backend> TTTLinearAdam<B> {
     /// Apply Adam update to the state parameters.
     ///
-    /// The gradients already incorporate the learning rate via eta,
-    /// so we use the Adam formula without an additional lr multiplier:
+    /// The eta-weighted gradients (with full per-token token_eta and ttt_lr_eta)
+    /// are passed in, same as the SGD version. A scalar `lr` from the config
+    /// controls the step magnitude, compensating for Adam's normalization
+    /// which would otherwise make steps ~sign(g) ≈ ±1 per element.
+    ///
     /// m = β1*m + (1-β1)*g
     /// v = β2*v + (1-β2)*g²
     /// m̂ = m / (1 - β1^t)
     /// v̂ = v / (1 - β2^t)
-    /// θ = θ - m̂ / (√v̂ + ε)
+    /// θ = θ - lr · m̂ / (√v̂ + ε)
     fn adam_update(
         &self,
         state: &mut TTTLinearAdamState<B>,
@@ -83,6 +89,7 @@ impl<B: Backend> TTTLinearAdam<B> {
         let beta1 = self.adam_config.beta1;
         let beta2 = self.adam_config.beta2;
         let eps = self.adam_config.epsilon;
+        let lr = self.adam_config.lr;
 
         state.step += 1;
 
@@ -102,8 +109,9 @@ impl<B: Backend> TTTLinearAdam<B> {
         let weight_v_hat = state.weight_v.clone() / beta2_pow;
         let bias_v_hat = state.bias_v.clone() / beta2_pow;
 
-        state.weight = state.weight.clone() - weight_m_hat / (weight_v_hat.sqrt() + eps);
-        state.bias = state.bias.clone() - bias_m_hat / (bias_v_hat.sqrt() + eps);
+        state.weight =
+            state.weight.clone() - weight_m_hat / (weight_v_hat.sqrt() + eps) * lr;
+        state.bias = state.bias.clone() - bias_m_hat / (bias_v_hat.sqrt() + eps) * lr;
     }
 }
 
