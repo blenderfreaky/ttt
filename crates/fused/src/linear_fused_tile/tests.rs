@@ -121,13 +121,16 @@ fn test_fused_tile_multi_backward_vs_reference(
 // Compute benchmark (fused-tile-multi, non-streaming baseline)
 // =============================================================================
 
-#[test_case(1, 1, 64, 16 ; "1head_seq16")]
-#[test_case(1, 12, 64, 16 ; "125m_seq16")]
-#[test_case(1, 12, 64, 128 ; "125m_seq128")]
-#[test_case(1, 12, 64, 1024 ; "125m_seq1024")]
-#[test_case(1, 12, 64, 2048 ; "125m_seq2048")]
+#[test_case(1, 1, 64, 16, 1 ; "1head_seq16_ckpt1")]
+#[test_case(1, 12, 64, 16, 1 ; "125m_seq16_ckpt1")]
+#[test_case(1, 12, 64, 128, 1 ; "125m_seq128_ckpt1")]
+#[test_case(1, 12, 64, 1024, 1 ; "125m_seq1024_ckpt1")]
+#[test_case(1, 12, 64, 2048, 1 ; "125m_seq2048_ckpt1")]
+#[test_case(1, 12, 64, 128, 4 ; "125m_seq128_ckpt4")]
+#[test_case(1, 12, 64, 1024, 8 ; "125m_seq1024_ckpt8")]
+#[test_case(1, 12, 64, 2048, 16 ; "125m_seq2048_ckpt16")]
 #[ignore]
-fn bench_fused_tile_multi(batch: usize, heads: usize, dim: usize, seq: usize) {
+fn bench_fused_tile_multi(batch: usize, heads: usize, dim: usize, seq: usize, ckpt_interval: usize) {
     use burn::prelude::Backend;
 
     let device: <GpuBackend as Backend>::Device = Default::default();
@@ -136,7 +139,8 @@ fn bench_fused_tile_multi(batch: usize, heads: usize, dim: usize, seq: usize) {
     // For 125m: 12 heads, 64 dim. Mini-batch = 16 is the standard.
     let mini_batch = 16;
     let stages = seq / mini_batch;
-    let dims = TestDims::multi_stage(batch, heads, dim, mini_batch, stages);
+    let dims = TestDims::multi_stage(batch, heads, dim, mini_batch, stages)
+        .with_checkpoint_interval(ckpt_interval);
     let config = ttt_core::test_utils::default_test_config(dims);
     let ref_model: ttt_core::TTTLinear<GpuBackend> =
         ttt_core::test_utils::create_test_model(&config, &device);
@@ -168,8 +172,8 @@ fn bench_fused_tile_multi(batch: usize, heads: usize, dim: usize, seq: usize) {
     let per_iter_us = elapsed.as_micros() as f64 / iterations as f64;
     let per_stage_us = per_iter_us / stages as f64;
     eprintln!(
-        "\n[BENCH fused-tile-multi] batch={}, heads={}, dim={}, seq={} ({}×mini_batch={})",
-        batch, heads, dim, seq, stages, mini_batch,
+        "\n[BENCH fused-tile-multi] batch={}, heads={}, dim={}, seq={} ({}×mini_batch={}), ckpt_interval={}",
+        batch, heads, dim, seq, stages, mini_batch, ckpt_interval,
     );
     eprintln!(
         "[BENCH] {} iters, {:.1} us/iter ({:.3} ms/iter), {:.1} us/stage ({:.3} ms/stage), total {:.1} ms",

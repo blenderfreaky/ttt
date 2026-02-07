@@ -68,6 +68,9 @@ struct Args {
     #[arg(long, default_value = "5")]
     repeats: usize,
 
+    #[arg(long, default_value = "1")]
+    checkpoint_interval: usize,
+
     #[arg(long, default_value = "false")]
     json: bool,
 
@@ -89,6 +92,7 @@ struct BenchResult {
     batch: usize,
     seq_len: usize,
     mini_batch: usize,
+    checkpoint_interval: usize,
     dtype: &'static str,
     time_ms: f64,
     throughput: f64,
@@ -156,7 +160,7 @@ fn bench_fwd_inner<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
         seq_len: args.seq_len,
         mini_batch_size: args.mini_batch,
         iterations: 1,
-        checkpoint_interval: 1,
+        checkpoint_interval: args.checkpoint_interval,
     };
 
     // Pre-allocate inputs and state once, clone per iteration
@@ -199,7 +203,7 @@ fn bench_bwd_inner<
         seq_len: args.seq_len,
         mini_batch_size: args.mini_batch,
         iterations: 1,
-        checkpoint_interval: 1,
+        checkpoint_interval: args.checkpoint_interval,
     };
 
     // Pre-allocate inputs and state once, clone per iteration
@@ -225,12 +229,18 @@ fn bench_bwd_inner<
     (total / args.repeats as f64) * 1000.0
 }
 
-fn make_config(model_size: ModelSize, mini_batch: usize, seq_len: usize) -> ModelConfig {
+fn make_config(
+    model_size: ModelSize,
+    mini_batch: usize,
+    seq_len: usize,
+    checkpoint_interval: usize,
+) -> ModelConfig {
     let vocab_size = 32000; // match JAX/PyTorch reference configs
     let arch = Arc::new(ModelArch::from_size(model_size, vocab_size));
     let ttt = Arc::new(TTTConfig {
         mini_batch_size: mini_batch,
         max_seq_len: seq_len,
+        checkpoint_interval,
         ..TTTConfig::default()
     });
     ModelConfig::new(arch, ttt)
@@ -242,7 +252,7 @@ fn main() {
         .init();
 
     let args = Args::parse();
-    let config = make_config(args.model_size, args.mini_batch, args.seq_len);
+    let config = make_config(args.model_size, args.mini_batch, args.seq_len, args.checkpoint_interval);
     let mix = &args.ttt_type;
 
     // For inner_only, the dispatch macro needs a single InnerModel
@@ -319,6 +329,7 @@ fn main() {
         batch: args.batch,
         seq_len: args.seq_len,
         mini_batch: args.mini_batch,
+        checkpoint_interval: args.checkpoint_interval,
         dtype: dtype_str,
         time_ms,
         throughput,
@@ -336,8 +347,8 @@ fn main() {
         println!("Dtype: {}", dtype_str);
         println!("Backward: {}", args.backward);
         println!(
-            "Batch: {}, Seq: {}, Mini-batch: {}",
-            args.batch, args.seq_len, args.mini_batch
+            "Batch: {}, Seq: {}, Mini-batch: {}, Checkpoint interval: {}",
+            args.batch, args.seq_len, args.mini_batch, args.checkpoint_interval
         );
         println!();
         println!("Time: {:.2} ms", time_ms);
