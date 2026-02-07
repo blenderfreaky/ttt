@@ -266,6 +266,9 @@ pub struct FusedTttConfig {
     pub head_dim: usize,
     pub epsilon_scaled: u32,
     pub threads: usize,
+    /// Number of stages between checkpoints (1 = every stage, N = only initial).
+    /// Higher values reduce memory but increase backward compute (re-simulation).
+    pub checkpoint_interval: usize,
 }
 
 impl FusedTttConfig {
@@ -276,6 +279,7 @@ impl FusedTttConfig {
             head_dim,
             epsilon_scaled: (epsilon / EPSILON_SCALE_INV) as u32,
             threads,
+            checkpoint_interval: 1,
         }
     }
 

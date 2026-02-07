@@ -68,6 +68,13 @@ impl<F: Float, R: Dim, C: DimOrOne> Rt<F, R, C> {
         }
     }
 
+    pub fn copy_from(&mut self, other: &Rt<F, R, C>) {
+        #[unroll(self.len <= UNROLL_LIMIT)]
+        for i in 0..self.len {
+            self.data[i] = other.data[i];
+        }
+    }
+
     pub fn copy_from_array(&mut self, array: &Array<Line<F>>) {
         #[unroll(self.len <= UNROLL_LIMIT)]
         for i in 0..self.len {

@@ -194,9 +194,9 @@ pub use forward::{
     fused_ttt_forward_kernel_multi, fused_ttt_forward_stage,
 };
 pub use launch::{
-    TttGradInputs, TttSavedTensors, TttTileKernel, TttTileMultiKernel, backward,
-    backward_multi, forward, forward_multi, launch_tile_backward, launch_tile_backward_multi,
-    launch_tile_forward, launch_tile_forward_multi,
+    ForwardMultiResult, TttGradInputs, TttSavedTensors, TttTileKernel, TttTileMultiKernel,
+    backward, backward_multi, forward, forward_multi, launch_tile_backward,
+    launch_tile_backward_multi, launch_tile_forward, launch_tile_forward_multi,
 };
 pub use layer_norm::{
     SumSqOp, layer_norm_backward, layer_norm_forward, layer_norm_forward_save_intermediates,

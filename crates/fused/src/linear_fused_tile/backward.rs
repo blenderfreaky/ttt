@@ -57,6 +57,10 @@ pub struct GradOutputs<F: Float> {
     pub grad_weight: Tensor<Line<F>>,
     pub grad_bias: Tensor<Line<F>>,
     pub grad_ttt_lr_eta: Tensor<Line<F>>,
+    /// Atomic tensor for accumulating token_eta gradients across batches/heads.
+    /// Shape: [seq_len] (unbatched, shared across batch and head dimensions)
+    /// NOTE: Always f32 because HIP/ROCm doesn't support bf16 atomics.
+    pub grad_token_eta: Tensor<Atomic<f32>>,
     /// Atomic tensor for accumulating ln_weight gradients across batches.
     /// Shape: [num_heads, head_dim] (unbatched, shared across batch dimension)
     /// NOTE: Always f32 because HIP/ROCm doesn't support bf16 atomics.
@@ -218,12 +222,16 @@ fn backward_stage4_ln<P: ParamsTrait>(
 struct Stage3Part1Outputs<P: ParamsTrait> {
     /// Intermediate for grad_ttt_lr_eta computation (from weight/bias update term)
     grad_eta_term1: RvbCsA<P>,
+    /// d_last_eta: gradient w.r.t. last_eta vector (before token_eta scaling).
+    /// Used for grad_token_eta[CS-1] contribution from weight/bias update.
+    d_last_eta: RvbCsA<P>,
 }
 
 /// Outputs from stage 3 (final).
 #[derive(CubeType)]
 struct Stage3Outputs<P: ParamsTrait> {
     grad_ttt_lr_eta: RvbCsA<P>,
+    grad_token_eta: RvbCsA<P>,
 }
 
 /// Stage 3 Part 1: Compute gradients that depend on grad_W_last.
@@ -365,21 +373,10 @@ fn backward_stage3_part1<P: ParamsTrait>(
 
     sync_cube();
 
-    // grad_xk_mini = -grad_l_last * last_eta
-    // Compute in scratch1 and add to combined output
-    scratch1.mul_col(last_eta);
-    scratch1.neg();
-
-    sync_cube();
-
-    // Add grad_xk_mini to the combined output (second contribution)
-    grad_xk_combined_out.add(scratch1);
-
-    sync_cube();
-
     // --- grad_ttt_lr_eta from weight/bias update (first part) ---
+    // Must compute BEFORE modifying scratch1 for grad_xk_mini (scratch1 = grad_l_last here)
     // grad_last_eta = sum(-(grad_l_last * XK) - (grad_b_last * grad_l))
-    scratch2.copy_from(scratch1); // scratch1 = grad_l_last
+    scratch2.copy_from(scratch1); // scratch1 = grad_l_last (unmodified)
     scratch2.mul(xk_smem);
 
     sync_cube();
@@ -398,10 +395,30 @@ fn backward_stage3_part1<P: ParamsTrait>(
     grad_eta_term1.add(&grad_eta_term2);
     grad_eta_term1.neg();
 
-    // Scale by last_token_eta
+    // d_last_eta = -(sum_rows(grad_l_last * XK) + sum_rows(grad_b_last * grad_l))
+    // Save before scaling by last_token_eta (needed for grad_token_eta[CS-1])
+    let mut d_last_eta = P::rvb_cs_a();
+    d_last_eta.copy_from(&grad_eta_term1);
+
+    // Scale by last_token_eta for grad_ttt_lr_eta contribution
     grad_eta_term1.mul_scalar(P::EAcc::cast_from(last_token_eta));
 
-    Stage3Part1Outputs::<P> { grad_eta_term1 }
+    // Now modify scratch1 for grad_xk_mini (safe: eta terms already computed)
+    // grad_xk_mini = -grad_l_last * last_eta
+    scratch1.mul_col(last_eta);
+    scratch1.neg();
+
+    sync_cube();
+
+    // Add grad_xk_mini to the combined output (second contribution)
+    grad_xk_combined_out.add(scratch1);
+
+    sync_cube();
+
+    Stage3Part1Outputs::<P> {
+        grad_eta_term1,
+        d_last_eta,
+    }
 }
 
 /// Stage 3 Part 2: Compute gradients that depend on weight_init.
@@ -419,6 +436,7 @@ fn backward_stage3_part2<P: ParamsTrait>(
     ttt_lr_eta: &Tensor<Line<P::EVal>>,
     ttt_lr_eta_idx: usize,
     grad_eta_term1: &RvbCsA<P>,
+    d_last_eta: &RvbCsA<P>,
     buf: &mut ReduceBuf<P::EAcc>,
     scratch1: &mut StCsF<P>,
     cs_cs_a: &mut StCsCs<P>,
@@ -500,10 +518,54 @@ fn backward_stage3_part2<P: ParamsTrait>(
 
     sync_cube();
 
+    // --- grad_token_eta from η terms in z1_bar + weight/bias update ---
+    // cs_cs_b = d_eta, cs_cs_a is dead (was d_eta_base * attn, consumed)
+    // grad_token_eta[i] = Σ_j(d_eta[i,j] * ttt_lr_eta[j])
+    // Plus: grad_token_eta[CS-1] += Σ_j(d_last_eta[j] * ttt_lr_eta[j])
+    cs_cs_a.copy_from(cs_cs_b);
+
+    sync_cube();
+
+    // Load ttt_lr_eta for row-wise multiplication
+    let mut ttt_lr_eta_rv = P::rvb_cs_v();
+    cube::broadcast::load_rv_direct(ttt_lr_eta, &mut ttt_lr_eta_rv, ttt_lr_eta_idx);
+
+    // Multiply each column j by ttt_lr_eta[j]
+    cs_cs_a.mul_row(&ttt_lr_eta_rv);
+
+    sync_cube();
+
+    // Sum rows: grad_token_eta[i] = Σ_j(d_eta[i,j] * ttt_lr_eta[j])
+    let mut grad_token_eta = P::rvb_cs_a();
+    cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::CS>(cs_cs_a, &mut grad_token_eta, buf);
+
+    // Add weight/bias update contribution to last element:
+    // grad_token_eta[CS-1] += dot(d_last_eta, ttt_lr_eta)
+    let ttt_lr_eta_acc = ttt_lr_eta_rv.cast::<P::EAcc>();
+    let mut d_last_eta_scaled = P::rvb_cs_a();
+    d_last_eta_scaled.copy_from(d_last_eta);
+    d_last_eta_scaled.mul(&ttt_lr_eta_acc);
+    // Sum all elements of d_last_eta_scaled to get the scalar dot product
+    let mut dot_sum = P::EAcc::new(0.0);
+    #[unroll]
+    for line_idx in 0..P::CS::LINES {
+        let line = d_last_eta_scaled.data[line_idx];
+        #[unroll]
+        for elem_idx in 0..LINE_SIZE {
+            dot_sum += line[elem_idx];
+        }
+    }
+    // Add to last element of grad_token_eta
+    let last_line_idx = comptime!((P::CS::VALUE - 1) / LINE_SIZE);
+    let last_elem_idx = comptime!((P::CS::VALUE - 1) % LINE_SIZE);
+    let mut last_line = grad_token_eta.data[last_line_idx];
+    last_line[last_elem_idx] += dot_sum;
+    grad_token_eta.data[last_line_idx] = last_line;
+
+    // --- grad_ttt_lr_eta from η terms in z1_bar ---
     // grad_ttt_lr_eta += sum_cols(d_eta * token_eta)
     // d_eta[i,j] contributes to grad_ttt_lr_eta[j] with weight token_eta[i]
-    // Manual implementation: multiply each row by token_eta[row], then sum columns
-    // Load token_eta into a register vector
+    // cs_cs_b still holds d_eta (unmodified)
     let mut token_eta_rv = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(token_eta, &mut token_eta_rv, 0);
 
@@ -517,7 +579,10 @@ fn backward_stage3_part2<P: ParamsTrait>(
 
     grad_ttt_lr_eta.add(grad_eta_term1);
 
-    Stage3Outputs::<P> { grad_ttt_lr_eta }
+    Stage3Outputs::<P> {
+        grad_ttt_lr_eta,
+        grad_token_eta,
+    }
 }
 
 // =============================================================================
@@ -747,6 +812,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     grad_xq_mini: &StCsF<P>,
     grad_xk_combined: &StCsF<P>,
     grad_ttt_lr_eta: &RvbCsA<P>,
+    grad_token_eta: &RvbCsA<P>,
     // Stage 2 outputs
     grad_Z1: &StCsF<P>,
     grad_target: &StCsF<P>,
@@ -765,6 +831,7 @@ fn backward_stage1_assemble<P: ParamsTrait>(
     grads: &mut GradOutputs<P::EVal>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
+    token_eta_base: usize,
     buf: &mut ReduceBuf<P::EAcc>,
     scratch1: &mut StCsF<P>,
 ) {
@@ -834,6 +901,9 @@ fn backward_stage1_assemble<P: ParamsTrait>(
         &mut grads.grad_ttt_lr_eta,
         ttt_lr_eta_idx,
     );
+
+    // Atomically add grad_token_eta (shared across batch/head dimensions)
+    atomic_add_rv::<_, P::CS>(grad_token_eta, &mut grads.grad_token_eta, token_eta_base);
 }
 
 // =============================================================================
@@ -870,6 +940,12 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     grads: &mut GradOutputs<P::EVal>,
     stage_offset: usize,
     ttt_lr_eta_idx: usize,
+    token_eta_base: usize,
+    // Tensor + base offset for reloading the stage weight after it's been overwritten.
+    // For single-stage: saved.weight_init with batch/head offset.
+    // For multi-stage: weight_checkpoints with checkpoint offset.
+    weight_z1bar_tensor: &Tensor<Line<P::EVal>>,
+    weight_z1bar_base: usize,
     // External tiles (allocated by caller, shared with forward_simulate in multi-stage)
     scratch1: &mut StCsF<P>,
     scratch2: &mut StCsF<P>,
@@ -1144,9 +1220,9 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    // Load weight_init into weight_stage (reused as temp F×F) for stage 3 part 2
-    let base_weight_init = index_2d(&saved.weight_init, CUBE_POS_X as usize, CUBE_POS_Y as usize);
-    cube::load_st_direct(&saved.weight_init, weight_stage, base_weight_init, 0, 0);
+    // Reload stage weight into weight_stage for stage 3 part 2 (XQ gradient).
+    // For single-stage this is weight_init; for multi-stage this is the checkpoint weight.
+    cube::load_st_direct(weight_z1bar_tensor, weight_stage, weight_z1bar_base, 0, 0);
 
     sync_cube();
 
@@ -1165,6 +1241,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         &saved.ttt_lr_eta,
         ttt_lr_eta_idx,
         &stage3_part1_out.grad_eta_term1,
+        &stage3_part1_out.d_last_eta,
         buf,
         tile_b,        // scratch
         &mut cs_cs_a,
@@ -1225,6 +1302,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         tile_c,    // grad_xq_mini (copied from tile_f)
         &tile_grad_xk_combined,
         &stage3_out.grad_ttt_lr_eta,
+        &stage3_out.grad_token_eta,
         // Stage 2 outputs
         &tile_grad_Z1,
         &tile_grad_target,
@@ -1243,6 +1321,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         grads,
         stage_offset,
         ttt_lr_eta_idx,
+        token_eta_base,
         buf,
         scratch1, // scratch for stage1
     );
@@ -1302,6 +1381,8 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
 
     sync_cube();
 
+    let base_weight_init = index_2d(&saved.weight_init, batch_idx, head_idx);
+
     fused_ttt_backward_stage::<P>(
         saved,
         recomp,
@@ -1315,6 +1396,9 @@ pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
         grads,
         base_qkv,
         ttt_lr_eta_idx,
+        0, // token_eta_base: single-stage, offset = 0
+        &saved.weight_init,
+        base_weight_init,
         &mut scratch1,
         &mut scratch2,
         &mut ext_k_smem,
@@ -1482,16 +1566,277 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
 
 use super::layer_norm::layer_norm_l2_grad;
 
+/// Propagate accumulated gradient through a single weight update step (VJP).
+///
+/// Given accumulated upstream `G = grad_W_acc` (F×F) and `gb = grad_b_acc` (F),
+/// propagates through:
+///   W[i+1] = W[i] - last_eta * XK^T @ grad_l(W[i])
+///   b[i+1] = b[i] - last_eta @ grad_l(W[i])
+///
+/// where grad_l = layer_norm_l2_grad(XK @ W + b, XV - XK).
+///
+/// The exact VJP requires the full second derivative of grad_l w.r.t. z1,
+/// computed via backward_stage2_ln_l2:
+///   combined_upstream = XK @ G + gb
+///   grad_Z1 = backward_stage2_ln_l2(combined_upstream, x_hat, std, ...)
+///   G_new = G - (last_eta ⊙ XK)^T @ grad_Z1
+///   gb_new = gb - Σ_t last_eta[t] * grad_Z1[t,:]
+///
+/// Allocates extra tiles for the second derivative computation.
+#[cube]
+#[allow(clippy::too_many_arguments)]
+fn propagate_grad_through_weight_update<P: ParamsTrait>(
+    saved: &SavedTensors<P::EVal>,
+    recomp: &RecomputationInputs<P::EVal>,
+    // Weight/bias at this stage (read-only)
+    weight_stage: &StFF<P>,
+    bias_stage: &RvbFV<P>,
+    // Accumulated gradients (modified in place)
+    grad_W_acc: &mut StFF<P>,
+    grad_b_acc: &mut RvbFA<P>,
+    // LN params
+    ln_weight_rv: &RvbFV<P>,
+    // Offsets
+    stage_offset: usize,
+    ttt_lr_eta_idx: usize,
+    // External scratch tiles (from outer scope)
+    scratch_a: &mut StCsF<P>,
+    k_smem: &mut StFCs<P>,
+    scratch_c: &mut StCsF<P>,
+    tile_b: &mut StCsF<P>,
+    tile_c: &mut StCsF<P>,
+    buf: &mut ReduceBuf<P::EAcc>,
+    #[comptime] epsilon: f32,
+) {
+    // Extra tiles for second derivative computation
+    let mut grad_l_tile = P::st_cs_f();
+    let mut grad_Z1_tile = P::st_cs_f();
+    let mut extra_scratch = P::st_cs_f();
+    let mut grad_l_copy = P::st_cs_f();
+    let mut discard_tile = P::st_cs_f();
+
+    // =====================================================================
+    // Phase 0: Load XK → scratch_a, XK^T → k_smem
+    // =====================================================================
+    cube::load_st_direct(&saved.xk, scratch_a, stage_offset, 0, 0);
+    cube::load_st_transpose(&saved.xk, k_smem, stage_offset, 0, 0);
+
+    sync_cube();
+
+    // =====================================================================
+    // Phase 1: Recompute forward intermediates
+    // z1 = XK @ W + b → scratch_c; normalize → x_hat, std
+    // =====================================================================
+    let mut z1_reg = P::rt_cs_f();
+    z1_reg.zero();
+    cube::mma_AtB(&mut z1_reg, k_smem, weight_stage);
+
+    sync_cube();
+
+    // Add bias
+    let threads_n = P::F::VALUE / P::F_Reg::VALUE;
+    let thread_n = (UNIT_POS as usize) % threads_n;
+    let mut bias_reg = P::rv_f();
+    #[unroll]
+    for i in 0..P::F_Reg::LINES {
+        let src_idx = thread_n * P::F_Reg::LINES + i;
+        bias_reg.data[i] = thundercube::util::cast_line(bias_stage.data[src_idx]);
+    }
+    z1_reg.add_row(&bias_reg);
+
+    cube::store_rt_to_st(&z1_reg, scratch_c);
+
+    sync_cube();
+
+    // Normalize z1 → x_hat in scratch_c, returns std
+    let std_fused = normalize_to_x_hat::<P::EVal, P::EAcc, P::CS, P::F>(
+        scratch_c,
+        buf,
+        epsilon,
+    );
+    // scratch_c = x_hat
+
+    // Save x_hat → tile_b (need it for backward_stage2)
+    tile_b.copy_from(scratch_c);
+
+    sync_cube();
+
+    // =====================================================================
+    // Phase 1b: Compute grad_output, grad_x_hat, grad_l
+    // =====================================================================
+
+    // Load LN bias
+    let base_ln = index_2d(&saved.ln_weight, CUBE_POS_Y as usize, 0);
+    let mut ln_bias_rv = P::rvb_f_v();
+    cube::broadcast::load_rv_direct(&recomp.ln_bias, &mut ln_bias_rv, base_ln);
+
+    // Compute y = γ * x_hat + β → tile_c
+    tile_c.copy_from(scratch_c);
+    tile_c.mul_row(ln_weight_rv);
+    tile_c.add_row(&ln_bias_rv);
+
+    // Load target = XV - XK → extra_scratch
+    cube::load_st_direct(&recomp.xv, &mut extra_scratch, stage_offset, 0, 0);
+
+    sync_cube();
+
+    extra_scratch.sub(scratch_a); // target = XV - XK
+
+    sync_cube();
+
+    // grad_output = y - target → tile_c
+    tile_c.sub(&extra_scratch);
+
+    sync_cube();
+
+    // Save grad_output → scratch_c (x_hat was saved in tile_b)
+    scratch_c.copy_from(&tile_c);
+
+    // grad_x_hat = grad_output * γ → tile_c
+    tile_c.mul_row(ln_weight_rv);
+
+    sync_cube();
+
+    // Compute grad_l: need compute_grad_x_from_grad_x_hat(grad_x_hat, x_hat_copy, std, temp, buf)
+    // grad_l_tile = copy of x_hat (will be overwritten with grad_l)
+    grad_l_tile.copy_from(tile_b);
+
+    sync_cube();
+
+    // Use extra_scratch as temp for compute_grad_x_from_grad_x_hat
+    compute_grad_x_from_grad_x_hat::<P::EVal, P::EAcc, P::CS, P::F>(
+        &tile_c,       // grad_x_hat (read-only)
+        &mut grad_l_tile, // x_hat → overwritten with grad_l
+        &std_fused,
+        &mut extra_scratch, // temp
+        buf,
+    );
+
+    sync_cube();
+
+    // Now: tile_b = x_hat, scratch_c = grad_output, tile_c = grad_x_hat,
+    //      grad_l_tile = grad_l, std_fused = std (Rv)
+
+    // Compute sum(grad_x_hat * x_hat) per row (needed for backward_stage2)
+    extra_scratch.copy_from(&tile_c);
+    extra_scratch.mul(tile_b);
+
+    sync_cube();
+
+    let mut sum_gxh_xh_acc = P::rvb_cs_a();
+    cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::F>(&extra_scratch, &mut sum_gxh_xh_acc, buf);
+    let sum_gxh_xh = sum_gxh_xh_acc.cast::<P::EVal>();
+
+    // =====================================================================
+    // Phase 2: Compute combined_upstream = XK @ G + gb → extra_scratch
+    // =====================================================================
+    let mut upstream_reg = P::rt_cs_f();
+    upstream_reg.zero();
+    cube::mma_AtB(&mut upstream_reg, k_smem, grad_W_acc);
+
+    sync_cube();
+
+    cube::store_rt_to_st(&upstream_reg, &mut extra_scratch);
+
+    sync_cube();
+
+    let grad_b_acc_val = grad_b_acc.cast::<P::EVal>();
+    extra_scratch.add_row(&grad_b_acc_val);
+
+    sync_cube();
+
+    // =====================================================================
+    // Phase 3: Exact second derivative via backward_stage2_ln_l2
+    // extra_scratch = combined_upstream (= grad_grad_l for the second derivative)
+    // Produces grad_Z1 = (∂grad_l/∂z1)^T @ combined_upstream
+    // =====================================================================
+
+    // Save grad_l to a separate tile so grad_l_tile can be reused as scratch2
+    grad_l_copy.copy_from(&grad_l_tile);
+
+    sync_cube();
+
+    // scratch_a is available as scratch1 (XK can be recovered from k_smem later)
+    let stage2_out = backward_stage2_ln_l2::<P>(
+        &extra_scratch,    // grad_grad_l = combined_upstream
+        tile_b,            // x_hat_fused (read-only)
+        &std_fused,
+        scratch_c,         // grad_output_fused (read-only)
+        &tile_c,           // grad_x_hat_fused (read-only)
+        &grad_l_copy,      // grad_l (read-only, separate from scratch2)
+        ln_weight_rv,
+        &sum_gxh_xh,
+        buf,
+        scratch_a,         // scratch1
+        &mut grad_l_tile,  // scratch2 (no longer aliased with grad_l)
+        &mut grad_Z1_tile, // grad_Z1 output
+        &mut discard_tile, // grad_target output (not needed, separate from x_hat)
+    );
+    // We ignore stage2_out.grad_ln_weight/grad_ln_bias here since
+    // those are already accounted for in the per-stage backward.
+    let _ = stage2_out;
+
+    sync_cube();
+
+    // =====================================================================
+    // Phase 4: Scale grad_Z1 by last_eta
+    // =====================================================================
+    let last_token_idx = P::CS::VALUE - 1;
+    let last_line_idx = last_token_idx / comptime!(LINE_SIZE);
+    let last_elem_in_line = last_token_idx % comptime!(LINE_SIZE);
+    let token_eta_line = saved.token_eta[last_line_idx];
+    let last_token_eta = token_eta_line[last_elem_in_line];
+
+    let mut last_eta_rv = P::rvb_cs_v();
+    cube::broadcast::load_rv_direct(&saved.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
+    last_eta_rv.mul_scalar(last_token_eta);
+
+    grad_Z1_tile.mul_col(&last_eta_rv);
+
+    sync_cube();
+
+    // =====================================================================
+    // Phase 5: G_new = G - XK^T @ (last_eta * grad_Z1)
+    // k_smem still holds XK^T from Phase 0
+    // =====================================================================
+    let mut dW_reg = P::rt_ff();
+    dW_reg.zero();
+    cube::mma_AB(&mut dW_reg, k_smem, &grad_Z1_tile);
+
+    sync_cube();
+
+    let mut g_reg = P::rt_ff();
+    cube::load_rt_from_st(grad_W_acc, &mut g_reg);
+    g_reg.sub(&dW_reg);
+    cube::store_rt_to_st(&g_reg, grad_W_acc);
+
+    sync_cube();
+
+    // =====================================================================
+    // Phase 6: gb_new = gb - Σ_t last_eta[t] * grad_Z1[t,:]
+    // grad_Z1_tile already contains last_eta * grad_Z1 from Phase 4
+    // =====================================================================
+    let mut bias_update_acc = P::rvb_f_a();
+    cube::reduce_cols::<P::EVal, P::EAcc, P::CS, P::F, SumOp>(
+        &grad_Z1_tile,
+        &mut bias_update_acc,
+        buf,
+    );
+
+    grad_b_acc.sub(&bias_update_acc);
+}
+
 /// Fused TTT-Linear backward pass kernel (multi-stage).
 ///
 /// For multi-stage backward, we process stages in reverse order.
-/// For each backward stage k, we need the weight/bias state at stage k,
-/// which requires simulating the forward weight evolution from weight_init
-/// through stages 0..k-1.
+/// Per-stage weight/bias checkpoints are loaded from tensors saved during forward,
+/// eliminating the O(N²) forward re-simulation.
 #[cube(launch)]
 pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     saved: &SavedTensors<P::EVal>,
     recomp: &RecomputationInputs<P::EVal>,
+    weight_checkpoints: &Tensor<Line<P::EVal>>,
+    bias_checkpoints: &Tensor<Line<P::EVal>>,
     grad_output: &Tensor<Line<P::EVal>>,
     grads: &mut GradOutputs<P::EVal>,
     num_stages: u32,
@@ -1499,6 +1844,7 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
 ) {
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;
+    let num_heads = saved.xq.shape(1);
     let epsilon = comptime!(config.epsilon());
     let mini_batch_len = comptime!(P::CS::VALUE);
     let head_dim = comptime!(P::F::VALUE);
@@ -1507,15 +1853,9 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
 
     let base_qkv = index_2d(&saved.xq, batch_idx, head_idx);
     let base_ttt_lr_eta = index_2d(&saved.ttt_lr_eta, batch_idx, head_idx);
-    let base_weight = index_2d(&saved.weight_init, batch_idx, head_idx);
-    let base_bias = index_2d(&recomp.bias, batch_idx, head_idx);
-    let base_ln = index_2d(&saved.ln_weight, head_idx, 0);
 
-    // Load LN params once
-    let mut ln_weight_rv = P::rvb_f_v();
-    let mut ln_bias_rv = P::rvb_f_v();
-    cube::broadcast::load_rv_direct(&saved.ln_weight, &mut ln_weight_rv, base_ln);
-    cube::broadcast::load_rv_direct(&recomp.ln_bias, &mut ln_bias_rv, base_ln);
+    // Checkpoint offset base: (batch_idx * num_heads + head_idx) * num_stages
+    let ckpt_bh = (batch_idx * num_heads + head_idx) * num_stages;
 
     let mut grad_L_W_last = P::st_ff();
     grad_L_W_last.fill(P::EVal::new(0.0));
@@ -1529,8 +1869,7 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     let mut grad_L_ln_bias_acc = P::rvb_f_a();
     grad_L_ln_bias_acc.fill(P::EAcc::new(0.0));
 
-    // Shared scratch tiles - reused by both forward_simulate and backward_stage
-    // to avoid exceeding shared memory limits.
+    // Shared scratch tiles
     let mut scratch1 = P::st_cs_f();
     let mut scratch2 = P::st_cs_f();
     let mut ext_k_smem = P::st_f_cs();
@@ -1541,43 +1880,37 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
 
     sync_cube();
 
-    // Process stages in reverse order (backward through time)
+    // Load LN params once (needed for forward simulation)
+    let base_ln = index_2d(&saved.ln_weight, head_idx, 0);
+    let mut ln_weight_rv = P::rvb_f_v();
+    let mut ln_bias_rv = P::rvb_f_v();
+    cube::broadcast::load_rv_direct(&saved.ln_weight, &mut ln_weight_rv, base_ln);
+    cube::broadcast::load_rv_direct(&recomp.ln_bias, &mut ln_bias_rv, base_ln);
+
+    // Process stages in reverse order (backward through time).
+    // At each stage we first propagate the accumulated gradient (grad_L_W_last, grad_L_b_last)
+    // through the weight update Jacobian at this stage, then compute the local backward.
     for stage in 0..num_stages {
         let stage_idx = num_stages - 1 - stage;
         let stage_offset = base_qkv + stage_idx * stage_stride;
         let ttt_lr_eta_idx = base_ttt_lr_eta + stage_idx * mini_batch_len;
 
-        // Reinitialize weight_stage from weight_init each iteration
-        cube::load_st_direct(&saved.weight_init, &mut weight_stage, base_weight, 0, 0);
+        // === Load weight/bias checkpoint for this stage ===
+        let ckpt_weight_offset = (ckpt_bh + stage_idx) * head_dim * head_dim;
+        cube::load_st_direct(weight_checkpoints, &mut weight_stage, ckpt_weight_offset, 0, 0);
 
         sync_cube();
 
         let mut bias_stage = P::rvb_f_v();
-        cube::broadcast::load_rv_direct(&recomp.bias, &mut bias_stage, base_bias);
+        let ckpt_bias_offset = (ckpt_bh + stage_idx) * head_dim;
+        cube::broadcast::load_rv_direct(bias_checkpoints, &mut bias_stage, ckpt_bias_offset);
 
-        // Simulate forward weight updates for stages 0..stage_idx-1
-        for fwd_stage in 0..stage_idx {
-            let fwd_offset = base_qkv + fwd_stage * stage_stride;
-            let fwd_ttt_lr_eta_idx = base_ttt_lr_eta + fwd_stage * mini_batch_len;
-            forward_simulate_weight_update::<P>(
-                saved,
-                recomp,
-                &mut weight_stage,
-                &mut bias_stage,
-                &ln_weight_rv,
-                &ln_bias_rv,
-                fwd_offset,
-                fwd_ttt_lr_eta_idx,
-                &mut ext_k_smem,
-                &mut scratch1,
-                &mut scratch2,
-                &mut tile_b,
-                &mut tile_c,
-                &mut ext_buf,
-                epsilon,
-            );
-        }
+        // No separate propagation step needed: backward_stage handles the inter-stage
+        // chain rule through the grad_grad_l computation in backward_stage3_part1, which
+        // uses grad_L_W_last/grad_L_b_last to compute the VJP through the weight update.
 
+        // Each stage writes its token_eta gradient to its own offset within [seq_len]
+        let token_eta_base = stage_idx * mini_batch_len;
         fused_ttt_backward_stage::<P>(
             saved,
             recomp,
@@ -1591,7 +1924,9 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
             grads,
             stage_offset,
             ttt_lr_eta_idx,
-            // Shared scratch tiles (same as forward_simulate)
+            token_eta_base,
+            weight_checkpoints,
+            ckpt_weight_offset,
             &mut scratch1,
             &mut scratch2,
             &mut ext_k_smem,

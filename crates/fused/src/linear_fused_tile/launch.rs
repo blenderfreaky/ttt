@@ -27,7 +27,7 @@ use crate::{
 };
 
 tensor_bundle! {
-    /// Saved state for backward pass.
+    /// Saved state for backward pass (single-stage).
     /// Contains all inputs needed for activation recomputation.
     /// No forward intermediates are saved - they are recomputed during backward.
     pub struct TttSavedState {
@@ -36,6 +36,19 @@ tensor_bundle! {
         weight_init, bias,    // Initial weight and bias for recomputation
         token_eta, ttt_lr_eta,
         ln_weight, ln_bias    // Layer norm params for recomputation
+    }
+}
+
+tensor_bundle! {
+    /// Saved state for backward pass (multi-stage).
+    /// Includes per-stage weight/bias checkpoints from the forward pass
+    /// to avoid O(N²) forward re-simulation during backward.
+    pub struct TttSavedStateMulti {
+        xq, xk, xv,
+        weight_init, bias,
+        token_eta, ttt_lr_eta,
+        ln_weight, ln_bias,
+        weight_checkpoints, bias_checkpoints
     }
 }
 
@@ -139,6 +152,7 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
     grad_weight: TensorHandleRef<R>,
     grad_bias: TensorHandleRef<R>,
     grad_ttt_lr_eta: TensorHandleRef<R>,
+    grad_token_eta: TensorHandleRef<R>,
     grad_ln_weight: TensorHandleRef<R>,
     grad_ln_bias: TensorHandleRef<R>,
     config: FusedTttConfig,
@@ -179,6 +193,7 @@ pub fn launch_tile_backward<R: Runtime, F: Float + CubeElement>(
         grad_bias.as_tensor_arg(vectorization),
         grad_ttt_lr_eta.as_tensor_arg(vectorization),
         // Atomic tensors use scalar (vectorization=1), not Line<F>
+        grad_token_eta.as_tensor_arg(1),
         grad_ln_weight.as_tensor_arg(1),
         grad_ln_bias.as_tensor_arg(1),
     );
@@ -264,6 +279,7 @@ pub struct TttGradInputs<T> {
     pub grad_weight: T,
     pub grad_bias: T,
     pub grad_ttt_lr_eta: T,
+    pub grad_token_eta: T,
     pub grad_ln_weight: T,
     pub grad_ln_bias: T,
 }
@@ -295,9 +311,15 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
     let grad_bias_batched =
         empty_like::<R, F>(&saved.weight_init, [batch_size, num_heads, head_dim]);
 
-    // LN gradients are unbatched (atomic accumulation across batches)
+    // Atomic gradients are unbatched (accumulation across batches/heads)
     // Must be zero-initialized since kernel uses atomic adds
     // NOTE: These use f32 because HIP/ROCm doesn't support bf16 atomics
+    let grad_token_eta = zeros_client::<R>(
+        saved.ln_weight.client.clone(),
+        saved.ln_weight.device.clone(),
+        [seq_len].into(),
+        f32::dtype(),
+    );
     let grad_ln_weight = zeros_client::<R>(
         saved.ln_weight.client.clone(),
         saved.ln_weight.device.clone(),
@@ -331,12 +353,14 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         grad_weight_batched.as_handle_ref(),
         grad_bias_batched.as_handle_ref(),
         grad_ttt_lr_eta.as_handle_ref(),
+        grad_token_eta.as_handle_ref(),
         grad_ln_weight.as_handle_ref(),
         grad_ln_bias.as_handle_ref(),
         config,
     );
 
     // These are in f32 (see above), so we need to cast them back
+    let grad_token_eta = cast(grad_token_eta, F::dtype());
     let grad_ln_weight = cast(grad_ln_weight, F::dtype());
     let grad_ln_bias = cast(grad_ln_bias, F::dtype());
 
@@ -347,6 +371,7 @@ pub fn backward<R: CubeRuntime, F: FloatElement>(
         grad_weight: grad_weight_batched,
         grad_bias: grad_bias_batched,
         grad_ttt_lr_eta,
+        grad_token_eta,
         grad_ln_weight,
         grad_ln_bias,
     }
@@ -370,6 +395,9 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
     xv: TensorHandleRef<R>,
     bias: TensorHandleRef<R>,
     ln_bias: TensorHandleRef<R>,
+    // Per-stage weight/bias checkpoints from forward
+    weight_checkpoints: TensorHandleRef<R>,
+    bias_checkpoints: TensorHandleRef<R>,
     // Upstream gradient
     grad_output: TensorHandleRef<R>,
     // Output gradients
@@ -379,6 +407,7 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
     grad_weight: TensorHandleRef<R>,
     grad_bias: TensorHandleRef<R>,
     grad_ttt_lr_eta: TensorHandleRef<R>,
+    grad_token_eta: TensorHandleRef<R>,
     grad_ln_weight: TensorHandleRef<R>,
     grad_ln_bias: TensorHandleRef<R>,
     config: FusedTttConfig,
@@ -420,6 +449,7 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
         grad_bias.as_tensor_arg(vectorization),
         grad_ttt_lr_eta.as_tensor_arg(vectorization),
         // Atomic tensors use scalar (vectorization=1), not Line<F>
+        grad_token_eta.as_tensor_arg(1),
         grad_ln_weight.as_tensor_arg(1),
         grad_ln_bias.as_tensor_arg(1),
     );
@@ -433,6 +463,8 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
         config.threads,
         saved_launch,
         recompute_launch,
+        weight_checkpoints.as_tensor_arg(vectorization),
+        bias_checkpoints.as_tensor_arg(vectorization),
         grad_output_arg,
         grads_launch,
         ScalarArg::new(num_stages as u32),
@@ -447,6 +479,8 @@ pub fn launch_tile_backward_multi<R: Runtime, F: Float + CubeElement>(
 /// Recomputes forward intermediates from saved inputs.
 pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
     saved: TttSavedTensors<CubeTensor<R>>,
+    weight_checkpoints: CubeTensor<R>,
+    bias_checkpoints: CubeTensor<R>,
     grad_output: CubeTensor<R>,
     mini_batch_len: usize,
     epsilon: f32,
@@ -478,9 +512,16 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
     let grad_bias_batched =
         empty_like::<R, F>(&saved.weight_init, [batch_size, num_heads, head_dim]);
 
-    // LN gradients are unbatched (atomic accumulation across batches)
+    // Atomic gradients are unbatched (accumulation across batches/heads)
     // Must be zero-initialized since kernel uses atomic adds
     // NOTE: These use f32 because HIP/ROCm doesn't support bf16 atomics
+    // token_eta is [seq_len]: each stage writes to its own offset for per-position gradients
+    let grad_token_eta = zeros_client::<R>(
+        saved.ln_weight.client.clone(),
+        saved.ln_weight.device.clone(),
+        [seq_len].into(),
+        f32::dtype(),
+    );
     let grad_ln_weight = zeros_client::<R>(
         saved.ln_weight.client.clone(),
         saved.ln_weight.device.clone(),
@@ -507,6 +548,8 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         saved.xv.as_handle_ref(),
         saved.bias.as_handle_ref(),
         saved.ln_bias.as_handle_ref(),
+        weight_checkpoints.as_handle_ref(),
+        bias_checkpoints.as_handle_ref(),
         grad_output.as_handle_ref(),
         grad_xq.as_handle_ref(),
         grad_xk.as_handle_ref(),
@@ -514,6 +557,7 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         grad_weight_batched.as_handle_ref(),
         grad_bias_batched.as_handle_ref(),
         grad_ttt_lr_eta.as_handle_ref(),
+        grad_token_eta.as_handle_ref(),
         grad_ln_weight.as_handle_ref(),
         grad_ln_bias.as_handle_ref(),
         config,
@@ -521,6 +565,7 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
     );
 
     // These are in f32 (see above), so we need to cast them back
+    let grad_token_eta = cast(grad_token_eta, F::dtype());
     let grad_ln_weight = cast(grad_ln_weight, F::dtype());
     let grad_ln_bias = cast(grad_ln_bias, F::dtype());
 
@@ -531,6 +576,7 @@ pub fn backward_multi<R: CubeRuntime, F: FloatElement>(
         grad_weight: grad_weight_batched,
         grad_bias: grad_bias_batched,
         grad_ttt_lr_eta,
+        grad_token_eta,
         grad_ln_weight,
         grad_ln_bias,
     }
@@ -555,6 +601,8 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
     output: TensorHandleRef<R>,
     weight_out: TensorHandleRef<R>,
     bias_out: TensorHandleRef<R>,
+    weight_checkpoints: TensorHandleRef<R>,
+    bias_checkpoints: TensorHandleRef<R>,
     config: FusedTttConfig,
     num_stages: usize,
 ) {
@@ -596,6 +644,8 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
         config.threads,
         inputs_launch,
         outputs_launch,
+        weight_checkpoints.as_tensor_arg(vectorization),
+        bias_checkpoints.as_tensor_arg(vectorization),
         ScalarArg::new(num_stages as u32),
         config
     );
@@ -611,14 +661,21 @@ pub fn launch_tile_forward_multi<R: Runtime, F: Float + CubeElement>(
 /// * `mini_batch_len` - Size of each mini-batch (must be a supported tile size)
 ///
 /// Returns the outputs. Forward intermediates are recomputed during backward.
+/// Forward multi return type including per-stage weight/bias checkpoints.
+pub struct ForwardMultiResult<R: CubeRuntime> {
+    pub outputs: TttOutputs<CubeTensor<R>>,
+    pub weight_checkpoints: CubeTensor<R>,
+    pub bias_checkpoints: CubeTensor<R>,
+}
+
 pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
     inputs: TttInputs<CubeTensor<R>>,
     config: FusedTttConfig,
-) -> TttOutputs<CubeTensor<R>> {
+) -> ForwardMultiResult<R> {
     let inputs = inputs.map(into_contiguous);
 
     let shape = inputs.xq.shape.clone();
-    let [_batch_size, _num_heads, seq_len, _head_dim] = shape.dims();
+    let [batch_size, num_heads, seq_len, head_dim] = shape.dims();
     let mini_batch_len = config.mini_batch_len;
 
     assert_eq!(
@@ -635,6 +692,13 @@ pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
     let weight_out = empty_like::<R, F>(&inputs.weight, inputs.weight.shape.clone());
     let bias_out = empty_like::<R, F>(&inputs.bias, inputs.bias.shape.clone());
 
+    // Allocate per-stage weight/bias checkpoints
+    let ckpt_count = batch_size * num_heads * num_stages;
+    let weight_checkpoints =
+        empty_like::<R, F>(&inputs.xq, [ckpt_count, head_dim, head_dim]);
+    let bias_checkpoints =
+        empty_like::<R, F>(&inputs.xq, [ckpt_count, head_dim]);
+
     launch_tile_forward_multi::<R, F>(
         &inputs.xq.client,
         inputs.xq.as_handle_ref(),
@@ -649,14 +713,20 @@ pub fn forward_multi<R: CubeRuntime, F: FloatElement>(
         output.as_handle_ref(),
         weight_out.as_handle_ref(),
         bias_out.as_handle_ref(),
+        weight_checkpoints.as_handle_ref(),
+        bias_checkpoints.as_handle_ref(),
         config,
         num_stages,
     );
 
-    TttOutputs {
-        output,
-        weight: weight_out,
-        bias: bias_out,
+    ForwardMultiResult {
+        outputs: TttOutputs {
+            output,
+            weight: weight_out,
+            bias: bias_out,
+        },
+        weight_checkpoints,
+        bias_checkpoints,
     }
 }
 
@@ -693,7 +763,6 @@ impl FusedKernel for TttTileKernel {
         grad_outputs: TttOutputs<CubeTensor<R>>,
         config: FusedTttConfig,
     ) -> TttInputs<CubeTensor<R>> {
-        let token_eta_shape = saved.token_eta.shape.clone();
         let epsilon = config.epsilon();
         let threads = config.threads;
 
@@ -712,16 +781,13 @@ impl FusedKernel for TttTileKernel {
         let grad_inputs =
             backward::<R, F>(saved_tensors, grad_outputs.output, epsilon, threads);
 
-        // TODO: token_eta gradient is currently zeros (not computed by backward kernel)
-        let grad_token_eta = empty_like::<R, F>(&grad_inputs.grad_xq, token_eta_shape);
-
         TttInputs {
             xq: grad_inputs.grad_xq,
             xk: grad_inputs.grad_xk,
             xv: grad_inputs.grad_xv,
             weight: grad_inputs.grad_weight,
             bias: grad_inputs.grad_bias,
-            token_eta: grad_token_eta,
+            token_eta: grad_inputs.grad_token_eta,
             ttt_lr_eta: grad_inputs.grad_ttt_lr_eta,
             ln_weight: grad_inputs.grad_ln_weight,
             ln_bias: grad_inputs.grad_ln_bias,
@@ -732,13 +798,13 @@ impl FusedKernel for TttTileKernel {
 impl FusedKernel for TttTileMultiKernel {
     type Inputs<T: Debug + Clone + Send> = TttInputs<T>;
     type Outputs<T: Debug + Clone + Send> = TttOutputs<T>;
-    type SavedState<T: Debug + Clone + Send> = TttSavedState<T>;
+    type SavedState<T: Debug + Clone + Send> = TttSavedStateMulti<T>;
     type Config = FusedTttConfig;
 
     fn forward_launch<R: CubeRuntime, F: FloatElement>(
         inputs: TttInputs<CubeTensor<R>>,
         config: FusedTttConfig,
-    ) -> (TttOutputs<CubeTensor<R>>, TttSavedState<CubeTensor<R>>) {
+    ) -> (TttOutputs<CubeTensor<R>>, TttSavedStateMulti<CubeTensor<R>>) {
         let mini_batch_len = config.mini_batch_len;
         assert!(
             mini_batch_len > 0,
@@ -746,25 +812,37 @@ impl FusedKernel for TttTileMultiKernel {
         );
 
         // Clone inputs needed for saved state before moving into forward
-        let saved = TttSavedState {
-            xq: inputs.xq.clone(),
-            xk: inputs.xk.clone(),
-            xv: inputs.xv.clone(),
-            weight_init: inputs.weight.clone(),
-            bias: inputs.bias.clone(),
-            token_eta: inputs.token_eta.clone(),
-            ttt_lr_eta: inputs.ttt_lr_eta.clone(),
-            ln_weight: inputs.ln_weight.clone(),
-            ln_bias: inputs.ln_bias.clone(),
+        let xq = inputs.xq.clone();
+        let xk = inputs.xk.clone();
+        let xv = inputs.xv.clone();
+        let weight_init = inputs.weight.clone();
+        let bias = inputs.bias.clone();
+        let token_eta = inputs.token_eta.clone();
+        let ttt_lr_eta = inputs.ttt_lr_eta.clone();
+        let ln_weight = inputs.ln_weight.clone();
+        let ln_bias = inputs.ln_bias.clone();
+
+        let result = forward_multi::<R, F>(inputs, config);
+
+        let saved = TttSavedStateMulti {
+            xq,
+            xk,
+            xv,
+            weight_init,
+            bias,
+            token_eta,
+            ttt_lr_eta,
+            ln_weight,
+            ln_bias,
+            weight_checkpoints: result.weight_checkpoints,
+            bias_checkpoints: result.bias_checkpoints,
         };
 
-        let outputs = forward_multi::<R, F>(inputs, config);
-
-        (outputs, saved)
+        (result.outputs, saved)
     }
 
     fn backward_launch<R: CubeRuntime, F: FloatElement>(
-        saved: TttSavedState<CubeTensor<R>>,
+        saved: TttSavedStateMulti<CubeTensor<R>>,
         grad_outputs: TttOutputs<CubeTensor<R>>,
         config: FusedTttConfig,
     ) -> TttInputs<CubeTensor<R>> {
@@ -774,9 +852,11 @@ impl FusedKernel for TttTileMultiKernel {
             "mini_batch_len must be set for TttTileMultiKernel backward"
         );
 
-        let token_eta_shape = saved.token_eta.shape.clone();
         let epsilon = config.epsilon();
         let threads = config.threads;
+
+        let weight_checkpoints = saved.weight_checkpoints;
+        let bias_checkpoints = saved.bias_checkpoints;
 
         let saved_tensors = TttSavedTensors {
             xq: saved.xq,
@@ -792,14 +872,13 @@ impl FusedKernel for TttTileMultiKernel {
 
         let grad_inputs = backward_multi::<R, F>(
             saved_tensors,
+            weight_checkpoints,
+            bias_checkpoints,
             grad_outputs.output,
             mini_batch_len,
             epsilon,
             threads,
         );
-
-        // TODO: token_eta gradient is currently zeros (not computed by backward kernel)
-        let grad_token_eta = empty_like::<R, F>(&grad_inputs.grad_xq, token_eta_shape);
 
         TttInputs {
             xq: grad_inputs.grad_xq,
@@ -807,7 +886,7 @@ impl FusedKernel for TttTileMultiKernel {
             xv: grad_inputs.grad_xv,
             weight: grad_inputs.grad_weight,
             bias: grad_inputs.grad_bias,
-            token_eta: grad_token_eta,
+            token_eta: grad_inputs.grad_token_eta,
             ttt_lr_eta: grad_inputs.grad_ttt_lr_eta,
             ln_weight: grad_inputs.grad_ln_weight,
             ln_bias: grad_inputs.grad_ln_bias,

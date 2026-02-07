@@ -177,9 +177,12 @@ pub fn assert_data_close(a: &[f32], b: &[f32], rtol: f32, atol: f32, name: &str)
     }
 
     let tolerance = atol + rtol * max_bv.abs();
+    eprintln!(
+        "{name}: max_diff={max_diff:.6} tol={tolerance:.6} at idx {max_idx}: tested={max_av:.6} ref={max_bv:.6}",
+    );
     assert!(
         max_diff <= tolerance,
-        "{name}: Max mismatch at index {max_idx}: {max_av} vs {max_bv} (diff: {max_diff}, tolerance: {tolerance})",
+        "{name}: max_diff={max_diff:.6} exceeds tolerance={tolerance:.6} at idx {max_idx}: tested={max_av:.6} ref={max_bv:.6}",
     );
 }
 
@@ -351,10 +354,21 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
             &device,
         )
         .require_grad();
-        let token_eta: Tensor<B, 1> = Tensor::from_data(
-            TensorData::new(input_data.token_eta.clone(), [dims.seq_len]),
+        // token_eta is [mini_batch_size], repeated to [seq_len] via repeat_dim
+        // so autodiff accumulates gradients across repeats
+        let token_eta_base_data: Vec<f32> =
+            input_data.token_eta[..dims.mini_batch_size].to_vec();
+        let token_eta_ref: Tensor<B, 1> = Tensor::from_data(
+            TensorData::new(token_eta_base_data.clone(), [dims.mini_batch_size]),
             &device,
-        );
+        )
+        .require_grad();
+        let num_repeats = dims.seq_len / dims.mini_batch_size;
+        let token_eta_ref_expanded = if num_repeats > 1 {
+            token_eta_ref.clone().repeat_dim(0, num_repeats)
+        } else {
+            token_eta_ref.clone()
+        };
 
         // Init ref state with require_grad (detach from weight_init graph first)
         let state_ref_init = ref_model.init_state(dims.batch_size);
@@ -372,7 +386,7 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 xk: xk_ref.clone(),
                 xv: xv_ref.clone(),
             },
-            token_eta: token_eta.clone(),
+            token_eta: token_eta_ref_expanded,
             ttt_lr_eta: ttt_lr_eta_ref.clone(),
             start_idx: 0,
         };
@@ -400,6 +414,17 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
         )
         .require_grad();
 
+        let token_eta_tested: Tensor<B, 1> = Tensor::from_data(
+            TensorData::new(token_eta_base_data, [dims.mini_batch_size]),
+            &device,
+        )
+        .require_grad();
+        let token_eta_tested_expanded = if num_repeats > 1 {
+            token_eta_tested.clone().repeat_dim(0, num_repeats)
+        } else {
+            token_eta_tested.clone()
+        };
+
         // Init tested state with require_grad
         let state_tested_init = tested_model.init_state(dims.batch_size);
         let weight_tested: Tensor<B, 4> =
@@ -417,7 +442,7 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
                 xk: xk_tested.clone(),
                 xv: xv_tested.clone(),
             },
-            token_eta,
+            token_eta: token_eta_tested_expanded,
             ttt_lr_eta: ttt_lr_eta_tested.clone(),
             start_idx: 0,
         };
@@ -507,6 +532,25 @@ pub fn test_backward<B, T, Transform, RunRef, RunTested>(
             rtol,
             atol,
             &format!("{iter_name} grad_ttt_lr_eta"),
+        );
+        assert_data_close(
+            &token_eta_tested
+                .grad(&grads_tested)
+                .unwrap()
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
+            &token_eta_ref
+                .grad(&grads_ref)
+                .unwrap()
+                .to_data()
+                .convert::<f32>()
+                .to_vec()
+                .unwrap(),
+            rtol,
+            atol,
+            &format!("{iter_name} grad_token_eta"),
         );
 
         // Compare state gradients

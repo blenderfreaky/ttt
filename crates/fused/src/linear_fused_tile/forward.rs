@@ -336,11 +336,14 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,
+    weight_checkpoints: &mut Tensor<Line<P::EVal>>,
+    bias_checkpoints: &mut Tensor<Line<P::EVal>>,
     num_stages: u32,
     #[comptime] config: FusedTttConfig,
 ) {
     let batch_idx = CUBE_POS_X as usize;
     let head_idx = CUBE_POS_Y as usize;
+    let num_heads = inputs.xq.shape(1);
     let epsilon = comptime!(config.epsilon());
     let mini_batch_len = comptime!(config.mini_batch_len);
     let head_dim = comptime!(config.head_dim);
@@ -353,6 +356,12 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     let base_weight = index_2d(&inputs.weight, batch_idx, head_idx);
     let base_bias = index_2d(&inputs.bias, batch_idx, head_idx);
     let ttt_lr_eta_idx = index_2d(&inputs.ttt_lr_eta, batch_idx, head_idx);
+
+    // Checkpoint layout: one checkpoint per `checkpoint_interval` stages
+    let checkpoint_interval = comptime!(config.checkpoint_interval);
+    let num_stages_usize = num_stages as usize;
+    let num_checkpoints = (num_stages_usize + checkpoint_interval - 1) / checkpoint_interval;
+    let ckpt_bh = (batch_idx * num_heads + head_idx) * num_checkpoints;
 
     // Initialize weight in shared memory
     let mut weight_smem = P::st_ff();
@@ -373,8 +382,19 @@ pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
 
     // Process all stages
     for stage in 0..num_stages {
-        let stage_offset = base_qkv + (stage as usize) * stage_stride;
-        let ttt_lr_offset = ttt_lr_eta_idx + (stage as usize) * mini_batch_len;
+        let stage_usize = stage as usize;
+
+        // Checkpoint weight/bias BEFORE this stage's update (every checkpoint_interval stages)
+        if stage_usize % checkpoint_interval == 0 {
+            let ckpt_idx = stage_usize / checkpoint_interval;
+            let ckpt_weight_offset = (ckpt_bh + ckpt_idx) * (head_dim * head_dim);
+            let ckpt_bias_offset = (ckpt_bh + ckpt_idx) * head_dim;
+            cube::store_st_direct(&weight_smem, weight_checkpoints, ckpt_weight_offset, 0, 0);
+            cube::broadcast::store_rv_direct(&bias_rv, bias_checkpoints, ckpt_bias_offset);
+        }
+
+        let stage_offset = base_qkv + stage_usize * stage_stride;
+        let ttt_lr_offset = ttt_lr_eta_idx + stage_usize * mini_batch_len;
 
         fused_ttt_forward_stage::<P>(
             inputs,
