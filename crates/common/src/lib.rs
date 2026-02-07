@@ -94,6 +94,129 @@ impl std::fmt::Display for InnerModel {
     }
 }
 
+impl std::str::FromStr for InnerModel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "linear" => Ok(Self::Linear),
+            "linear-adam" => Ok(Self::LinearAdam),
+            "mlp" => Ok(Self::Mlp),
+            "mlp2" => Ok(Self::Mlp2),
+            "mlp3" => Ok(Self::Mlp3),
+            "mlp4" => Ok(Self::Mlp4),
+            "fused" | "fused-linear" => Ok(Self::FusedLinear),
+            "fused-tile" | "fused-tile-linear" => Ok(Self::FusedTileLinear),
+            "fused-tile-multi" | "fused-tile-multi-linear" => Ok(Self::FusedTileMultiLinear),
+            "d2d-streaming" | "d2d-streaming-linear" => Ok(Self::D2dStreamingLinear),
+            "ptr-streaming" | "ptr-streaming-linear" => Ok(Self::PtrStreamingLinear),
+            _ => Err(format!(
+                "unknown layer type '{s}'. Use: linear, linear-adam, mlp, mlp2, mlp3, mlp4, \
+                 fused, fused-tile, fused-tile-multi"
+            )),
+        }
+    }
+}
+
+/// A layer type mixing pattern that cycles over layers.
+///
+/// Examples:
+/// - `"linear"` → all layers use Linear
+/// - `"linear,mlp"` → alternates: Linear, MLP, Linear, MLP, ...
+/// - `"4*linear,mlp"` → 4 Linear then 1 MLP, repeated cyclically
+/// - `"6*linear,6*fused-tile"` → first half linear, second half fused (for 12-layer model)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixPattern(pub Vec<InnerModel>);
+
+impl MixPattern {
+    /// A uniform pattern (all layers use the same type).
+    pub fn uniform(inner: InnerModel) -> Self {
+        Self(vec![inner])
+    }
+
+    /// Get the inner model type for a given layer index (cycles the pattern).
+    pub fn get(&self, layer_idx: usize) -> InnerModel {
+        self.0[layer_idx % self.0.len()]
+    }
+
+    /// Returns true if all layers use the same type.
+    pub fn is_uniform(&self) -> bool {
+        self.0.iter().all(|t| *t == self.0[0])
+    }
+}
+
+impl Default for MixPattern {
+    fn default() -> Self {
+        Self::uniform(InnerModel::default())
+    }
+}
+
+impl std::str::FromStr for MixPattern {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut pattern = Vec::new();
+        for part in s.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if let Some((count_str, type_str)) = part.split_once('*') {
+                let count: usize = count_str
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("invalid multiplier '{count_str}' in '{part}'"))?;
+                let inner: InnerModel = type_str.trim().parse()?;
+                pattern.extend(std::iter::repeat_n(inner, count));
+            } else {
+                pattern.push(part.parse()?);
+            }
+        }
+        if pattern.is_empty() {
+            return Err("empty mix pattern".to_string());
+        }
+        Ok(Self(pattern))
+    }
+}
+
+impl std::fmt::Display for MixPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut i = 0;
+        let mut first = true;
+        while i < self.0.len() {
+            let ty = self.0[i];
+            let mut count = 1;
+            while i + count < self.0.len() && self.0[i + count] == ty {
+                count += 1;
+            }
+            if !first {
+                write!(f, ",")?;
+            }
+            if count > 1 {
+                write!(f, "{count}*{ty}")?;
+            } else {
+                write!(f, "{ty}")?;
+            }
+            i += count;
+            first = false;
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for MixPattern {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for MixPattern {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 impl std::fmt::Display for PosEncoding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -196,7 +319,7 @@ impl ModelArch {
 pub struct TTTConfig {
     #[serde(default)]
     #[cfg_attr(feature = "clap", arg(long, default_value = "linear"))]
-    pub layer_type: InnerModel,
+    pub layer_type: MixPattern,
     #[serde(default)]
     #[cfg_attr(feature = "clap", arg(long, default_value = "rope"))]
     pub pos_encoding: PosEncoding,
@@ -272,7 +395,7 @@ fn default_dtype() -> DType {
 impl Default for TTTConfig {
     fn default() -> Self {
         Self {
-            layer_type: InnerModel::default(),
+            layer_type: MixPattern::default(),
             pos_encoding: PosEncoding::default(),
             base_lr: default_base_lr(),
             mini_batch_size: default_mini_batch_size(),
@@ -535,5 +658,56 @@ mod tests {
             serde_json::from_str::<PosEncoding>("\"rope\"").unwrap(),
             PosEncoding::Rope
         );
+    }
+
+    #[test]
+    fn test_inner_model_from_str() {
+        assert_eq!("linear".parse::<InnerModel>().unwrap(), InnerModel::Linear);
+        assert_eq!("fused".parse::<InnerModel>().unwrap(), InnerModel::FusedLinear);
+        assert_eq!("fused-tile".parse::<InnerModel>().unwrap(), InnerModel::FusedTileLinear);
+        assert!("bogus".parse::<InnerModel>().is_err());
+    }
+
+    #[test]
+    fn test_mix_pattern_uniform() {
+        let mix: MixPattern = "linear".parse().unwrap();
+        assert_eq!(mix.0, vec![InnerModel::Linear]);
+        assert!(mix.is_uniform());
+        assert_eq!(mix.to_string(), "linear");
+    }
+
+    #[test]
+    fn test_mix_pattern_alternating() {
+        let mix: MixPattern = "linear,mlp".parse().unwrap();
+        assert_eq!(mix.0, vec![InnerModel::Linear, InnerModel::Mlp]);
+        assert_eq!(mix.get(0), InnerModel::Linear);
+        assert_eq!(mix.get(1), InnerModel::Mlp);
+        assert_eq!(mix.get(2), InnerModel::Linear); // cycles
+        assert_eq!(mix.to_string(), "linear,mlp");
+    }
+
+    #[test]
+    fn test_mix_pattern_multiplier() {
+        let mix: MixPattern = "4*linear,mlp".parse().unwrap();
+        assert_eq!(mix.0.len(), 5);
+        assert_eq!(mix.get(3), InnerModel::Linear);
+        assert_eq!(mix.get(4), InnerModel::Mlp);
+        assert_eq!(mix.to_string(), "4*linear,mlp");
+    }
+
+    #[test]
+    fn test_mix_pattern_serde_roundtrip() {
+        let mix: MixPattern = "4*linear,2*mlp".parse().unwrap();
+        let json = serde_json::to_string(&mix).unwrap();
+        assert_eq!(json, "\"4*linear,2*mlp\"");
+        let decoded: MixPattern = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, mix);
+    }
+
+    #[test]
+    fn test_mix_pattern_serde_backward_compat() {
+        // Old configs stored just "linear" as a string
+        let decoded: MixPattern = serde_json::from_str("\"linear\"").unwrap();
+        assert_eq!(decoded, MixPattern::uniform(InnerModel::Linear));
     }
 }

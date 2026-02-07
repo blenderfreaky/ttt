@@ -5,10 +5,11 @@ use burn::{
     tensor::{Distribution, backend::AutodiffBackend},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
+use ttt_common::MixPattern;
 use ttt_core::config::ModelConfig;
 use ttt_data::{TokenizerTrait, TrainingTextGenerationBatch};
 use ttt_fused::FusedTttBackend;
-use ttt_layer::{AnyInnerState, InnerModel, ModelConfigModelExt, TTTModel};
+use ttt_layer::{AnyInnerState, ModelConfigModelExt, TTTModel};
 
 #[derive(Clone, Debug)]
 pub struct TTTTextGenerationConfig {
@@ -47,27 +48,15 @@ impl TTTTextGenerationConfig {
         }
     }
 
-    /// Initialize with uniform inner model type for all layers
+    /// Initialize using a mix pattern (single type = uniform, multiple = per-layer cycling).
     pub fn init<B: FusedTttBackend>(
         self,
-        inner_type: InnerModel,
+        mix: &MixPattern,
         device: &B::Device,
     ) -> TTTTextGenerationModel<B> {
-        let ttt_model = self.model_config.init_uniform(inner_type, device);
-
-        TTTTextGenerationModel {
-            ttt_model,
-            pad_token: self.pad_token,
-        }
-    }
-
-    /// Initialize with per-layer inner model selection
-    pub fn init_with_factory<B: FusedTttBackend>(
-        self,
-        inner_factory: impl Fn(usize) -> InnerModel,
-        device: &B::Device,
-    ) -> TTTTextGenerationModel<B> {
-        let ttt_model = self.model_config.init_with_inner_factory(inner_factory, device);
+        let ttt_model = self
+            .model_config
+            .init_with_mix(mix, device);
 
         TTTTextGenerationModel {
             ttt_model,
@@ -215,8 +204,7 @@ impl<B: FusedTttBackend> TTTTextGenerationModel<B> {
     }
 }
 
-impl<B: AutodiffBackend + FusedTttBackend> TrainStep
-    for TTTTextGenerationModel<B>
+impl<B: AutodiffBackend + FusedTttBackend> TrainStep for TTTTextGenerationModel<B>
 where
     Self: AutodiffModule<B>,
 {
@@ -231,9 +219,7 @@ where
     }
 }
 
-impl<B: FusedTttBackend> InferenceStep
-    for TTTTextGenerationModel<B>
-{
+impl<B: FusedTttBackend> InferenceStep for TTTTextGenerationModel<B> {
     type Input = TrainingTextGenerationBatch<B>;
     type Output = ClassificationOutput<B>;
 

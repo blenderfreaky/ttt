@@ -3,7 +3,7 @@ use burn::{
     nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     tensor::{Int, Tensor},
 };
-use ttt_common::{InnerModel, PosEncoding};
+use ttt_common::{InnerModel, MixPattern, PosEncoding};
 use ttt_core::config::ModelConfig;
 use ttt_fused::FusedTttBackend;
 
@@ -34,7 +34,7 @@ pub trait ModelConfigModelExt {
     /// The factory receives the layer index and returns the inner model type,
     /// allowing different inner model types per layer (e.g., Linear for even layers,
     /// MLP for odd layers).
-    fn init_with_inner_factory<B: FusedTttBackend>(
+    fn init_with_inner_by<B: FusedTttBackend>(
         &self,
         inner_factory: impl Fn(usize) -> InnerModel,
         device: &B::Device,
@@ -46,12 +46,21 @@ pub trait ModelConfigModelExt {
         inner_type: InnerModel,
         device: &B::Device,
     ) -> TTTModel<B> {
-        self.init_with_inner_factory(|_| inner_type, device)
+        self.init_with_inner_by(|_| inner_type, device)
+    }
+
+    /// Initialize a TTT model using a [`MixPattern`] to select inner model types per layer.
+    fn init_with_mix<B: FusedTttBackend>(
+        &self,
+        mix: &MixPattern,
+        device: &B::Device,
+    ) -> TTTModel<B> {
+        self.init_with_inner_by(|idx| mix.get(idx), device)
     }
 }
 
 impl ModelConfigModelExt for ModelConfig {
-    fn init_with_inner_factory<B: FusedTttBackend>(
+    fn init_with_inner_by<B: FusedTttBackend>(
         &self,
         inner_factory: impl Fn(usize) -> InnerModel,
         device: &B::Device,

@@ -4,6 +4,7 @@
 //!   ttt-bench --model-size 125m --ttt-type linear
 //!   ttt-bench --model-size 125m --ttt-type fused-linear --batch 8 --json
 //!   ttt-bench --model-size 125m --ttt-type linear --dtype bfloat16
+//!   ttt-bench --model-size 125m --ttt-type "4*linear,mlp"   # mix pattern
 
 use std::{sync::Arc, time::Instant};
 
@@ -11,9 +12,10 @@ use burn::prelude::*;
 use clap::Parser;
 use serde::Serialize;
 use tracing_subscriber::EnvFilter;
-use ttt_common::{InnerModel, ModelArch, ModelSize, TTTConfig};
+use ttt_common::{InnerModel, MixPattern, ModelArch, ModelSize, TTTConfig};
 use ttt_core::{
-    TTTInnerModel, config::ModelConfig,
+    TTTInnerModel,
+    config::ModelConfig,
     test_utils::{TestDims, generate_test_inputs},
 };
 use ttt_fused::FusedTttBackend;
@@ -38,47 +40,15 @@ type BackendBf16 = burn::backend::Wgpu; // wgpu doesn't distinguish
 type AutodiffF32 = burn::backend::Autodiff<BackendF32>;
 type AutodiffBf16 = burn::backend::Autodiff<BackendBf16>;
 
-fn parse_layer_type(s: &str) -> InnerModel {
-    match s.to_lowercase().as_str() {
-        "linear" => InnerModel::Linear,
-        "linear-adam" | "linearadam" => InnerModel::LinearAdam,
-        "mlp" => InnerModel::Mlp,
-        "mlp2" => InnerModel::Mlp2,
-        "mlp3" => InnerModel::Mlp3,
-        "mlp4" => InnerModel::Mlp4,
-        "fused" | "fused-linear" | "fusedlinear" => InnerModel::FusedLinear,
-        "fused-tile" | "fusedtile" => InnerModel::FusedTileLinear,
-        "fused-tile-multi" | "fusedtilemulti" => InnerModel::FusedTileMultiLinear,
-        #[cfg(feature = "streaming")]
-        "d2d-streaming" | "d2dstreaming" => InnerModel::D2dStreamingLinear,
-        #[cfg(feature = "streaming")]
-        "ptr-streaming" | "ptrstreaming" => InnerModel::PtrStreamingLinear,
-        _ => panic!(
-            "Unknown ttt-type: {s}. Use: linear, linear-adam, mlp, mlp2, mlp3, mlp4, fused, fused-tile, fused-tile-multi"
-        ),
-    }
-}
-
-fn parse_model_size(s: &str) -> ModelSize {
-    match s.to_lowercase().as_str() {
-        "12m" => ModelSize::M12,
-        "60m" => ModelSize::M60,
-        "125m" => ModelSize::M125,
-        "350m" => ModelSize::M350,
-        "760m" => ModelSize::M760,
-        "1b" => ModelSize::B1,
-        _ => panic!("Unknown model size: {s}. Use: 12m, 60m, 125m, 350m, 760m, 1b"),
-    }
-}
-
 #[derive(Parser, Debug)]
 #[command(name = "ttt-bench", about = "TTT benchmark for parameter sweeps")]
 struct Args {
     #[arg(long, default_value = "125m")]
-    model_size: String,
+    model_size: ModelSize,
 
+    /// Layer type mix pattern. Single type (e.g. "linear") or mix (e.g. "4*linear,mlp").
     #[arg(long, default_value = "linear")]
-    ttt_type: String,
+    ttt_type: MixPattern,
 
     #[arg(long, default_value = "false")]
     backward: bool,
@@ -127,10 +97,10 @@ struct BenchResult {
 fn bench_fwd<B: FusedTttBackend>(
     args: &Args,
     config: &ModelConfig,
-    layer_type: InnerModel,
+    mix: &MixPattern,
     device: &B::Device,
 ) -> f64 {
-    let model: TTTModel<B> = config.init_uniform(layer_type, device);
+    let model: TTTModel<B> = config.init_with_mix(mix, device);
     let input_ids = Tensor::<B, 2, Int>::ones([args.batch, args.seq_len], device);
 
     for _ in 0..args.warmup {
@@ -151,10 +121,10 @@ fn bench_fwd<B: FusedTttBackend>(
 fn bench_bwd<B: burn::tensor::backend::AutodiffBackend + FusedTttBackend>(
     args: &Args,
     config: &ModelConfig,
-    layer_type: InnerModel,
+    mix: &MixPattern,
     device: &B::Device,
 ) -> f64 {
-    let model: TTTModel<B> = config.init_uniform(layer_type, device);
+    let model: TTTModel<B> = config.init_with_mix(mix, device);
     let input_ids = Tensor::<B, 2, Int>::ones([args.batch, args.seq_len], device);
 
     for _ in 0..args.warmup {
@@ -253,10 +223,9 @@ fn bench_bwd_inner<
     (total / args.repeats as f64) * 1000.0
 }
 
-fn make_config(model_size: &str, mini_batch: usize, seq_len: usize) -> ModelConfig {
+fn make_config(model_size: ModelSize, mini_batch: usize, seq_len: usize) -> ModelConfig {
     let vocab_size = 32000; // match JAX/PyTorch reference configs
-    let size = parse_model_size(model_size);
-    let arch = Arc::new(ModelArch::from_size(size, vocab_size));
+    let arch = Arc::new(ModelArch::from_size(model_size, vocab_size));
     let ttt = Arc::new(TTTConfig {
         mini_batch_size: mini_batch,
         max_seq_len: seq_len,
@@ -271,48 +240,67 @@ fn main() {
         .init();
 
     let args = Args::parse();
-    let config = make_config(&args.model_size, args.mini_batch, args.seq_len);
-    let layer_type = parse_layer_type(&args.ttt_type);
+    let config = make_config(args.model_size, args.mini_batch, args.seq_len);
+    let mix = &args.ttt_type;
+
+    // For inner_only, the dispatch macro needs a single InnerModel
+    let inner_only_type = if args.inner_only {
+        assert!(
+            mix.is_uniform(),
+            "--inner-only requires a single layer type, got mix pattern: {mix}"
+        );
+        mix.get(0)
+    } else {
+        InnerModel::default() // unused
+    };
 
     let (time_ms, dtype_str) = match (args.dtype.as_str(), args.backward, args.inner_only) {
         ("float32", false, false) => {
             let device: <BackendF32 as Backend>::Device = Default::default();
-            let t = bench_fwd::<BackendF32>(&args, &config, layer_type, &device);
+            let t = bench_fwd::<BackendF32>(&args, &config, mix, &device);
             (t, "float32")
         }
         ("float32", true, false) => {
             let device: <AutodiffF32 as Backend>::Device = Default::default();
-            let t = bench_bwd::<AutodiffF32>(&args, &config, layer_type, &device);
+            let t = bench_bwd::<AutodiffF32>(&args, &config, mix, &device);
             (t, "float32")
         }
         ("float32", false, true) => {
             let device: <BackendF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd_inner::<BackendF32, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_fwd_inner::<BackendF32, inner_only_type>(
+                &args, &config, &device
+            ));
             (t, "float32")
         }
         ("float32", true, true) => {
             let device: <AutodiffF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd_inner::<AutodiffF32, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_bwd_inner::<AutodiffF32, inner_only_type>(
+                &args, &config, &device
+            ));
             (t, "float32")
         }
         ("bfloat16", false, false) => {
             let device: <BackendBf16 as Backend>::Device = Default::default();
-            let t = bench_fwd::<BackendBf16>(&args, &config, layer_type, &device);
+            let t = bench_fwd::<BackendBf16>(&args, &config, mix, &device);
             (t, "bfloat16")
         }
         ("bfloat16", true, false) => {
             let device: <AutodiffBf16 as Backend>::Device = Default::default();
-            let t = bench_bwd::<AutodiffBf16>(&args, &config, layer_type, &device);
+            let t = bench_bwd::<AutodiffBf16>(&args, &config, mix, &device);
             (t, "bfloat16")
         }
         ("bfloat16", false, true) => {
             let device: <BackendBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd_inner::<BackendBf16, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_fwd_inner::<BackendBf16, inner_only_type>(
+                &args, &config, &device
+            ));
             (t, "bfloat16")
         }
         ("bfloat16", true, true) => {
             let device: <AutodiffBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd_inner::<AutodiffBf16, layer_type>(&args, &config, &device));
+            let t = dispatch_ttt_layer_type!(bench_bwd_inner::<AutodiffBf16, inner_only_type>(
+                &args, &config, &device
+            ));
             (t, "bfloat16")
         }
         _ => panic!("Unknown dtype: {}. Use: float32, bfloat16", args.dtype),
@@ -322,8 +310,8 @@ fn main() {
 
     let result = BenchResult {
         implementation: "burn",
-        model_size: args.model_size.clone(),
-        ttt_type: args.ttt_type.clone(),
+        model_size: args.model_size.to_string(),
+        ttt_type: args.ttt_type.to_string(),
         backward: args.backward,
         inner_only: args.inner_only,
         batch: args.batch,
@@ -337,7 +325,10 @@ fn main() {
     if args.json {
         println!("{}", serde_json::to_string(&result).unwrap());
     } else {
-        println!("Burn TTT Benchmark{}", if args.inner_only { " (inner only)" } else { "" });
+        println!(
+            "Burn TTT Benchmark{}",
+            if args.inner_only { " (inner only)" } else { "" }
+        );
         println!("==================");
         println!("Model: {} / {}", args.model_size, args.ttt_type);
         println!("Dtype: {}", dtype_str);

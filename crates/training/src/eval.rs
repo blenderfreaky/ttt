@@ -42,9 +42,9 @@ fn eval_inner<
     ttt_config.max_seq_len = max_seq_len;
     model_config.ttt = Arc::new(ttt_config);
 
-    let ttt_type = config.model_config.ttt.layer_type;
+    let mix = &config.model_config.ttt.layer_type;
     let text_gen_config = TTTTextGenerationConfig::new(model_config, config.pad_token);
-    let mut model: TTTTextGenerationModel<B> = text_gen_config.init(ttt_type, device);
+    let mut model: TTTTextGenerationModel<B> = text_gen_config.init(mix, device);
 
     // Load trained weights
     let record = DefaultRecorder::new()
@@ -153,8 +153,8 @@ pub fn eval_pretokenized<B: FusedTttBackend>(
         samples.min(dataset.len()),
     );
 
-    let ttt_type = config.model_config.ttt.layer_type;
-    println!("Layer type: {ttt_type:?}");
+    let mix = &config.model_config.ttt.layer_type;
+    println!("Layer type: {mix}");
 
     let result = eval_inner::<B, _>(
         device,

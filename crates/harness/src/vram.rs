@@ -149,7 +149,7 @@ impl VramEstimator {
 
         let params = total_params(
             &arch,
-            run.params.ttt.layer_type,
+            run.params.ttt.layer_type.get(0),
             run.params.ttt.mlp_expansion_factor,
         );
 

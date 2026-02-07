@@ -24,8 +24,7 @@ use std::{sync::Arc, time::Duration};
 use burn::prelude::*;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use paste::paste;
-use ttt_common::{ModelArch, TTTConfig};
-use ttt_common::InnerModel;
+use ttt_common::{InnerModel, MixPattern, ModelArch, TTTConfig};
 use ttt_core::{
     GpuAutodiffBackend, GpuBackend, Qkv, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearAdam,
     TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4, config::ModelConfig,
@@ -332,7 +331,8 @@ fn bench_full_forward<B: FusedTttBackend>(
 ) {
     let model_config = config.to_model_config(params.vocab_size);
     let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
-    let model: TTTTextGenerationModel<B> = text_gen_config.init(inner_type, device);
+    let mix = MixPattern::uniform(inner_type);
+    let model: TTTTextGenerationModel<B> = text_gen_config.init(&mix, device);
 
     let group_name = format!("full_forward_{}", inner_name);
     let mut group = c.benchmark_group(&group_name);
@@ -366,7 +366,8 @@ fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend + FusedTttBacke
 ) {
     let model_config = config.to_model_config(params.vocab_size);
     let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
-    let model: TTTTextGenerationModel<B> = text_gen_config.init(inner_type, device);
+    let mix = MixPattern::uniform(inner_type);
+    let model: TTTTextGenerationModel<B> = text_gen_config.init(&mix, device);
 
     let group_name = format!("full_backward_{}", inner_name);
     let mut group = c.benchmark_group(&group_name);

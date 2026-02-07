@@ -31,7 +31,7 @@ impl<B: FusedTttBackend> TTTTextGenerator<B> {
 
         let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
 
-        let mut model = model_config.init(config.model_config.ttt.layer_type, &device);
+        let mut model = model_config.init(&config.model_config.ttt.layer_type, &device);
 
         let record =
             DefaultRecorder::new().load(format!("{artifact_dir}/model").into(), &device)?;

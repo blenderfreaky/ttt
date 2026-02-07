@@ -184,8 +184,8 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     let dataset_test = TextDataset::test();
 
     println!("Starting TTT text generation training...");
-    let ttt_type = config.model_config.ttt.layer_type;
-    println!("Layer type: {ttt_type:?}");
+    let mix = &config.model_config.ttt.layer_type;
+    println!("Layer type: {mix}");
 
     // Batcher needs max_seq_len + 1 to account for next-token prediction
     let batcher = TextGenerationBatcher::new(
@@ -199,7 +199,7 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
         .unwrap();
 
     let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
-    let model: TTTTextGenerationModel<B> = model_config.init(ttt_type, device);
+    let model: TTTTextGenerationModel<B> = model_config.init(mix, device);
 
     run_training(model, batcher, dataset_train, dataset_test, config);
 
@@ -242,8 +242,8 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     );
 
     println!("Starting TTT text generation training (pre-tokenized)...");
-    let ttt_type = config.model_config.ttt.layer_type;
-    println!("Layer type: {ttt_type:?}");
+    let mix = &config.model_config.ttt.layer_type;
+    println!("Layer type: {mix}");
 
     let batcher = TokenBatcher::new(config.pad_token, config.model_config.ttt.max_seq_len + 1);
 
@@ -253,7 +253,7 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
         .unwrap();
 
     let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
-    let model: TTTTextGenerationModel<B> = model_config.init(ttt_type, device);
+    let model: TTTTextGenerationModel<B> = model_config.init(mix, device);
 
     run_training(model, batcher, dataset_train, dataset_test, config);
 

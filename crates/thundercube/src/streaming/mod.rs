@@ -35,7 +35,7 @@ use std::marker::PhantomData;
 use bytemuck::Pod;
 use cubecl::prelude::*;
 use cubecl_hip_sys::{
-    HIP_SUCCESS, hipDeviceptr_t, hipDeviceSynchronize, hipMemcpyAsync, hipMemcpyDtoDAsync,
+    HIP_SUCCESS, hipDeviceptr_t, hipMemcpyAsync, hipMemcpyDtoDAsync,
     hipMemcpyKind_hipMemcpyDeviceToHost, hipMemcpyKind_hipMemcpyHostToDevice, hipStream_t,
     hipStreamCreate, hipStreamDestroy, hipStreamSynchronize,
 };

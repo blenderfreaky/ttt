@@ -251,7 +251,7 @@ fn main() {
                 "Tokenizer: {tokenizer_name} (vocab_size: {})",
                 tokenizer.vocab_size()
             );
-            println!("Layer type: {:?}", config.model_config.ttt.layer_type);
+            println!("Layer type: {}", config.model_config.ttt.layer_type);
             println!(
                 "Model size: {} hidden, {} layers",
                 config.model_config.arch.hidden_size, config.model_config.arch.num_hidden_layers

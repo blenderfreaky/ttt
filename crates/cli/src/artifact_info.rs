@@ -257,7 +257,7 @@ pub fn print_info(info: &ArtifactInfo, verbose: bool) {
     println!();
 
     box_top("Model Configuration");
-    box_row("Layer Type:", format!("{:?}", ttt.layer_type));
+    box_row("Layer Type:", format!("{}", ttt.layer_type));
     box_row("Hidden Size:", arch.hidden_size);
     box_row("Num Layers:", arch.num_hidden_layers);
     box_row("Num Heads:", arch.num_heads);
