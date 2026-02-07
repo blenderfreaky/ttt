@@ -18,16 +18,19 @@
 //!
 //! This crate provides:
 //! - `TTT` - the outer TTT layer that wraps inner model implementations
-//! - `TTTBlock`, `TTTBlockWithSeq` - block-level wrappers
+//! - `TTTBlock`, `TTTBlockWithInner` - block-level wrappers
 //! - `TTTModel` - full language model implementation
+//! - `AnyInner` / `AnyInnerState` - enum-based inner model polymorphism
 //! - `dispatch_ttt_layer_type!` - macro for dispatching based on layer type
 
+pub mod any_inner;
 pub mod block;
 pub mod lm;
 pub mod ttt;
 
 // Re-export commonly used items
-pub use block::{TTTBlock, TTTBlockConfig, TTTBlockWithSeq};
+pub use any_inner::{AnyInner, AnyInnerState};
+pub use block::{TTTBlock, TTTBlockConfig, TTTBlockWithInner};
 pub use lm::{ModelConfigModelExt, TTTModel};
 pub use ttt::{ModelConfigExt, TTT};
 // Re-export InnerModel for use with the dispatch macro
@@ -36,13 +39,15 @@ pub use ttt_common::InnerModel;
 /// Dispatch a function call based on TTT layer type.
 ///
 /// This macro takes a function call with a layer type and dispatches to the
-/// appropriate inner model implementation.
+/// appropriate inner model implementation. Useful for benchmarks and tests that
+/// need monomorphized code paths for specific inner model types.
+///
+/// For the main model, prefer `AnyInner` which supports per-layer type mixing.
 ///
 /// # Example
 /// ```ignore
-/// dispatch_ttt_layer_type!(train_with_inner::<B, layer_type, _>(
+/// dispatch_ttt_layer_type!(bench_inner::<B, layer_type, _>(
 ///     device,
-///     dataset,
 ///     config,
 /// ));
 /// ```

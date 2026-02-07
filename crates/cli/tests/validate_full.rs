@@ -24,7 +24,11 @@ use ttt_core::{
     TTTLinearState, TTTMLP, TTTMLPConfig, config::ModelConfig, mlp::TTTMLPState,
     util::MultiHeadLayerNorm,
 };
-use ttt_layer::{ModelConfigExt, ModelConfigModelExt, TTT, TTTBlock, TTTBlockConfig, TTTModel};
+use ttt_fused::FusedTttBackend;
+use ttt_layer::{
+    AnyInner, InnerModel, ModelConfigExt, ModelConfigModelExt, TTT, TTTBlock,
+    TTTBlockConfig, TTTModel,
+};
 
 /// Helper to build a ModelConfig for testing
 fn build_model_config(
@@ -60,7 +64,7 @@ fn build_model_config(
 }
 
 /// Trait for inner models that can be loaded from safetensors for testing
-trait TestableInnerModel<B: burn::tensor::backend::Backend>: TTTInnerModel<B> {
+trait TestableInnerModel<B: FusedTttBackend>: TTTInnerModel<B> {
     fn load_from_safetensors(
         loader: &SafeTensorLoader,
         config: &ModelConfig,
@@ -69,6 +73,12 @@ trait TestableInnerModel<B: burn::tensor::backend::Backend>: TTTInnerModel<B> {
     ) -> Self;
 
     fn layer_type_name() -> &'static str;
+
+    /// The corresponding `InnerModel` enum variant for this type.
+    fn inner_model_type() -> InnerModel;
+
+    /// Wrap this concrete inner model into an `AnyInner` enum variant.
+    fn to_any_inner(self) -> AnyInner<B>;
 
     /// Validation data filename for inner model tests
     fn inner_model_validation_file() -> &'static str;
@@ -131,6 +141,14 @@ impl TestableInnerModel<GpuBackend> for TTTLinear<GpuBackend> {
 
     fn layer_type_name() -> &'static str {
         "linear"
+    }
+
+    fn inner_model_type() -> InnerModel {
+        InnerModel::Linear
+    }
+
+    fn to_any_inner(self) -> AnyInner<GpuBackend> {
+        AnyInner::Linear(self)
     }
 
     fn inner_model_validation_file() -> &'static str {
@@ -238,6 +256,14 @@ impl TestableInnerModel<GpuBackend> for TTTMLP<GpuBackend> {
 
     fn layer_type_name() -> &'static str {
         "mlp"
+    }
+
+    fn inner_model_type() -> InnerModel {
+        InnerModel::Mlp
+    }
+
+    fn to_any_inner(self) -> AnyInner<GpuBackend> {
+        AnyInner::Mlp(self)
     }
 
     fn inner_model_validation_file() -> &'static str {
@@ -833,7 +859,8 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Optio
     );
 
     let mut block: TTTBlock<GpuBackend> = TTTBlockConfig::new(config.clone(), 0).init(&device);
-    let inner_model = Inner::load_from_safetensors(&loader, &config, &device, "");
+    let inner_model: AnyInner<GpuBackend> =
+        Inner::load_from_safetensors(&loader, &config, &device, "").to_any_inner();
 
     // Set all weights from loaded data
 
@@ -906,6 +933,7 @@ fn test_ttt_block_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Optio
 
     println!("\n  Running Burn forward pass...");
     let output_actual = block.forward(input, &mut state, &inner_model, 0);
+
 
     println!("  Output shape: {:?}", output_actual.dims());
 
@@ -1018,7 +1046,8 @@ fn test_ttt_layer_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Optio
     );
 
     let mut ttt_layer: TTT<GpuBackend> = config.init_ttt_seq(&device);
-    let inner_model = Inner::load_from_safetensors(&loader, &config, &device, "");
+    let inner_model: AnyInner<GpuBackend> =
+        Inner::load_from_safetensors(&loader, &config, &device, "").to_any_inner();
 
     // Set TTT layer weights
     ttt_layer.q_proj.weight = Param::from_tensor(q_proj_weight.transpose());
@@ -1177,10 +1206,8 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Opti
         tie_word_embeddings,
     );
 
-    let inner_config = Arc::new(Inner::Config::default());
-
-    let mut model: TTTModel<GpuBackend, Inner> =
-        config.init_with_inner_model(&inner_config, &device);
+    let mut model: TTTModel<GpuBackend> =
+        config.init_uniform(Inner::inner_model_type(), &device);
 
     model.embedding.weight = Param::from_tensor(embed_weight);
 
@@ -1281,8 +1308,8 @@ fn test_full_model_forward_impl<Inner: TestableInnerModel<GpuBackend>>(dir: Opti
         block.ttt.post_norm.gamma = Param::from_tensor(post_norm_weight);
         block.ttt.post_norm.beta = Some(Param::from_tensor(post_norm_bias));
 
-        // Inner model parameters - load via trait
-        layer.inner = Inner::load_from_safetensors(&loader, &config, &device, &prefix);
+        // Inner model parameters - load via trait, wrap in AnyInner
+        layer.inner = Inner::load_from_safetensors(&loader, &config, &device, &prefix).to_any_inner();
 
         // MLP weights
         let gate_t = gate_proj_weight.transpose();

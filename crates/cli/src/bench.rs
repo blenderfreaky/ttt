@@ -17,7 +17,7 @@ use ttt_core::{
     test_utils::{TestDims, generate_test_inputs},
 };
 use ttt_fused::FusedTttBackend;
-use ttt_layer::{ModelConfigModelExt, dispatch_ttt_layer_type};
+use ttt_layer::{ModelConfigModelExt, TTTModel, dispatch_ttt_layer_type};
 
 // Backend types for runtime dtype selection
 #[cfg(feature = "rocm")]
@@ -124,13 +124,13 @@ struct BenchResult {
     throughput: f64,
 }
 
-fn bench_fwd<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
+fn bench_fwd<B: FusedTttBackend>(
     args: &Args,
     config: &ModelConfig,
+    layer_type: InnerModel,
     device: &B::Device,
 ) -> f64 {
-    let inner_config = Arc::new(Inner::Config::default());
-    let model = config.init_with_inner_model::<B, Inner>(&inner_config, device);
+    let model: TTTModel<B> = config.init_uniform(layer_type, device);
     let input_ids = Tensor::<B, 2, Int>::ones([args.batch, args.seq_len], device);
 
     for _ in 0..args.warmup {
@@ -148,16 +148,13 @@ fn bench_fwd<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
     (total / args.repeats as f64) * 1000.0
 }
 
-fn bench_bwd<
-    B: burn::tensor::backend::AutodiffBackend + FusedTttBackend,
-    Inner: TTTInnerModel<B>,
->(
+fn bench_bwd<B: burn::tensor::backend::AutodiffBackend + FusedTttBackend>(
     args: &Args,
     config: &ModelConfig,
+    layer_type: InnerModel,
     device: &B::Device,
 ) -> f64 {
-    let inner_config = Arc::new(Inner::Config::default());
-    let model = config.init_with_inner_model::<B, Inner>(&inner_config, device);
+    let model: TTTModel<B> = config.init_uniform(layer_type, device);
     let input_ids = Tensor::<B, 2, Int>::ones([args.batch, args.seq_len], device);
 
     for _ in 0..args.warmup {
@@ -280,12 +277,12 @@ fn main() {
     let (time_ms, dtype_str) = match (args.dtype.as_str(), args.backward, args.inner_only) {
         ("float32", false, false) => {
             let device: <BackendF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendF32, layer_type>(&args, &config, &device));
+            let t = bench_fwd::<BackendF32>(&args, &config, layer_type, &device);
             (t, "float32")
         }
         ("float32", true, false) => {
             let device: <AutodiffF32 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffF32, layer_type>(&args, &config, &device));
+            let t = bench_bwd::<AutodiffF32>(&args, &config, layer_type, &device);
             (t, "float32")
         }
         ("float32", false, true) => {
@@ -300,12 +297,12 @@ fn main() {
         }
         ("bfloat16", false, false) => {
             let device: <BackendBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_fwd::<BackendBf16, layer_type>(&args, &config, &device));
+            let t = bench_fwd::<BackendBf16>(&args, &config, layer_type, &device);
             (t, "bfloat16")
         }
         ("bfloat16", true, false) => {
             let device: <AutodiffBf16 as Backend>::Device = Default::default();
-            let t = dispatch_ttt_layer_type!(bench_bwd::<AutodiffBf16, layer_type>(&args, &config, &device));
+            let t = bench_bwd::<AutodiffBf16>(&args, &config, layer_type, &device);
             (t, "bfloat16")
         }
         ("bfloat16", false, true) => {

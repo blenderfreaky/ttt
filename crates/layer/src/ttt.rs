@@ -11,11 +11,13 @@ use burn::{
 };
 use ttt_common::PosEncoding;
 use ttt_core::{
-    Qkv, TTTInnerModel, TTTInputsInner,
+    Qkv, TTTInputsInner,
     config::ModelConfig,
     util::{RotaryEmbedding, RotaryEmbeddingConfig, causal_conv1d_fn},
 };
 use ttt_fused::FusedTttBackend;
+
+use crate::any_inner::{AnyInner, AnyInnerState};
 use ttt_kernels::gelu_tanh;
 
 /// Permute Q/K dimensions to match JAX/EasyLM rotary embedding format.
@@ -261,12 +263,12 @@ impl<B: FusedTttBackend> TTT<B> {
         }
     }
 
-    pub fn forward<Inner: TTTInnerModel<B>>(
+    pub fn forward(
         &self,
         // [batch_size, seq_len, token_size]
         x: Tensor<B, 3>,
-        inner: &Inner,
-        state: &mut Inner::State,
+        inner: &AnyInner<B>,
+        state: &mut AnyInnerState<B>,
         start_idx: usize,
     ) -> Tensor<B, 3> {
         let [batch_size, seq_len, _token_size] = x.shape().dims();

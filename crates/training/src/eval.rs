@@ -8,10 +8,8 @@ use burn::{
     prelude::*,
     record::{DefaultRecorder, Recorder},
 };
-use ttt_core::TTTInnerModel;
 use ttt_data::{TokenBatcher, TokenizedItem};
 use ttt_fused::FusedTttBackend;
-use ttt_layer::dispatch_ttt_layer_type;
 
 use crate::{
     text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel},
@@ -26,9 +24,8 @@ pub struct EvalResult {
     pub total_samples: usize,
 }
 
-fn eval_with_inner<
+fn eval_inner<
     B: FusedTttBackend,
-    Inner: TTTInnerModel<B>,
     D: Dataset<TokenizedItem> + 'static,
 >(
     device: &B::Device,
@@ -45,8 +42,9 @@ fn eval_with_inner<
     ttt_config.max_seq_len = max_seq_len;
     model_config.ttt = Arc::new(ttt_config);
 
+    let ttt_type = config.model_config.ttt.layer_type;
     let text_gen_config = TTTTextGenerationConfig::new(model_config, config.pad_token);
-    let mut model: TTTTextGenerationModel<B, Inner> = text_gen_config.init(device);
+    let mut model: TTTTextGenerationModel<B> = text_gen_config.init(ttt_type, device);
 
     // Load trained weights
     let record = DefaultRecorder::new()
@@ -158,7 +156,7 @@ pub fn eval_pretokenized<B: FusedTttBackend>(
     let ttt_type = config.model_config.ttt.layer_type;
     println!("Layer type: {ttt_type:?}");
 
-    let result = dispatch_ttt_layer_type!(eval_with_inner::<B, ttt_type, _>(
+    let result = eval_inner::<B, _>(
         device,
         &model_path,
         &config,
@@ -166,7 +164,7 @@ pub fn eval_pretokenized<B: FusedTttBackend>(
         eval_max_seq_len,
         samples,
         batch_size,
-    ));
+    );
 
     println!();
     println!("=== Evaluation Results ===");

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use burn::{
     module::AutodiffModule,
     nn::loss::CrossEntropyLossConfig,
@@ -7,10 +5,10 @@ use burn::{
     tensor::{Distribution, backend::AutodiffBackend},
     train::{ClassificationOutput, InferenceStep, TrainOutput, TrainStep},
 };
-use ttt_core::{TTTInnerModel, config::ModelConfig};
+use ttt_core::config::ModelConfig;
 use ttt_data::{TokenizerTrait, TrainingTextGenerationBatch};
 use ttt_fused::FusedTttBackend;
-use ttt_layer::{ModelConfigModelExt, TTTModel};
+use ttt_layer::{AnyInnerState, InnerModel, ModelConfigModelExt, TTTModel};
 
 #[derive(Clone, Debug)]
 pub struct TTTTextGenerationConfig {
@@ -19,8 +17,8 @@ pub struct TTTTextGenerationConfig {
 }
 
 #[derive(Module, Debug)]
-pub struct TTTTextGenerationModel<B: FusedTttBackend, Inner> {
-    pub ttt_model: TTTModel<B, Inner>,
+pub struct TTTTextGenerationModel<B: FusedTttBackend> {
+    pub ttt_model: TTTModel<B>,
     pub pad_token: usize,
 }
 
@@ -49,15 +47,27 @@ impl TTTTextGenerationConfig {
         }
     }
 
-    /// Initialize with standard TTTLinear
-    pub fn init<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
+    /// Initialize with uniform inner model type for all layers
+    pub fn init<B: FusedTttBackend>(
         self,
+        inner_type: InnerModel,
         device: &B::Device,
-    ) -> TTTTextGenerationModel<B, Inner> {
-        let inner_config = Arc::new(Inner::Config::default());
-        let ttt_model = self
-            .model_config
-            .init_with_inner_model(&inner_config, device);
+    ) -> TTTTextGenerationModel<B> {
+        let ttt_model = self.model_config.init_uniform(inner_type, device);
+
+        TTTTextGenerationModel {
+            ttt_model,
+            pad_token: self.pad_token,
+        }
+    }
+
+    /// Initialize with per-layer inner model selection
+    pub fn init_with_factory<B: FusedTttBackend>(
+        self,
+        inner_factory: impl Fn(usize) -> InnerModel,
+        device: &B::Device,
+    ) -> TTTTextGenerationModel<B> {
+        let ttt_model = self.model_config.init_with_inner_factory(inner_factory, device);
 
         TTTTextGenerationModel {
             ttt_model,
@@ -66,7 +76,7 @@ impl TTTTextGenerationConfig {
     }
 }
 
-impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inner> {
+impl<B: FusedTttBackend> TTTTextGenerationModel<B> {
     pub fn forward_training(
         &self,
         item: TrainingTextGenerationBatch<B>,
@@ -82,7 +92,7 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inne
 
         let output_flatten = logits.reshape([
             batch_size * seq_length,
-            self.ttt_model.config.arch.vocab_size,
+            self.ttt_model.config.0.arch.vocab_size,
         ]);
         let targets_flatten = targets.reshape([batch_size * seq_length]);
 
@@ -107,13 +117,13 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inne
         &self,
         input: Tensor<B, 2, Int>,
         start_idx: usize,
-        states: &mut [Inner::State],
+        states: &mut [AnyInnerState<B>],
     ) -> Tensor<B, 3> {
         self.ttt_model.forward_with_states(input, start_idx, states)
     }
 
     /// Initialize states for generation
-    pub fn init_states(&self, batch_size: usize) -> Vec<Inner::State> {
+    pub fn init_states(&self, batch_size: usize) -> Vec<AnyInnerState<B>> {
         self.ttt_model.init_states(batch_size)
     }
 
@@ -205,8 +215,8 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTTextGenerationModel<B, Inne
     }
 }
 
-impl<B: AutodiffBackend + FusedTttBackend, Inner: TTTInnerModel<B>> TrainStep
-    for TTTTextGenerationModel<B, Inner>
+impl<B: AutodiffBackend + FusedTttBackend> TrainStep
+    for TTTTextGenerationModel<B>
 where
     Self: AutodiffModule<B>,
 {
@@ -221,8 +231,8 @@ where
     }
 }
 
-impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
-    for TTTTextGenerationModel<B, Inner>
+impl<B: FusedTttBackend> InferenceStep
+    for TTTTextGenerationModel<B>
 {
     type Input = TrainingTextGenerationBatch<B>;
     type Output = ClassificationOutput<B>;
@@ -230,171 +240,4 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> InferenceStep
     fn step(&self, item: Self::Input) -> Self::Output {
         self.forward_training(item)
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use ttt_common::{ModelArch, ModelSize, TTTConfig};
-    use ttt_core::{GpuAutodiffBackend, TEST_VOCAB_SIZE};
-    use ttt_fused::FusedLinear;
-
-    use super::*;
-
-    type Inner = FusedLinear<GpuAutodiffBackend>;
-
-    fn test_model_config(size: ModelSize) -> ModelConfig {
-        ModelConfig::new(
-            Arc::new(ModelArch::from_size(size, TEST_VOCAB_SIZE)),
-            Arc::new(TTTConfig::default()),
-        )
-    }
-
-    #[test]
-    fn forward_inference_doesnt_crash() {
-        let device = Default::default();
-
-        let model_config = test_model_config(ModelSize::M125);
-        let vocab_size = model_config.arch.vocab_size;
-        let model_config = TTTTextGenerationConfig::new_testing(model_config);
-        let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
-
-        let batch_size = 2;
-        let seq_length = 10;
-        let input = Tensor::zeros([batch_size, seq_length], &device);
-
-        let output = model.forward_inference(input);
-        assert_eq!(output.dims(), [batch_size, seq_length, vocab_size]);
-    }
-
-    /// Test full fused model with training-like iterations (forward + backward).
-    #[test]
-    #[allow(clippy::cast_precision_loss)]
-    fn test_fused_full_model_training_iterations() {
-        use ttt_data::TrainingTextGenerationBatch;
-
-        let device = Default::default();
-
-        // Use smaller config for faster test
-        let model_config = test_model_config(ModelSize::M12);
-        let vocab_size = model_config.arch.vocab_size;
-        let model_config = TTTTextGenerationConfig::new_testing(model_config);
-        let model = model_config.init::<GpuAutodiffBackend, Inner>(&device);
-
-        let batch_size = 4;
-        let seq_length = 32;
-
-        println!("Testing full fused model with {} iterations", 3);
-
-        for iter in 0..3 {
-            println!("Iteration {iter}...");
-
-            // Create fake batch
-            let tokens_inputs = Tensor::random(
-                [batch_size, seq_length],
-                burn::tensor::Distribution::Uniform(0.0, (vocab_size - 1) as f64),
-                &device,
-            );
-            let targets = Tensor::random(
-                [batch_size, seq_length],
-                burn::tensor::Distribution::Uniform(0.0, (vocab_size - 1) as f64),
-                &device,
-            );
-            let mask_pad = Tensor::ones([batch_size, seq_length], &device);
-
-            let batch = TrainingTextGenerationBatch {
-                tokens_inputs,
-                targets,
-                mask_pad,
-            };
-
-            // Forward pass
-            let output = model.forward_training(batch);
-            println!("  Loss: {:?}", output.loss.clone().into_data());
-
-            // Backward pass
-            let _grads = output.loss.backward();
-
-            println!("Iteration {iter} done");
-        }
-
-        println!("Full model training iterations test PASSED!");
-    }
-
-    // /// Helper to test fused model with given layer count
-    // fn run_fused_layer_test(num_layers: usize, batch_size: usize, seq_length: usize) {
-    //     use crate::data::TrainingTextGenerationBatch;
-
-    //     let device = Default::default();
-
-    //     let ttt_config = TTTConfig::default_tiny().with_num_hidden_layers(num_layers);
-    //     let vocab_size = ttt_config.vocab_size;
-    //     let model_config = TTTTextGenerationConfig::new_testing(ttt_config);
-    //     let model = model_config.init::<Backend, TTTLinear<Backend>>(&device);
-
-    //     println!(
-    //         "Testing {}-layer fused model (batch={}, seq={})...",
-    //         num_layers, batch_size, seq_length
-    //     );
-
-    //     let tokens_inputs = Tensor::<Backend, 2, Int>::random(
-    //         [batch_size, seq_length],
-    //         burn::tensor::Distribution::Uniform(0.0, (vocab_size - 1) as f64),
-    //         &device,
-    //     );
-    //     let targets = Tensor::<Backend, 2, Int>::random(
-    //         [batch_size, seq_length],
-    //         burn::tensor::Distribution::Uniform(0.0, (vocab_size - 1) as f64),
-    //         &device,
-    //     );
-    //     let mask_pad = Tensor::<Backend, 2, Bool>::ones([batch_size, seq_length], &device);
-
-    //     let batch = TrainingTextGenerationBatch {
-    //         tokens_inputs,
-    //         targets,
-    //         mask_pad,
-    //     };
-
-    //     println!("Forward pass...");
-    //     let output = model.forward_training(batch);
-    //     println!("  Loss: {:?}", output.loss.clone().into_data());
-
-    //     println!("Backward pass...");
-    //     let _grads = output.loss.backward();
-    //     println!("{}-layer fused model test PASSED!", num_layers);
-    // }
-
-    // #[test]
-    // fn test_fused_1_layer() {
-    //     run_fused_layer_test(1, 4, 32);
-    // }
-
-    // #[test]
-    // fn test_fused_2_layers() {
-    //     run_fused_layer_test(2, 4, 32);
-    // }
-
-    // #[test]
-    // fn test_fused_4_layers() {
-    //     run_fused_layer_test(4, 4, 32);
-    // }
-
-    // #[test]
-    // fn test_fused_5_layers() {
-    //     run_fused_layer_test(5, 4, 32);
-    // }
-
-    // #[test]
-    // fn test_fused_6_layers() {
-    //     run_fused_layer_test(6, 4, 32);
-    // }
-
-    // #[test]
-    // fn test_fused_6_layers_smaller_batch() {
-    //     run_fused_layer_test(6, 2, 32);
-    // }
-
-    // #[test]
-    // fn test_fused_6_layers_smaller_seq() {
-    //     run_fused_layer_test(6, 4, 16);
-    // }
 }

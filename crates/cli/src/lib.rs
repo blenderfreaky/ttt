@@ -35,7 +35,10 @@ pub use ttt_data::{
 // Re-export fused kernels
 pub use ttt_fused::{FusedLinear, FusedTile, FusedTileMulti, FusedTttBackend};
 // Re-export layer types
-pub use ttt_layer::{TTT, TTTBlock, TTTBlockWithSeq, TTTModel, dispatch_ttt_layer_type};
+pub use ttt_layer::{
+    AnyInner, AnyInnerState, TTT, TTTBlock, TTTBlockWithInner, TTTModel,
+    dispatch_ttt_layer_type,
+};
 // Re-export training types
 pub use ttt_training::{
     TTTTextGenerationConfig, TTTTextGenerationModel, TTTTextGenerator, TTTTrainingConfig,

@@ -1,23 +1,25 @@
-use std::sync::Arc;
-
 use burn::{
     module::{Ignored, Module},
     nn::{Embedding, EmbeddingConfig, Initializer, Linear, LinearConfig, RmsNorm, RmsNormConfig},
     tensor::{Int, Tensor},
 };
-use ttt_common::PosEncoding;
-use ttt_core::{TTTInnerModel, config::ModelConfig};
+use ttt_common::{InnerModel, PosEncoding};
+use ttt_core::config::ModelConfig;
 use ttt_fused::FusedTttBackend;
 
-use crate::block::{TTTBlockConfig, TTTBlockWithSeq};
+use crate::{
+    any_inner::{AnyInner, AnyInnerState},
+    block::{TTTBlockConfig, TTTBlockWithInner},
+};
 
+/// TTT language model with per-layer inner model selection.
 #[derive(Module, Debug)]
-pub struct TTTModel<B: FusedTttBackend, Inner> {
+pub struct TTTModel<B: FusedTttBackend> {
     pub config: Ignored<ModelConfig>,
     pub embedding: Embedding<B>,
     /// Optional absolute position embeddings (only present when pos_encoding is Absolute)
     pub position_embedding: Option<Embedding<B>>,
-    pub layers: Vec<TTTBlockWithSeq<B, Inner>>,
+    pub layers: Vec<TTTBlockWithInner<B>>,
     pub norm: RmsNorm<B>,
     /// Optional separate lm_head (only present when tie_word_embeddings is false).
     /// When None, uses tied embedding weights via matmul.
@@ -27,19 +29,33 @@ pub struct TTTModel<B: FusedTttBackend, Inner> {
 
 /// Extension trait for ModelConfig to initialize TTT models.
 pub trait ModelConfigModelExt {
-    fn init_with_inner_model<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
+    /// Initialize a TTT model with a factory function for creating inner models.
+    ///
+    /// The factory receives the layer index and returns the inner model type,
+    /// allowing different inner model types per layer (e.g., Linear for even layers,
+    /// MLP for odd layers).
+    fn init_with_inner_factory<B: FusedTttBackend>(
         &self,
-        inner_config: &Arc<Inner::Config>,
+        inner_factory: impl Fn(usize) -> InnerModel,
         device: &B::Device,
-    ) -> TTTModel<B, Inner>;
+    ) -> TTTModel<B>;
+
+    /// Initialize a TTT model with the same inner model type for all layers.
+    fn init_uniform<B: FusedTttBackend>(
+        &self,
+        inner_type: InnerModel,
+        device: &B::Device,
+    ) -> TTTModel<B> {
+        self.init_with_inner_factory(|_| inner_type, device)
+    }
 }
 
 impl ModelConfigModelExt for ModelConfig {
-    fn init_with_inner_model<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
+    fn init_with_inner_factory<B: FusedTttBackend>(
         &self,
-        inner_config: &Arc<Inner::Config>,
+        inner_factory: impl Fn(usize) -> InnerModel,
         device: &B::Device,
-    ) -> TTTModel<B, Inner> {
+    ) -> TTTModel<B> {
         let hidden_size = self.arch.hidden_size;
         let vocab_size = self.arch.vocab_size;
         let num_hidden_layers = self.arch.num_hidden_layers;
@@ -65,8 +81,9 @@ impl ModelConfigModelExt for ModelConfig {
 
         let layers = (0..num_hidden_layers)
             .map(|idx| {
-                TTTBlockConfig::new(self.clone(), idx)
-                    .init_with_inner(Inner::new(self, inner_config, device), device)
+                let inner_type = inner_factory(idx);
+                let inner = AnyInner::from_type(inner_type, self, device);
+                TTTBlockConfig::new(self.clone(), idx).init_with_inner(inner, device)
             })
             .collect();
         let norm = RmsNormConfig::new(hidden_size).init(device);
@@ -96,9 +113,9 @@ impl ModelConfigModelExt for ModelConfig {
     }
 }
 
-impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
+impl<B: FusedTttBackend> TTTModel<B> {
     /// Initialize fresh states for all layers
-    pub fn init_states(&self, batch_size: usize) -> Vec<Inner::State> {
+    pub fn init_states(&self, batch_size: usize) -> Vec<AnyInnerState<B>> {
         self.layers
             .iter()
             .map(|x| x.init_state(batch_size))
@@ -117,7 +134,7 @@ impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTModel<B, Inner> {
         &self,
         input: Tensor<B, 2, Int>,
         start_idx: usize,
-        states: &mut [Inner::State],
+        states: &mut [AnyInnerState<B>],
     ) -> Tensor<B, 3> {
         let [_batch_size, seq_len] = input.shape().dims();
         let device = input.device();

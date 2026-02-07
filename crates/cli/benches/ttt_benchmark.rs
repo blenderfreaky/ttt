@@ -25,6 +25,7 @@ use burn::prelude::*;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use paste::paste;
 use ttt_common::{ModelArch, TTTConfig};
+use ttt_common::InnerModel;
 use ttt_core::{
     GpuAutodiffBackend, GpuBackend, Qkv, TTTInnerModel, TTTInputsInner, TTTLinear, TTTLinearAdam,
     TTTMLP, TTTMLP2, TTTMLP3, TTTMLP4, config::ModelConfig,
@@ -321,17 +322,19 @@ fn bench_inner_backward<
 }
 
 /// Benchmark full model forward pass
-fn bench_full_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
+fn bench_full_forward<B: FusedTttBackend>(
     c: &mut Criterion,
     config: &BenchConfig,
     params: &RuntimeParams,
     device: &B::Device,
+    inner_type: InnerModel,
+    inner_name: &str,
 ) {
     let model_config = config.to_model_config(params.vocab_size);
     let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
-    let model: TTTTextGenerationModel<B, Inner> = text_gen_config.init(device);
+    let model: TTTTextGenerationModel<B> = text_gen_config.init(inner_type, device);
 
-    let group_name = format!("full_forward_{}", Inner::name());
+    let group_name = format!("full_forward_{}", inner_name);
     let mut group = c.benchmark_group(&group_name);
     group.throughput(Throughput::Elements(params.total_tokens() as u64));
     group.measurement_time(Duration::from_secs(20));
@@ -353,20 +356,19 @@ fn bench_full_forward<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
 }
 
 /// Benchmark full model backward pass (forward + backward)
-fn bench_full_backward<
-    B: burn::tensor::backend::AutodiffBackend + FusedTttBackend,
-    Inner: TTTInnerModel<B>,
->(
+fn bench_full_backward<B: burn::tensor::backend::AutodiffBackend + FusedTttBackend>(
     c: &mut Criterion,
     config: &BenchConfig,
     params: &RuntimeParams,
     device: &B::Device,
+    inner_type: InnerModel,
+    inner_name: &str,
 ) {
     let model_config = config.to_model_config(params.vocab_size);
     let text_gen_config = TTTTextGenerationConfig::new_testing(model_config);
-    let model: TTTTextGenerationModel<B, Inner> = text_gen_config.init(device);
+    let model: TTTTextGenerationModel<B> = text_gen_config.init(inner_type, device);
 
-    let group_name = format!("full_backward_{}", Inner::name());
+    let group_name = format!("full_backward_{}", inner_name);
     let mut group = c.benchmark_group(&group_name);
     group.throughput(Throughput::Elements(params.total_tokens() as u64));
     group.measurement_time(Duration::from_secs(20));
@@ -448,26 +450,63 @@ const BENCH_CONFIGS: &[BenchConfig] = &[
     // BenchConfig::b1(),
 ];
 
+/// Map benchmark suffix to InnerModel enum variant
+macro_rules! suffix_to_inner_model {
+    (linear) => { InnerModel::Linear };
+    (linear_adam) => { InnerModel::LinearAdam };
+    (mlp) => { InnerModel::Mlp };
+    (mlp2) => { InnerModel::Mlp2 };
+    (mlp3) => { InnerModel::Mlp3 };
+    (mlp4) => { InnerModel::Mlp4 };
+    (fused_linear) => { InnerModel::FusedLinear };
+    (fused_linear_tile) => { InnerModel::FusedTileLinear };
+    (fused_linear_tile_multi) => { InnerModel::FusedTileMultiLinear };
+    (fused_linear_tile_d2d_streaming) => { InnerModel::D2dStreamingLinear };
+    (fused_linear_tile_ptr_streaming) => { InnerModel::PtrStreamingLinear };
+}
+
 /// Generate a single benchmark entry function
 macro_rules! define_bench {
-    // Forward benchmarks (inference backend)
-    (forward, $scope:ident, $fn_name:ident, $inner:ty) => {
+    // Inner forward benchmarks (generic over concrete inner type)
+    (forward, inner, $fn_name:ident, $inner:ty) => {
         fn $fn_name(c: &mut Criterion) {
             let device = device::<GpuBackend>();
             for config in BENCH_CONFIGS {
                 for params in BENCH_PARAMS {
-                    paste! { [<bench_ $scope _forward>]::<GpuBackend, $inner>(c, &config, params, &device); }
+                    bench_inner_forward::<GpuBackend, $inner>(c, &config, params, &device);
                 }
             }
         }
     };
-    // Backward benchmarks (training backend)
-    (backward, $scope:ident, $fn_name:ident, $inner:ty) => {
+    // Inner backward benchmarks (generic over concrete inner type)
+    (backward, inner, $fn_name:ident, $inner:ty) => {
         fn $fn_name(c: &mut Criterion) {
             let device = device::<GpuAutodiffBackend>();
             for config in BENCH_CONFIGS {
                 for params in BENCH_PARAMS {
-                    paste! { [<bench_ $scope _backward>]::<GpuAutodiffBackend, $inner>(c, &config, params, &device); }
+                    bench_inner_backward::<GpuAutodiffBackend, $inner>(c, &config, params, &device);
+                }
+            }
+        }
+    };
+    // Full forward benchmarks (use InnerModel enum)
+    (forward, full, $fn_name:ident, $inner_model:expr, $inner_name:expr) => {
+        fn $fn_name(c: &mut Criterion) {
+            let device = device::<GpuBackend>();
+            for config in BENCH_CONFIGS {
+                for params in BENCH_PARAMS {
+                    bench_full_forward::<GpuBackend>(c, &config, params, &device, $inner_model, $inner_name);
+                }
+            }
+        }
+    };
+    // Full backward benchmarks (use InnerModel enum)
+    (backward, full, $fn_name:ident, $inner_model:expr, $inner_name:expr) => {
+        fn $fn_name(c: &mut Criterion) {
+            let device = device::<GpuAutodiffBackend>();
+            for config in BENCH_CONFIGS {
+                for params in BENCH_PARAMS {
+                    bench_full_backward::<GpuAutodiffBackend>(c, &config, params, &device, $inner_model, $inner_name);
                 }
             }
         }
@@ -480,8 +519,8 @@ macro_rules! define_model_benches {
         paste! {
             define_bench!(forward, inner, [<bench_inner_forward_ $suffix>], $inner);
             define_bench!(backward, inner, [<bench_inner_backward_ $suffix>], $inner);
-            define_bench!(forward, full, [<bench_full_forward_ $suffix>], $inner);
-            define_bench!(backward, full, [<bench_full_backward_ $suffix>], $inner);
+            define_bench!(forward, full, [<bench_full_forward_ $suffix>], suffix_to_inner_model!($suffix), stringify!($suffix));
+            define_bench!(backward, full, [<bench_full_backward_ $suffix>], suffix_to_inner_model!($suffix), stringify!($suffix));
         }
     };
 }

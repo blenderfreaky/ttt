@@ -18,13 +18,12 @@ use burn::{
     },
 };
 use ttt_common::TrainConfig;
-use ttt_core::{TTTInnerModel, config::ModelConfig};
+use ttt_core::config::ModelConfig;
 use ttt_data::{
-    TextDataset, TextGenerationBatcher, TextGenerationItem, TokenBatcher, TokenizedItem, Tokenizer,
+    TextDataset, TextGenerationBatcher, TokenBatcher, Tokenizer,
     TokenizerTrait, TrainingTextGenerationBatch, load_or_pretokenize,
 };
 use ttt_fused::FusedTttBackend;
-use ttt_layer::dispatch_ttt_layer_type;
 
 use crate::text_generation::{TTTTextGenerationConfig, TTTTextGenerationModel};
 
@@ -81,10 +80,9 @@ impl TTTTrainingConfig {
     }
 }
 
-/// Common training loop for all inner model types
+/// Common training loop
 fn run_training<
     B: AutodiffBackend + FusedTttBackend,
-    Inner: TTTInnerModel<B> + ModuleDisplay + AutodiffModule<B> + 'static,
     Item: Clone + Send + Sync + std::fmt::Debug + 'static,
     Bat: Batcher<B, Item, TrainingTextGenerationBatch<B>>
         + Batcher<B::InnerBackend, Item, TrainingTextGenerationBatch<B::InnerBackend>>
@@ -94,15 +92,14 @@ fn run_training<
         + 'static,
     D: Dataset<Item> + 'static,
 >(
-    model: TTTTextGenerationModel<B, Inner>,
+    model: TTTTextGenerationModel<B>,
     batcher: Bat,
     dataset_train: D,
     dataset_test: D,
     config: &TTTTrainingConfig,
 ) where
-    TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
-    <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
-    <TTTTextGenerationModel<B, Inner> as AutodiffModule<B>>::InnerModule: InferenceStep<
+    TTTTextGenerationModel<B>: AutodiffModule<B>,
+    <TTTTextGenerationModel<B> as AutodiffModule<B>>::InnerModule: InferenceStep<
             Input = TrainingTextGenerationBatch<B::InnerBackend>,
             Output = ClassificationOutput<B::InnerBackend>,
         >,
@@ -176,42 +173,6 @@ fn run_training<
         .unwrap();
 }
 
-/// Train with a specific inner model type
-fn train_with_inner<
-    B: AutodiffBackend + FusedTttBackend,
-    Inner: TTTInnerModel<B> + ModuleDisplay + AutodiffModule<B> + 'static,
-    D: Dataset<TextGenerationItem> + 'static,
->(
-    device: &B::Device,
-    dataset_train: D,
-    dataset_test: D,
-    config: &TTTTrainingConfig,
-) where
-    TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
-    <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
-    <TTTTextGenerationModel<B, Inner> as AutodiffModule<B>>::InnerModule: InferenceStep<
-            Input = TrainingTextGenerationBatch<B::InnerBackend>,
-            Output = ClassificationOutput<B::InnerBackend>,
-        >,
-{
-    // Batcher needs max_seq_len + 1 to account for next-token prediction
-    let batcher = TextGenerationBatcher::new(
-        Arc::new(Tokenizer::default()), // TODO: pass tokenizer through config
-        config.model_config.ttt.max_seq_len + 1,
-    );
-
-    std::fs::create_dir_all(&config.artifact_dir).unwrap();
-    config
-        .save(format!("{}/config.json", config.artifact_dir))
-        .unwrap();
-
-    let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
-
-    let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
-
-    run_training(model, batcher, dataset_train, dataset_test, config);
-}
-
 pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     device: &B::Device,
     config: &TTTTrainingConfig,
@@ -226,39 +187,11 @@ pub fn train_dataset<B: AutodiffBackend + FusedTttBackend>(
     let ttt_type = config.model_config.ttt.layer_type;
     println!("Layer type: {ttt_type:?}");
 
-    dispatch_ttt_layer_type!(train_with_inner::<B, ttt_type, _>(
-        device,
-        dataset_train,
-        dataset_test,
-        config,
-    ));
-
-    println!(
-        "Training completed! Artifacts saved to: {}",
-        config.artifact_dir
-    );
-}
-
-/// Train with a specific inner model type using pre-tokenized data
-fn train_with_inner_pretokenized<
-    B: AutodiffBackend + FusedTttBackend,
-    Inner: TTTInnerModel<B> + ModuleDisplay + AutodiffModule<B> + 'static,
-    D: Dataset<TokenizedItem> + 'static,
->(
-    device: &B::Device,
-    dataset_train: D,
-    dataset_test: D,
-    config: &TTTTrainingConfig,
-) where
-    TTTTextGenerationModel<B, Inner>: AutodiffModule<B>,
-    <Inner as AutodiffModule<B>>::InnerModule: TTTInnerModel<B::InnerBackend>,
-    <TTTTextGenerationModel<B, Inner> as AutodiffModule<B>>::InnerModule: InferenceStep<
-            Input = TrainingTextGenerationBatch<B::InnerBackend>,
-            Output = ClassificationOutput<B::InnerBackend>,
-        >,
-{
     // Batcher needs max_seq_len + 1 to account for next-token prediction
-    let batcher = TokenBatcher::new(config.pad_token, config.model_config.ttt.max_seq_len + 1);
+    let batcher = TextGenerationBatcher::new(
+        Arc::new(Tokenizer::default()), // TODO: pass tokenizer through config
+        config.model_config.ttt.max_seq_len + 1,
+    );
 
     std::fs::create_dir_all(&config.artifact_dir).unwrap();
     config
@@ -266,10 +199,14 @@ fn train_with_inner_pretokenized<
         .unwrap();
 
     let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
-
-    let model: TTTTextGenerationModel<B, Inner> = model_config.init(device);
+    let model: TTTTextGenerationModel<B> = model_config.init(ttt_type, device);
 
     run_training(model, batcher, dataset_train, dataset_test, config);
+
+    println!(
+        "Training completed! Artifacts saved to: {}",
+        config.artifact_dir
+    );
 }
 
 /// Train using pre-tokenized dataset
@@ -308,12 +245,17 @@ pub fn train_dataset_pretokenized<B: AutodiffBackend + FusedTttBackend>(
     let ttt_type = config.model_config.ttt.layer_type;
     println!("Layer type: {ttt_type:?}");
 
-    dispatch_ttt_layer_type!(train_with_inner_pretokenized::<B, ttt_type, _>(
-        device,
-        dataset_train,
-        dataset_test,
-        config,
-    ));
+    let batcher = TokenBatcher::new(config.pad_token, config.model_config.ttt.max_seq_len + 1);
+
+    std::fs::create_dir_all(&config.artifact_dir).unwrap();
+    config
+        .save(format!("{}/config.json", config.artifact_dir))
+        .unwrap();
+
+    let model_config = TTTTextGenerationConfig::new(config.model_config.clone(), config.pad_token);
+    let model: TTTTextGenerationModel<B> = model_config.init(ttt_type, device);
+
+    run_training(model, batcher, dataset_train, dataset_test, config);
 
     println!(
         "Training completed! Artifacts saved to: {}",

@@ -4,34 +4,34 @@ use burn::{
     tensor::Tensor,
 };
 use ttt_core::{
-    TTTInnerModel,
     config::ModelConfig,
     util::{CausalConv, CausalConvConfig, SwiGluMlp, SwiGluMlpConfig},
 };
 use ttt_fused::FusedTttBackend;
 
-use crate::ttt::{ModelConfigExt, TTT};
+use crate::{
+    any_inner::{AnyInner, AnyInnerState},
+    ttt::{ModelConfigExt, TTT},
+};
 
-// We can't write the trait bound due to a limitation of the Module derive macro
-// but impls enforce it
-//   Inner: TTTInnerModel<B>
+/// A TTT block with its inner model.
 #[derive(Module, Debug)]
-pub struct TTTBlockWithSeq<B: FusedTttBackend, Inner> {
+pub struct TTTBlockWithInner<B: FusedTttBackend> {
     pub block: TTTBlock<B>,
-    pub inner: Inner,
+    pub inner: AnyInner<B>,
 }
 
-impl<B: FusedTttBackend, Inner: TTTInnerModel<B>> TTTBlockWithSeq<B, Inner> {
+impl<B: FusedTttBackend> TTTBlockWithInner<B> {
     pub fn forward(
         &self,
         input: Tensor<B, 3>,
-        state: &mut Inner::State,
+        state: &mut AnyInnerState<B>,
         start_idx: usize,
     ) -> Tensor<B, 3> {
         self.block.forward(input, state, &self.inner, start_idx)
     }
 
-    pub fn init_state(&self, batch_size: usize) -> Inner::State {
+    pub fn init_state(&self, batch_size: usize) -> AnyInnerState<B> {
         self.inner.init_state(batch_size)
     }
 }
@@ -49,8 +49,8 @@ pub struct TTTBlock<B: FusedTttBackend> {
 
 #[derive(Clone, Debug)]
 pub struct TTTBlockConfig {
-    model_config: ModelConfig,
-    layer_idx: usize,
+    pub model_config: ModelConfig,
+    pub layer_idx: usize,
 }
 
 impl TTTBlockConfig {
@@ -84,22 +84,22 @@ impl TTTBlockConfig {
         }
     }
 
-    pub fn init_with_inner<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
+    pub fn init_with_inner<B: FusedTttBackend>(
         self,
-        inner: Inner,
+        inner: AnyInner<B>,
         device: &B::Device,
-    ) -> TTTBlockWithSeq<B, Inner> {
+    ) -> TTTBlockWithInner<B> {
         let block = self.init(device);
-        TTTBlockWithSeq { block, inner }
+        TTTBlockWithInner { block, inner }
     }
 }
 
 impl<B: FusedTttBackend> TTTBlock<B> {
-    pub fn forward<Inner: TTTInnerModel<B>>(
+    pub fn forward(
         &self,
         input: Tensor<B, 3>,
-        state: &mut Inner::State,
-        inner: &Inner,
+        state: &mut AnyInnerState<B>,
+        inner: &AnyInner<B>,
         start_idx: usize,
     ) -> Tensor<B, 3> {
         let mut hidden_states = input;

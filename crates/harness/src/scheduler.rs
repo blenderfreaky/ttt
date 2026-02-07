@@ -524,3 +524,196 @@ async fn watchdog(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn unix_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    use std::process::Child;
+
+    /// Spawn a process that sleeps forever (for watchdog testing).
+    /// Returns the child handle (must be kept alive) and the PID.
+    fn spawn_sleeper() -> (Child, u32) {
+        let child = Command::new("sleep")
+            .arg("3600")
+            .spawn()
+            .expect("failed to spawn sleep");
+        let pid = child.id();
+        (child, pid)
+    }
+
+    fn is_alive(pid: u32) -> bool {
+        // Check /proc status - zombies are not "alive" for our purposes
+        let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+            return false;
+        };
+        // Look for "State:" line - Z means zombie
+        status
+            .lines()
+            .find(|l| l.starts_with("State:"))
+            .is_some_and(|l| !l.contains("Z (zombie)"))
+    }
+
+    #[tokio::test]
+    async fn test_watchdog_idle_timeout_kills_process() {
+        let (_child, pid) = spawn_sleeper();
+        assert!(is_alive(pid), "process should be alive initially");
+
+        let settle_until = Arc::new(AtomicU64::new(0)); // no grace period
+        let last_activity = Arc::new(AtomicU64::new(unix_now() - 10)); // 10s in the past
+        let (tx, mut rx) = watch::channel(ProgressUpdate::default());
+
+        // Spawn watchdog with 1s idle timeout (activity is already 10s stale)
+        let handle = tokio::spawn(async move {
+            watchdog(
+                "test",
+                pid,
+                None,        // no hang timeout
+                Some(1),     // 1s idle timeout
+                settle_until,
+                last_activity,
+                &mut rx,
+            )
+            .await;
+        });
+
+        // Wait for watchdog to kill the process (poll interval is 5s, so need >5s)
+        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+
+        assert!(!is_alive(pid), "process should have been killed by idle timeout");
+        drop(tx);
+        let _ = handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_watchdog_hang_timeout_kills_process() {
+        let (_child, pid) = spawn_sleeper();
+        assert!(is_alive(pid), "process should be alive initially");
+
+        let settle_until = Arc::new(AtomicU64::new(0));
+        let last_activity = Arc::new(AtomicU64::new(unix_now())); // keep updating
+        let (tx, mut rx) = watch::channel(ProgressUpdate::default());
+
+        // Send first progress to activate hang detection
+        tx.send(ProgressUpdate {
+            epoch: 1,
+            epoch_total: 10,
+            items_processed: 1,
+            items_total: 100,
+        })
+        .unwrap();
+
+        // Spawn watchdog with 1s hang timeout
+        let activity = last_activity.clone();
+        let activity_handle = tokio::spawn(async move {
+            // Keep activity fresh so idle timeout doesn't trigger
+            loop {
+                activity.store(unix_now(), Ordering::Relaxed);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+
+        let watchdog_handle = tokio::spawn(async move {
+            watchdog(
+                "test",
+                pid,
+                Some(1),     // 1s hang timeout
+                None,        // no idle timeout
+                settle_until,
+                last_activity,
+                &mut rx,
+            )
+            .await;
+        });
+
+        // Wait for watchdog to kill the process (poll is 5s, then check, need >10s for 2 polls)
+        tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+
+        assert!(!is_alive(pid), "process should have been killed by hang timeout");
+        activity_handle.abort();
+        let _ = watchdog_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_watchdog_respects_settle_grace() {
+        let (_child, pid) = spawn_sleeper();
+        assert!(is_alive(pid), "process should be alive initially");
+
+        // Set settle_until to 10s in the future
+        let settle_until = Arc::new(AtomicU64::new(unix_now() + 10));
+        let last_activity = Arc::new(AtomicU64::new(unix_now() - 100)); // very stale
+        let (tx, mut rx) = watch::channel(ProgressUpdate::default());
+
+        let watchdog_handle = tokio::spawn(async move {
+            watchdog(
+                "test",
+                pid,
+                None,
+                Some(1), // 1s idle timeout - would trigger immediately if not for grace
+                settle_until,
+                last_activity,
+                &mut rx,
+            )
+            .await;
+        });
+
+        // Wait 6s - process should still be alive due to grace period
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        assert!(is_alive(pid), "process should still be alive during grace period");
+
+        // Clean up
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        watchdog_handle.abort();
+        drop(tx);
+    }
+
+    #[tokio::test]
+    async fn test_watchdog_no_hang_before_first_progress() {
+        let (_child, pid) = spawn_sleeper();
+        assert!(is_alive(pid), "process should be alive initially");
+
+        let settle_until = Arc::new(AtomicU64::new(0));
+        let last_activity = Arc::new(AtomicU64::new(unix_now())); // keep fresh
+        let (tx, mut rx) = watch::channel(ProgressUpdate::default());
+
+        // Keep activity fresh
+        let activity = last_activity.clone();
+        let activity_handle = tokio::spawn(async move {
+            loop {
+                activity.store(unix_now(), Ordering::Relaxed);
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+
+        let watchdog_handle = tokio::spawn(async move {
+            watchdog(
+                "test",
+                pid,
+                Some(1), // 1s hang timeout - but no progress sent yet
+                None,
+                settle_until,
+                last_activity,
+                &mut rx,
+            )
+            .await;
+        });
+
+        // Wait 8s - process should still be alive because no progress was ever sent
+        tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+        assert!(is_alive(pid), "process should still be alive - hang timeout only active after first progress");
+
+        // Clean up
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        activity_handle.abort();
+        watchdog_handle.abort();
+        drop(tx);
+    }
+}
