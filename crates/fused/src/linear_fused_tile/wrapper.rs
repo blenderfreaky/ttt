@@ -116,7 +116,8 @@ impl<B: FusedTttBackend> TTTInnerModel<B> for Fused<B, TTTLinear<B>, TileMultiKe
             .ttt
             .threads
             .unwrap_or_else(|| super::api::default_threads(mini_batch_size, head_dim));
-        let config = FusedTttConfig::new(mini_batch_size, head_dim, epsilon, threads);
+        let mut config = FusedTttConfig::new(mini_batch_size, head_dim, epsilon, threads);
+        config.checkpoint_interval = model_config.ttt.checkpoint_interval;
 
         if num_full_batches > 0 {
             // Process full mini-batches with multi-stage kernel

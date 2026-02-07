@@ -21,6 +21,8 @@ pub struct TestDims {
     pub mini_batch_size: usize,
     /// Number of iterations to run with fresh data (default: 1).
     pub iterations: usize,
+    /// Number of stages between weight checkpoints (default: 1).
+    pub checkpoint_interval: usize,
 }
 
 impl TestDims {
@@ -33,6 +35,7 @@ impl TestDims {
             seq_len,
             mini_batch_size: seq_len,
             iterations: 1,
+            checkpoint_interval: 1,
         }
     }
 
@@ -52,7 +55,15 @@ impl TestDims {
             seq_len: mini_batch_size * num_stages,
             mini_batch_size,
             iterations: 1,
+            checkpoint_interval: 1,
         }
+    }
+
+    /// Set the checkpoint interval.
+    #[must_use]
+    pub fn with_checkpoint_interval(mut self, interval: usize) -> Self {
+        self.checkpoint_interval = interval;
+        self
     }
 
     /// Set the number of iterations to run.
@@ -89,6 +100,7 @@ pub fn default_test_config(dims: TestDims) -> ModelConfig {
         mini_batch_size: dims.mini_batch_size,
         base_lr: 1.0,
         epsilon: 1e-6,
+        checkpoint_interval: dims.checkpoint_interval,
         ..TTTConfig::default()
     });
     ModelConfig::new(arch, ttt)

@@ -1837,6 +1837,9 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     recomp: &RecomputationInputs<P::EVal>,
     weight_checkpoints: &Tensor<Line<P::EVal>>,
     bias_checkpoints: &Tensor<Line<P::EVal>>,
+    // Per-(batch,head) scratch buffer for storing reconstructed W[stage_idx]
+    // before backward_stage overwrites it. Shape: [batch, heads, head_dim, head_dim].
+    weight_stage_buf: &mut Tensor<Line<P::EVal>>,
     grad_output: &Tensor<Line<P::EVal>>,
     grads: &mut GradOutputs<P::EVal>,
     num_stages: u32,
@@ -1848,14 +1851,19 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     let epsilon = comptime!(config.epsilon());
     let mini_batch_len = comptime!(P::CS::VALUE);
     let head_dim = comptime!(P::F::VALUE);
+    let checkpoint_interval = comptime!(config.checkpoint_interval);
     let stage_stride = mini_batch_len * head_dim;
     let num_stages = num_stages as usize;
 
     let base_qkv = index_2d(&saved.xq, batch_idx, head_idx);
     let base_ttt_lr_eta = index_2d(&saved.ttt_lr_eta, batch_idx, head_idx);
 
-    // Checkpoint offset base: (batch_idx * num_heads + head_idx) * num_stages
-    let ckpt_bh = (batch_idx * num_heads + head_idx) * num_stages;
+    // Checkpoint layout matches forward: ceil(num_stages / checkpoint_interval) per batch/head
+    let num_checkpoints = (num_stages + checkpoint_interval - 1) / checkpoint_interval;
+    let ckpt_bh = (batch_idx * num_heads + head_idx) * num_checkpoints;
+
+    // Per-(batch,head) offset into weight_stage_buf [batch, heads, F, F]
+    let bh_buf_offset = index_2d(weight_stage_buf, batch_idx, head_idx);
 
     let mut grad_L_W_last = P::st_ff();
     grad_L_W_last.fill(P::EVal::new(0.0));
@@ -1869,7 +1877,7 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     let mut grad_L_ln_bias_acc = P::rvb_f_a();
     grad_L_ln_bias_acc.fill(P::EAcc::new(0.0));
 
-    // Shared scratch tiles
+    // Shared scratch tiles (reused between forward_simulate and backward_stage)
     let mut scratch1 = P::st_cs_f();
     let mut scratch2 = P::st_cs_f();
     let mut ext_k_smem = P::st_f_cs();
@@ -1888,26 +1896,54 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     cube::broadcast::load_rv_direct(&recomp.ln_bias, &mut ln_bias_rv, base_ln);
 
     // Process stages in reverse order (backward through time).
-    // At each stage we first propagate the accumulated gradient (grad_L_W_last, grad_L_b_last)
-    // through the weight update Jacobian at this stage, then compute the local backward.
     for stage in 0..num_stages {
         let stage_idx = num_stages - 1 - stage;
         let stage_offset = base_qkv + stage_idx * stage_stride;
         let ttt_lr_eta_idx = base_ttt_lr_eta + stage_idx * mini_batch_len;
 
-        // === Load weight/bias checkpoint for this stage ===
-        let ckpt_weight_offset = (ckpt_bh + stage_idx) * head_dim * head_dim;
+        // === Reconstruct W[stage_idx] from nearest earlier checkpoint ===
+        let ckpt_stage = (stage_idx / checkpoint_interval) * checkpoint_interval;
+        let ckpt_idx = ckpt_stage / checkpoint_interval;
+
+        let ckpt_weight_offset = (ckpt_bh + ckpt_idx) * head_dim * head_dim;
         cube::load_st_direct(weight_checkpoints, &mut weight_stage, ckpt_weight_offset, 0, 0);
 
         sync_cube();
 
         let mut bias_stage = P::rvb_f_v();
-        let ckpt_bias_offset = (ckpt_bh + stage_idx) * head_dim;
+        let ckpt_bias_offset = (ckpt_bh + ckpt_idx) * head_dim;
         cube::broadcast::load_rv_direct(bias_checkpoints, &mut bias_stage, ckpt_bias_offset);
 
-        // No separate propagation step needed: backward_stage handles the inter-stage
-        // chain rule through the grad_grad_l computation in backward_stage3_part1, which
-        // uses grad_L_W_last/grad_L_b_last to compute the VJP through the weight update.
+        // Forward-simulate from checkpoint to stage_idx (0 iterations if checkpoint_interval=1)
+        for fwd in ckpt_stage..stage_idx {
+            let fwd_offset = base_qkv + fwd * stage_stride;
+            let fwd_ttt_lr = base_ttt_lr_eta + fwd * mini_batch_len;
+
+            forward_simulate_weight_update::<P>(
+                saved,
+                recomp,
+                &mut weight_stage,
+                &mut bias_stage,
+                &ln_weight_rv,
+                &ln_bias_rv,
+                fwd_offset,
+                fwd_ttt_lr,
+                &mut ext_k_smem,
+                &mut scratch1,
+                &mut scratch2,
+                &mut tile_b,
+                &mut tile_c,
+                &mut ext_buf,
+                epsilon,
+            );
+
+            sync_cube();
+        }
+
+        // Store reconstructed W[stage_idx] to global buffer before backward_stage
+        // overwrites weight_stage (reused as temp_f_f). The backward stage will
+        // reload from this buffer when it needs W[stage_idx] again.
+        cube::store_st_direct(&weight_stage, weight_stage_buf, bh_buf_offset, 0, 0);
 
         // Each stage writes its token_eta gradient to its own offset within [seq_len]
         let token_eta_base = stage_idx * mini_batch_len;
@@ -1925,8 +1961,8 @@ pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
             stage_offset,
             ttt_lr_eta_idx,
             token_eta_base,
-            weight_checkpoints,
-            ckpt_weight_offset,
+            weight_stage_buf,
+            bh_buf_offset,
             &mut scratch1,
             &mut scratch2,
             &mut ext_k_smem,

@@ -362,6 +362,12 @@ pub struct TTTConfig {
     #[serde(default = "default_dtype")]
     #[cfg_attr(feature = "clap", arg(long, default_value = "f32"))]
     pub dtype: DType,
+    /// Number of stages between weight checkpoints in multi-stage backward.
+    /// Higher values reduce memory but increase backward compute (re-simulation).
+    /// Default: 1 (checkpoint every stage).
+    #[serde(default = "default_checkpoint_interval")]
+    #[cfg_attr(feature = "clap", arg(long, default_value = "1"))]
+    pub checkpoint_interval: usize,
 }
 
 fn default_base_lr() -> f32 {
@@ -391,6 +397,9 @@ fn default_epsilon() -> f64 {
 fn default_dtype() -> DType {
     DType::F32
 }
+fn default_checkpoint_interval() -> usize {
+    1
+}
 
 impl Default for TTTConfig {
     fn default() -> Self {
@@ -410,6 +419,7 @@ impl Default for TTTConfig {
             tie_word_embeddings: true,
             epsilon: default_epsilon(),
             dtype: default_dtype(),
+            checkpoint_interval: default_checkpoint_interval(),
         }
     }
 }

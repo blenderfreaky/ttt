@@ -94,16 +94,20 @@ fn test_fused_tile_multi_fmb_backward_vs_reference(
     );
 }
 
-#[test_case(2, 2, 32, 8, 1 ; "batch2_heads2_dim32_mini8_stages1")]
-#[test_case(2, 2, 32, 8, 2 ; "batch2_heads2_dim32_mini8_stages2")]
+#[test_case(2, 2, 32, 8, 1, 1 ; "batch2_heads2_dim32_mini8_stages1_ckpt1")]
+#[test_case(2, 2, 32, 8, 2, 1 ; "batch2_heads2_dim32_mini8_stages2_ckpt1")]
+#[test_case(2, 2, 32, 8, 4, 2 ; "batch2_heads2_dim32_mini8_stages4_ckpt2")]
+#[test_case(2, 2, 32, 8, 4, 4 ; "batch2_heads2_dim32_mini8_stages4_ckpt4")]
 fn test_fused_tile_multi_backward_vs_reference(
     batch: usize,
     heads: usize,
     dim: usize,
     mini_batch: usize,
     stages: usize,
+    ckpt_interval: usize,
 ) {
-    let dims = TestDims::multi_stage(batch, heads, dim, mini_batch, stages);
+    let dims = TestDims::multi_stage(batch, heads, dim, mini_batch, stages)
+        .with_checkpoint_interval(ckpt_interval);
     test_backward_fwd::<GpuAutodiffBackend, FusedTileMulti<GpuAutodiffBackend>, _>(
         dims,
         |m| m.into(),

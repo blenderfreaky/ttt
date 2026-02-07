@@ -156,6 +156,7 @@ fn bench_fwd_inner<B: FusedTttBackend, Inner: TTTInnerModel<B>>(
         seq_len: args.seq_len,
         mini_batch_size: args.mini_batch,
         iterations: 1,
+        checkpoint_interval: 1,
     };
 
     // Pre-allocate inputs and state once, clone per iteration
@@ -198,6 +199,7 @@ fn bench_bwd_inner<
         seq_len: args.seq_len,
         mini_batch_size: args.mini_batch,
         iterations: 1,
+        checkpoint_interval: 1,
     };
 
     // Pre-allocate inputs and state once, clone per iteration
