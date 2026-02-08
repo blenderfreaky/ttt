@@ -56,7 +56,7 @@
         inherit cargoArtifacts;
         nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
         buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
-        cargoExtraArgs = "--no-default-features --features ${backend}";
+        cargoExtraArgs = "--no-default-features --features ${backend} --all-targets";
         doCheck = false;
       }
       // extraEnv
@@ -67,31 +67,6 @@
         }
         else {}
       ));
-
-  mkTttBench = {
-    backend,
-    binSuffix ? "",
-    extraBuildInputs ? [],
-    extraNativeBuildInputs ? [],
-    extraEnv ? {},
-  }: let
-    cargoArtifacts = mkCargoArtifacts {inherit backend extraBuildInputs extraNativeBuildInputs extraEnv;};
-  in
-    craneLib.buildPackage (commonArgs
-      // {
-        pname = "ttt-bench${binSuffix}";
-        version = "0.1.0";
-        inherit cargoArtifacts;
-        nativeBuildInputs = commonArgs.nativeBuildInputs ++ extraNativeBuildInputs;
-        buildInputs = commonArgs.buildInputs ++ extraBuildInputs;
-        cargoExtraArgs = "--no-default-features --features ${backend} --bench ttt-bench-criterion";
-        installPhaseCommand = ''
-          mkdir -p $out/bin
-          find target/release/deps -name "ttt-bench-criterion-*" -type f -executable ! -name "*.d" -exec cp {} $out/bin/ttt-bench-criterion${binSuffix} \;
-        '';
-        doCheck = false;
-      }
-      // extraEnv);
 
   mkTttDocker = {
     name,
@@ -162,7 +137,7 @@
     extraEnv.CUDA_PATH = "${cudaPackages.cudatoolkit}";
   };
 
-  # Build a complete backend package set: {f32.{ttt,ttt-bench}, ttt-docker}
+  # Build a complete backend package set: {ttt, ttt-docker}
   mkBackendPkgs = {
     name,
     backend,
@@ -171,36 +146,18 @@
     dockerEnv,
     nvtop,
   }: let
-    f32 = {
-      ttt = mkTtt (buildConfig // {inherit backend;});
-      ttt-bench = mkTttBench (buildConfig // {inherit backend;});
-    };
-    # bf16 = {
-    #   ttt = mkTtt (buildConfig
-    #     // {
-    #       backend = "${backend},bf16";
-    #       binSuffix = "-bf16";
-    #     });
-    #   ttt-bench = mkTttBench (buildConfig
-    #     // {
-    #       backend = "${backend},bf16";
-    #       binSuffix = "-bf16";
-    #     });
-    # };
+    ttt =
+      mkTtt (buildConfig // {inherit backend;});
   in {
     inherit
-      f32
-      # bf16
+      ttt
       ;
     ttt-docker = mkTttDocker {
       inherit name;
-      tttPkg = f32.ttt;
+      tttPkg = ttt;
       runtimeDeps =
         runtimeDeps
         ++ [
-          f32.ttt-bench
-          # bf16.ttt
-          # bf16.ttt-bench
           nvtop
         ];
       extraEnv = dockerEnv;
