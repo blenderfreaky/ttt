@@ -7,6 +7,7 @@ use burn::{
     prelude::Backend,
     tensor::{Tensor, s},
 };
+use burn_backend::FloatDType;
 
 use crate::{
     config::ModelConfig,
@@ -93,12 +94,21 @@ impl<B: Backend> TTTLinearAdam<B> {
 
         state.step += 1;
 
+        // Detach gradients so the outer backward pass does not differentiate
+        // through the Adam moment updates (first-order approximation).
+        let weight_grad = weight_grad.detach();
+        let bias_grad = bias_grad.detach();
+
         state.weight_m = state.weight_m.clone() * beta1 + weight_grad.clone() * (1.0 - beta1);
         state.bias_m = state.bias_m.clone() * beta1 + bias_grad.clone() * (1.0 - beta1);
 
-        state.weight_v =
-            state.weight_v.clone() * beta2 + weight_grad.powf_scalar(2.0) * (1.0 - beta2);
-        state.bias_v = state.bias_v.clone() * beta2 + bias_grad.powf_scalar(2.0) * (1.0 - beta2);
+        // Square and accumulate v in f32 to avoid bf16 overflow.
+        state.weight_v = (state.weight_v.clone().cast(FloatDType::F32) * beta2
+            + weight_grad.cast(FloatDType::F32).powf_scalar(2.0) * (1.0 - beta2))
+            .no_grad();
+        state.bias_v = (state.bias_v.clone().cast(FloatDType::F32) * beta2
+            + bias_grad.cast(FloatDType::F32).powf_scalar(2.0) * (1.0 - beta2))
+            .no_grad();
 
         let beta1_pow = 1.0 - beta1.powi(state.step);
         let beta2_pow = 1.0 - beta2.powi(state.step);
@@ -106,11 +116,11 @@ impl<B: Backend> TTTLinearAdam<B> {
         let weight_m_hat = state.weight_m.clone() / beta1_pow;
         let bias_m_hat = state.bias_m.clone() / beta1_pow;
 
-        let weight_v_hat = state.weight_v.clone() / beta2_pow;
-        let bias_v_hat = state.bias_v.clone() / beta2_pow;
+        // Bias-correct and normalize v in f32, then cast back.
+        let weight_v_hat = state.weight_v.clone().cast(FloatDType::F32) / beta2_pow;
+        let bias_v_hat = state.bias_v.clone().cast(FloatDType::F32) / beta2_pow;
 
-        state.weight =
-            state.weight.clone() - weight_m_hat / (weight_v_hat.sqrt() + eps) * lr;
+        state.weight = state.weight.clone() - weight_m_hat / (weight_v_hat.sqrt() + eps) * lr;
         state.bias = state.bias.clone() - bias_m_hat / (bias_v_hat.sqrt() + eps) * lr;
     }
 }
