@@ -250,10 +250,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         buf,
         epsilon,
     );
-    // grad_l_smem now has x_hat. DON'T save x_hat — will recompute before stage 2.
+    let x_hat_smem = grad_l_smem;
 
     // Compute y = ln_weight * x_hat + ln_bias, then grad_output = y - target
-    scratch1.copy_from(&grad_l_smem);
+    scratch1.copy_from(&x_hat_smem);
     scratch1.mul_row(&ln_weight_rv);
     scratch1.add_row(&ln_bias_rv);
     scratch1.sub(&tile_e);
@@ -267,7 +267,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     // DON'T save grad_x_hat — will recompute before stage 2.
-    // Compute grad_x from grad_x_hat -> overwrites grad_l_smem (x_hat -> grad_l)
+    // Compute grad_x from grad_x_hat (overwrites x_hat with grad_l)
+    let mut grad_l_smem = x_hat_smem;
     compute_grad_x_from_grad_x_hat::<P::EVal, P::EAcc, P::CS, P::F>(
         scratch1,
         &mut grad_l_smem,
@@ -277,8 +278,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     );
 
     sync_cube();
-
-    // grad_l_smem now contains the recomputed grad_l
 
     // =========================================================================
     // Recompute z1_bar and its layer norm intermediates
@@ -345,8 +344,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         epsilon,
     );
 
-    // scratch1 now contains x_hat_ln
-
+    let x_hat_ln = scratch1;
 
     // =========================================================================
     // Stage 4: LN backward (inlined from backward_stage4_ln)
@@ -362,7 +360,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // grad_ln_weight_s4 = sum(grad_output * x_hat_ln)
     tile_b.copy_from(tile_c);
-    tile_b.mul(scratch1);
+    tile_b.mul(x_hat_ln);
 
     sync_cube();
 
@@ -386,7 +384,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // sum(grad_x_hat * x_hat) per row
     scratch2.copy_from(tile_b);
-    scratch2.mul(scratch1);
+    scratch2.mul(x_hat_ln);
 
     sync_cube();
 
@@ -401,7 +399,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    scratch2.copy_from(scratch1);
+    scratch2.copy_from(x_hat_ln);
     scratch2.mul_col(&sum_gxh_xh_s4);
 
     sync_cube();
@@ -446,19 +444,18 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    // weight_stage now serves as grad_W_last for stage 3 part 1 (read-only)
+    let grad_W_last = weight_stage;
 
     // =========================================================================
     // Stage 3 Part 1: Update backward (inlined from backward_stage3_part1)
     // =========================================================================
 
-    // Reload xk, xq (scratch1 and tile_c are dead after stage 4)
+    let scratch1 = x_hat_ln;
     cube::load_st_direct(&saved.xk, scratch1, stage_offset, 0, 0);
     cube::load_st_direct(&saved.xq, tile_c, stage_offset, 0, 0);
 
     sync_cube();
 
-    // Rename: scratch1 now holds XK data, tile_c now holds XQ data
     let xk_smem = scratch1;
     let xq_smem = tile_c;
 
@@ -510,7 +507,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     let mut src12_reg = P::rt_cs_f();
     src12_reg.zero();
-    cube::mma_AB(&mut src12_reg, tile_b, weight_stage);
+    cube::mma_AB(&mut src12_reg, tile_b, grad_W_last);
 
     sync_cube();
 
@@ -529,6 +526,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     tile_e.sub(tile_b);
 
     sync_cube();
+
+    let grad_grad_l = tile_e;
 
     // --- d_xk (from attn) = d_attn^T @ XQ ---
     // Compute d_attn^T directly: grad_l @ grad_z1_bar^T * η^T
@@ -566,7 +565,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // grad_l_Last = grad_l @ grad_W_last^T
     let mut grad_l_last_reg = P::rt_cs_f();
     grad_l_last_reg.zero();
-    cube::mma_ABt(&mut grad_l_last_reg, &grad_l_smem, weight_stage);
+    cube::mma_ABt(&mut grad_l_last_reg, &grad_l_smem, grad_W_last);
 
     sync_cube();
 
@@ -575,9 +574,9 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     // --- grad_ttt_lr_eta from weight/bias update (first part) ---
-    // Must compute BEFORE modifying tile_b for grad_xk_mini (tile_b = grad_l_last here)
     // grad_last_eta = sum(-(grad_l_last * XK) - (grad_b_last * grad_l))
-    scratch2.copy_from(tile_b); // tile_b = grad_l_last (unmodified)
+    let grad_l_last_tile = tile_b;
+    scratch2.copy_from(grad_l_last_tile);
     scratch2.mul(xk_smem);
 
     sync_cube();
@@ -604,8 +603,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Scale by last_token_eta for grad_ttt_lr_eta contribution
     grad_eta_term1.mul_scalar(P::EAcc::cast_from(last_token_eta));
 
-    // Now modify tile_b for grad_xk_mini (safe: eta terms already computed)
     // grad_xk_mini = -grad_l_last * last_eta
+    let tile_b = grad_l_last_tile;
     tile_b.mul_col(&last_eta_rv);
     tile_b.neg();
 
@@ -620,14 +619,12 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Accumulate dW_z1bar into the global weight gradient
     // =========================================================================
 
-    // tile_e now holds grad_grad_l
-
     sync_cube();
 
-    // weight_stage still has the old accumulated value (read-only in stage3_part1)
     let mut acc_rt = P::rt_ff();
-    cube::load_rt_from_st(weight_stage, &mut acc_rt);
+    cube::load_rt_from_st(grad_W_last, &mut acc_rt);
     acc_rt.add(&dw_z1bar_rt);
+    let weight_stage = grad_W_last;
     cube::store_rt_to_st(&acc_rt, weight_stage);
 
     sync_cube();
@@ -722,10 +719,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     // --- grad_token_eta from η terms in z1_bar + weight/bias update ---
-    // cs_cs_b = d_eta, cs_cs_a is dead (was d_eta_base * attn, consumed)
     // grad_token_eta[i] = Σ_j(d_eta[i,j] * ttt_lr_eta[j])
     // Plus: grad_token_eta[CS-1] += Σ_j(d_last_eta[j] * ttt_lr_eta[j])
-    cs_cs_a.copy_from(&cs_cs_b);
+    let d_eta = cs_cs_b;
+    cs_cs_a.copy_from(&d_eta);
 
     sync_cube();
 
@@ -767,8 +764,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // --- grad_ttt_lr_eta from η terms in z1_bar ---
     // grad_ttt_lr_eta += sum_cols(d_eta * token_eta)
-    // d_eta[i,j] contributes to grad_ttt_lr_eta[j] with weight token_eta[i]
-    // cs_cs_b still holds d_eta (unmodified)
+    let mut cs_cs_b = d_eta;
     let mut token_eta_rv = P::rvb_cs_v();
     cube::broadcast::load_rv_direct(&saved.token_eta, &mut token_eta_rv, 0);
 
@@ -784,7 +780,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // --- End stage 3 ---
 
-    // Rename: xq_smem now holds grad_xq_mini output
     let grad_xq_mini = xq_smem;
     // Rename back: xk_smem is no longer needed, restore scratch1 identity
     let scratch1 = xk_smem;
@@ -829,10 +824,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
         buf,
         epsilon,
     );
-    // tile_grad_z1_bar now has x_hat_fused
+    let x_hat_fused = tile_grad_z1_bar;
 
     // Compute grad_output = ln_weight * x_hat + ln_bias - target
-    scratch2.copy_from(&tile_grad_z1_bar);
+    scratch2.copy_from(&x_hat_fused);
     scratch2.mul_row(&ln_weight_rv);
     scratch2.add_row(&ln_bias_rv);
     scratch2.sub(scratch1); // scratch2 = grad_output (scratch1 had target)
@@ -851,7 +846,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // Compute sum_gxh_xh = sum_rows(grad_x_hat * x_hat) using tile_b as temp
     tile_b.copy_from(scratch2);
-    tile_b.mul(&tile_grad_z1_bar);
+    tile_b.mul(&x_hat_fused);
 
     sync_cube();
 
@@ -866,16 +861,13 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // =========================================================================
     // Stage 2: LN+L2 second derivative (inlined from backward_stage2_ln_l2)
     // =========================================================================
-    // tile_e = grad_grad_l (read-only)
-    // tile_grad_z1_bar = x_hat_fused (read-only)
     // grad_out_then_Z1: grad_output on entry, grad_Z1 on exit
     // grad_xhat_then_target: grad_x_hat on entry, grad_target on exit
     // grad_l_smem: grad_l on entry, scratch after phase 0
-    // tile_b = scratch, tile_grad_xk_combined = scratch
 
     // === Phase 0: Precompute grad_l-dependent term (frees grad_l tile for scratch) ===
     // term7_partial = sum_rows(grad_grad_l * grad_l / std)
-    tile_b.copy_from(&tile_e);
+    tile_b.copy_from(&grad_grad_l);
     tile_b.mul(&grad_l_smem);
     tile_b.div_col(&std_fused);
 
@@ -884,10 +876,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut term7_partial_acc = P::rvb_cs_a();
     cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::F>(tile_b, &mut term7_partial_acc, buf);
     let term7_partial = term7_partial_acc.cast::<P::EVal>();
-    // grad_l tile is now consumed; grad_l_smem becomes general scratch
+    // grad_l consumed; grad_l_smem is scratch from here
 
     // === Phase 1: Compute sum1, sum2 ===
-    tile_b.copy_from(&tile_e);
+    tile_b.copy_from(&grad_grad_l);
     tile_b.neg();
     tile_b.div_col(&std_fused);
 
@@ -897,7 +889,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::F>(tile_b, &mut sum1_acc, buf);
     let sum1 = sum1_acc.cast::<P::EVal>();
 
-    tile_b.mul(&tile_grad_z1_bar);
+    tile_b.mul(&x_hat_fused);
 
     sync_cube();
 
@@ -907,39 +899,40 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     // === Phase 2: Compute grad_L_gxh in tile_grad_xk_combined (preserved for phase 7) ===
     // grad_L_gxh = grad_grad_l/std + (1/F)*sum1 + (1/F)*x_hat*sum2
-    tile_grad_xk_combined.copy_from(&tile_e);
-    tile_grad_xk_combined.div_col(&std_fused);
+    let mut grad_L_gxh = tile_grad_xk_combined;
+    grad_L_gxh.copy_from(&grad_grad_l);
+    grad_L_gxh.div_col(&std_fused);
 
     let mut s1 = sum1;
     s1.mul_scalar(f_inv);
-    tile_grad_xk_combined.add_col(&s1);
+    grad_L_gxh.add_col(&s1);
 
     sync_cube();
 
-    grad_l_smem.copy_from(&tile_grad_z1_bar);
+    grad_l_smem.copy_from(&x_hat_fused);
     grad_l_smem.mul_col(&sum2);
     grad_l_smem.mul_scalar(f_inv);
 
     sync_cube();
 
-    tile_grad_xk_combined.add(&grad_l_smem); // tile_grad_xk_combined = grad_L_gxh
+    grad_L_gxh.add(&grad_l_smem);
 
     sync_cube();
 
     // === Phase 3: Consume grad_output, compute grad_ln_weight + grad_ln_bias ===
     // grad_L_y = ln_weight * grad_L_gxh → store in grad_l_smem
-    grad_l_smem.copy_from(&tile_grad_xk_combined);
-    grad_l_smem.mul_row(&ln_weight_rv); // grad_l_smem = grad_L_y
+    grad_l_smem.copy_from(&grad_L_gxh);
+    grad_l_smem.mul_row(&ln_weight_rv);
 
     sync_cube();
 
     // grad_ln_weight = reduce_cols(grad_output * grad_L_gxh + grad_L_y * x_hat)
     // Part 1: grad_out_then_Z1 *= grad_L_gxh (CONSUMES grad_output)
-    grad_out_then_Z1.mul(&tile_grad_xk_combined);
+    grad_out_then_Z1.mul(&grad_L_gxh);
 
     // Part 2: tile_b = grad_L_y * x_hat
     tile_b.copy_from(&grad_l_smem);
-    tile_b.mul(&tile_grad_z1_bar);
+    tile_b.mul(&x_hat_fused);
 
     sync_cube();
 
@@ -969,7 +962,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     grad_out_then_Z1.copy_from(&grad_l_smem);
     grad_out_then_Z1.mul_row(&ln_weight_rv);
 
-    // Term 2: tile_b = (1/F)*grad_x_hat*sum2 (grad_xhat_then_target still holds grad_x_hat data)
+    // Term 2: tile_b = (1/F)*grad_x_hat*sum2
     tile_b.copy_from(grad_xhat_then_target);
     tile_b.mul_col(&sum2);
     tile_b.mul_scalar(f_inv);
@@ -981,7 +974,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Term 3: tile_b = (1/F)*sum_gxh_xh*(-grad_grad_l/std)
-    tile_b.copy_from(&tile_e);
+    tile_b.copy_from(&grad_grad_l);
     tile_b.neg();
     tile_b.div_col(&std_fused);
     tile_b.mul_col(&sum_gxh_xh);
@@ -996,7 +989,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // === Phase 5: Compute grad_L_std ===
     // sum_grad_L_std = sum_rows(-grad_L_x_hat*x_hat/std) - term7_partial
     tile_b.copy_from(grad_out_then_Z1);
-    tile_b.mul(&tile_grad_z1_bar);
+    tile_b.mul(&x_hat_fused);
     tile_b.div_col(&std_fused);
     tile_b.neg();
 
@@ -1008,7 +1001,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sum_grad_L_std.sub(&term7_partial);
 
     // === Phase 6: Compute final grad_Z1 in grad_out_then_Z1 ===
-    // grad_out_then_Z1 currently holds grad_L_x_hat
     let mut sum_grad_L_x_hat_acc = P::rvb_cs_a();
     cube::sum_rows::<P::EVal, P::EAcc, P::CS, P::F>(
         grad_out_then_Z1,
@@ -1026,7 +1018,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    tile_b.copy_from(&tile_grad_z1_bar);
+    tile_b.copy_from(&x_hat_fused);
     let mut term3 = sum_grad_L_std;
     term3.mul_scalar(f_inv);
     tile_b.mul_col(&term3);
@@ -1038,8 +1030,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     // === Phase 7: Compute grad_target in grad_xhat_then_target ===
-    // grad_target = -ln_weight * grad_L_gxh (tile_grad_xk_combined still holds grad_L_gxh)
-    grad_xhat_then_target.copy_from(&tile_grad_xk_combined);
+    // grad_target = -ln_weight * grad_L_gxh
+    grad_xhat_then_target.copy_from(&grad_L_gxh);
     grad_xhat_then_target.mul_row(&ln_weight_rv);
     grad_xhat_then_target.neg(); // grad_xhat_then_target = grad_target
 
@@ -1055,10 +1047,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Stage 1: Final assembly (inlined from backward_stage1_assemble)
     // =========================================================================
 
-    // Reload upstream gradient → tile_e (was grad_grad_l, consumed by stage 2)
+    let mut tile_e = grad_grad_l;
     cube::load_st_direct(grad_L_XQW, &mut tile_e, stage_offset, 0, 0);
 
-    // Reload grad_xk_combined from global (stored before stage 2 recomputation)
+    let mut tile_grad_xk_combined = grad_L_gxh;
     cube::load_st_direct(&grads.grad_xk, &mut tile_grad_xk_combined, stage_offset, 0, 0);
 
     sync_cube();
@@ -1324,7 +1316,7 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
 
     sync_cube();
 
-    // scratch_c now contains grad_l
+    let grad_l = scratch_c;
 
     // Weight update: W -= last_eta * XK^T @ grad_l
     let last_token_idx = P::CS::VALUE - 1;
@@ -1350,7 +1342,7 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     // weight_update = scaled_xk^T @ grad_l
     let mut weight_update_reg = P::rt_ff();
     weight_update_reg.zero();
-    cube::mma_AB(&mut weight_update_reg, k_smem, scratch_c);
+    cube::mma_AB(&mut weight_update_reg, k_smem, grad_l);
 
     sync_cube();
 
@@ -1363,7 +1355,7 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     sync_cube();
 
     // Bias update: b -= last_eta @ grad_l
-    scratch_d.copy_from(scratch_c);
+    scratch_d.copy_from(grad_l);
 
     sync_cube();
 
