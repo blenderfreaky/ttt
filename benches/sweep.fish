@@ -135,10 +135,10 @@ function run_bench
     # Run the appropriate benchmark command, capturing both stdout and stderr
     set -l tmpfile (mktemp)
     # All implementations use the project root flake
-    set -l project_root (status dirname)/..
+    set -l project_root (realpath (status dirname)/..)
     if test "$impl" = burn
         # Burn uses ttt-bench from persistent-ttt project
-        timeout 300 nix develop "$project_root" --command bash -c "cd crates && ./target/release/ttt-bench $ARGS" >$tmpfile 2>&1
+        timeout 300 nix develop "$project_root" --command bash -c "cd $project_root/crates && ./target/release/ttt-bench $ARGS" >$tmpfile 2>&1
     else
         # JAX, PyTorch, kernels use Python benchmarks via bench-* devShells
         timeout 300 nix develop "$project_root#bench-$impl" --command python benchmark.py $ARGS >$tmpfile 2>&1

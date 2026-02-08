@@ -479,13 +479,13 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     sync_cube();
 
     // Term B: (η·attn)^T @ grad_z1_bar = (η^T · attn^T) @ grad_z1_bar
-    cs_cs_a.mul(&cs_cs_b);
+    cs_cs_b.mul(&cs_cs_a);
 
     sync_cube();
 
     let mut term_b_reg = P::rt_cs_f();
     term_b_reg.zero();
-    cube::mma_AB(&mut term_b_reg, &cs_cs_a, &tile_grad_z1_bar);
+    cube::mma_AB(&mut term_b_reg, &cs_cs_b, &tile_grad_z1_bar);
 
     sync_cube();
 
@@ -541,9 +541,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 
     sync_cube();
 
-    // Rebuild η^T into cs_cs_a
-    build_eta_matrix::<P>(&saved.token_eta, &saved.ttt_lr_eta, &mut cs_cs_a, ttt_lr_eta_idx, true);
-
+    // cs_cs_a still has η^T (preserved by swapping mul operands in Term B)
     cs_cs_b.mul(&cs_cs_a);
     cs_cs_b.neg();
     cs_cs_b.triu();
@@ -696,13 +694,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     build_attn_matrix::<P>(&q_smem, k_smem, &mut cs_cs_a, false);
 
     // d_eta_base = -grad_z1_bar @ grad_l^T (lower tri)
-    let mut d_eta_base_reg = P::rt_cs_cs();
-    d_eta_base_reg.zero();
-    cube::mma_ABt(&mut d_eta_base_reg, &tile_grad_z1_bar, &grad_l_smem);
-
-    sync_cube();
-
-    cube::store_rt_to_st(&d_eta_base_reg, &mut cs_cs_b);
+    // Reuse d_attn_reg — same MMA as line 664
+    cube::store_rt_to_st(&d_attn_reg, &mut cs_cs_b);
 
     sync_cube();
 
@@ -793,14 +786,13 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     // Will be reloaded before stage 1.
     cube::store_st_direct(&tile_grad_xk_combined, &mut grads.grad_xk, stage_offset, 0, 0);
 
-    // Load xk direct → tile_b, xv → scratch1
-    cube::load_st_direct(&saved.xk, tile_b, stage_offset, 0, 0);
-    cube::load_st_direct(&recomp.xv, scratch1, stage_offset, 0, 0);
+    // scratch1 still has XK from stage 3 — only load XV
+    cube::load_st_direct(&recomp.xv, tile_b, stage_offset, 0, 0);
 
     sync_cube();
 
-    // target = xv - xk
-    scratch1.sub(tile_b);
+    // target = xv - xk (in tile_b)
+    tile_b.sub(scratch1);
 
     sync_cube();
 
@@ -830,7 +822,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     scratch2.copy_from(&x_hat_fused);
     scratch2.mul_row(&ln_weight_rv);
     scratch2.add_row(&ln_bias_rv);
-    scratch2.sub(scratch1); // scratch2 = grad_output (scratch1 had target)
+    scratch2.sub(tile_b); // scratch2 = grad_output (tile_b had target)
 
     sync_cube();
 
