@@ -2,7 +2,16 @@
 
 # Benchmark sweep script for TTT implementations (JAX, PyTorch, Burn, kernels)
 
-set -q BENCH_DIR; or set BENCH_DIR (status dirname)/results
+set -q _sweep_dir; or set -g _sweep_dir (status dirname 2>/dev/null)
+if not test -d "$_sweep_dir"
+    # status dirname fails inside fish -c; fall back to finding sweep.fish relative to cwd
+    if test -f (pwd)/sweep.fish
+        set -g _sweep_dir (pwd)
+    else if test -f (pwd)/benches/sweep.fish
+        set -g _sweep_dir (pwd)/benches
+    end
+end
+set -q BENCH_DIR; or set BENCH_DIR $_sweep_dir/results
 
 if test "$argv[1]" = "--help"; or test "$argv[1]" = "-h"
     echo "Usage: ./sweep.fish [OPTION]"
@@ -135,7 +144,7 @@ function run_bench
     # Run the appropriate benchmark command, capturing both stdout and stderr
     set -l tmpfile (mktemp)
     # All implementations use the project root flake
-    set -l project_root (realpath (status dirname)/..)
+    set -l project_root (realpath $_sweep_dir/..)
     if test "$impl" = burn
         # Burn uses ttt-bench from persistent-ttt project
         timeout 300 nix develop "$project_root" --command bash -c "cd $project_root/crates && ./target/release/ttt-bench $ARGS" >$tmpfile 2>&1
