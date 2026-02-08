@@ -47,6 +47,7 @@
         };
         craneLib = crane.mkLib pkgs;
         own-pkgs = pkgs.callPackage ./nix {inherit craneLib pkgs-rocm;};
+        benchmarks = import ./nix/benchmarks.nix {inherit pkgs; patchesDir = ./benches/patches;};
         embeddingPython = pkgs.python3.withPackages (ps: with ps; [tokenizers datasets]);
       in {
         legacyPackages = own-pkgs // {inherit (pkgs.rocmPackages) rocprofiler;};
@@ -58,42 +59,46 @@
           ''}";
         };
 
-        devShells.default = pkgs.mkShell {
-          shellHook = ''
-            if command -v ttt &> /dev/null; then
-              case "$SHELL" in
-                */zsh)  eval "$(ttt completions zsh)" ;;
-                */bash) eval "$(ttt completions bash)" ;;
-                */fish) ttt completions fish | source ;;
-              esac
-            fi
-          '';
-          buildInputs = with pkgs; [
-            stdenv.cc.cc.lib
-            sqlite
-            lldb
-            gdb
-            adaptivecpp
-            cmake
-            ninja
-            just
-            just-formatter
-            cargo-nextest
-            (python3.withPackages (ps: with ps; [numpy torch transformers safetensors]))
-            heaptrack
-            valgrind
-            perf
-            hotspot
-          ] ++ (with rocmPackages; [hip-common clr rocblas rocwmma rocm-smi rocprofiler]);
+        devShells =
+          {
+            default = pkgs.mkShell {
+              shellHook = ''
+                if command -v ttt &> /dev/null; then
+                  case "$SHELL" in
+                    */zsh)  eval "$(ttt completions zsh)" ;;
+                    */bash) eval "$(ttt completions bash)" ;;
+                    */fish) ttt completions fish | source ;;
+                  esac
+                fi
+              '';
+              buildInputs = with pkgs; [
+                stdenv.cc.cc.lib
+                sqlite
+                lldb
+                gdb
+                adaptivecpp
+                cmake
+                ninja
+                just
+                just-formatter
+                cargo-nextest
+                (python3.withPackages (ps: with ps; [numpy torch transformers safetensors]))
+                heaptrack
+                valgrind
+                perf
+                hotspot
+              ] ++ (with rocmPackages; [hip-common clr rocblas rocwmma rocm-smi rocprofiler]);
 
-          LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.rocmPackages.clr}/lib";
-          ROCM_PATH = "${pkgs.rocmPackages.clr}/bin";
-          ROCM_DEVICE_LIB_PATH = "${pkgs.rocmPackages.rocm-device-libs}/amdgcn/bitcode";
-        };
+              LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.rocmPackages.clr}/lib";
+              ROCM_PATH = "${pkgs.rocmPackages.clr}/bin";
+              ROCM_DEVICE_LIB_PATH = "${pkgs.rocmPackages.rocm-device-libs}/amdgcn/bitcode";
+            };
 
-        devShells.embedding = pkgs.mkShell {
-          packages = [embeddingPython];
-        };
+            embedding = pkgs.mkShell {
+              packages = [embeddingPython];
+            };
+          }
+          // benchmarks.devShells;
       }
     );
 }

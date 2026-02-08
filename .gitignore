@@ -8,3 +8,4 @@ sycl-test
 .worktree
 
 burn/profile_*/
+benches/results/
