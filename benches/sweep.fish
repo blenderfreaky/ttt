@@ -202,87 +202,146 @@ function sweep_pass
 end
 
 function run_sweep
-# Progressive refinement: coarse to fine
-# Each pass covers the full parameter space at increasing detail
+# Sweeps for all thesis figures.
+# Each sweep_pass corresponds to one or more figures in the thesis.
 
-# Pass 1: Coarse - baseline configs, all sizes/impls (quick overview)
-sweep_pass 1 \
+# --- Ch. 7: Baseline implementation ---
+
+# @fig-naive-bench: naive burn vs references, linear, all model sizes
+sweep_pass "fig-naive-bench" \
     "jax,pytorch,burn,kernels" \
     "125m,350m,760m,1b" \
-    "linear,mlp" \
+    "linear" \
     "2048" \
     "16" \
     "1" \
-    "float32,bfloat16"
+    "float32"
 
-# Pass 1b: Burn fused variants (these are the fast ones)
-sweep_pass 1b \
+# @fig-naive-bench-mlp: naive burn vs references, MLP, all model sizes
+sweep_pass "fig-naive-bench-mlp" \
+    "jax,pytorch,burn,kernels" \
+    "125m,350m,760m,1b" \
+    "mlp" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32"
+
+# --- Ch. 8: Optimization ---
+
+# @fig-fusion: kernel fusion speedup (naive vs fused)
+sweep_pass "fig-fusion" \
     "burn" \
-    "125m,350m,760m,1b" \
-    "fused,fused-tile,fused-tile-multi" \
-    "2048" \
-    "16" \
-    "1" \
-    "float32,bfloat16"
-
-# Pass 2: Add batch sizes and seq_lens
-sweep_pass 2 \
-    "jax,pytorch,burn,kernels" \
-    "125m,350m,760m,1b" \
-    "linear,mlp" \
-    "512,4096,8192" \
-    "16" \
-    "1" \
-    "float32,bfloat16"
-
-sweep_pass 2b \
-    "jax,pytorch,burn,kernels" \
-    "125m,350m,1b" \
-    "linear,mlp" \
-    "2048" \
-    "16" \
-    "8" \
-    "float32,bfloat16"
-
-# Pass 2c: Burn fused at different seq_lens
-sweep_pass 2c \
-    "burn" \
-    "125m,350m" \
-    "fused,fused-tile-multi" \
-    "512,4096,8192" \
-    "16" \
-    "1" \
-    "float32,bfloat16"
-
-# Pass 3: More mini-batch sizes
-sweep_pass 3 \
-    "jax,pytorch,burn,kernels" \
-    "125m,350m,760m,1b" \
-    "linear,mlp" \
-    "2048,4096" \
-    "8,64,128" \
-    "1" \
-    "float32,bfloat16"
-
-# Pass 4: Fill in remaining useful combos
-sweep_pass 4 \
-    "jax,pytorch,burn" \
-    "125m,350m" \
-    "linear,mlp" \
-    "512,2048,4096" \
-    "8,16,64,128" \
-    "8" \
-    "float32,bfloat16"
-
-# Pass 5: Fine detail (if time permits)
-sweep_pass 5 \
-    "jax,pytorch,burn" \
     "125m" \
-    "linear,mlp" \
-    "512,2048,4096,8192" \
-    "8,16,64,128" \
-    "1,8,32" \
+    "linear,fused" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32"
+
+# @fig-mixed-precision: bf16 vs f32 across model sizes
+sweep_pass "fig-mixed-precision" \
+    "burn" \
+    "125m,350m,760m,1b" \
+    "fused-tile-multi" \
+    "2048" \
+    "16" \
+    "1" \
     "float32,bfloat16"
+
+# @fig-bf16-saturation: bf16 vs f32 batch scaling (occupancy benefit)
+sweep_pass "fig-bf16-saturation" \
+    "burn" \
+    "125m" \
+    "fused-tile-multi" \
+    "2048" \
+    "16" \
+    "1,2,4,8,16" \
+    "float32,bfloat16"
+
+# @fig-fused-tiled: fused vs tiled comparison
+sweep_pass "fig-fused-tiled" \
+    "burn" \
+    "125m" \
+    "fused,fused-tile" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32,bfloat16"
+
+# @fig-saturation: batch scaling for fused vs tiled
+sweep_pass "fig-saturation-1" \
+    "burn" \
+    "125m" \
+    "fused,fused-tile" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32"
+sweep_pass "fig-saturation-2" \
+    "burn" \
+    "125m" \
+    "fused-linear,fused-tile-linear" \
+    "2048" \
+    "16" \
+    "2,4,8,16" \
+    "float32"
+
+# @fig-staging: staged vs unstaged across sequence lengths
+sweep_pass "fig-staging" \
+    "burn" \
+    "125m" \
+    "fused-tile,fused-tile-multi" \
+    "512,2048,4096,8192" \
+    "16" \
+    "1" \
+    "float32"
+
+# @fig-final-benchmarks: final forward comparison, all impls
+sweep_pass "fig-final-fwd-ref" \
+    "jax,pytorch,kernels" \
+    "125m,350m,760m,1b" \
+    "linear" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32"
+sweep_pass "fig-final-fwd-burn" \
+    "burn" \
+    "125m,350m,760m,1b" \
+    "fused-tile-multi" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32"
+
+# @fig-final-benchmarks-bwd: final backward comparison
+sweep_pass "fig-final-bwd-ref" \
+    "jax,pytorch" \
+    "125m,350m,760m,1b" \
+    "linear" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32"
+sweep_pass "fig-final-bwd-burn" \
+    "burn" \
+    "125m,350m,760m,1b" \
+    "fused-tile-multi" \
+    "2048" \
+    "16" \
+    "1" \
+    "float32"
+
+# @fig-mini-batch-scaling: throughput vs mini-batch size
+sweep_pass "fig-mini-batch-scaling" \
+    "jax,pytorch,burn,kernels" \
+    "125m" \
+    "linear,fused-tile-multi" \
+    "2048" \
+    "8,16,32,64" \
+    "1" \
+    "float32"
 
 echo "=== SWEEP COMPLETE ==="
 end
