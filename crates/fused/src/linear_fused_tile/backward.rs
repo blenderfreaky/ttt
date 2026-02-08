@@ -1090,7 +1090,7 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
 // =============================================================================
 
 /// Fused TTT-Linear backward pass kernel (single mini-batch).
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn fused_ttt_backward_kernel<P: ParamsTrait>(
     saved: &SavedTensors<P::EVal>,
     recomp: &RecomputationInputs<P::EVal>,
@@ -1324,7 +1324,7 @@ use super::layer_norm::layer_norm_l2_grad;
 /// For multi-stage backward, we process stages in reverse order.
 /// Per-stage weight/bias checkpoints are loaded from tensors saved during forward,
 /// eliminating the O(N²) forward re-simulation.
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn fused_ttt_backward_kernel_multi<P: ParamsTrait>(
     saved: &SavedTensors<P::EVal>,
     recomp: &RecomputationInputs<P::EVal>,

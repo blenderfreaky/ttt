@@ -44,6 +44,17 @@ use burn::prelude::*;
 use ttt_core::TTTInnerModel;
 use ttt_kernels::{FusedKernelBackend, GeluBwdKernel, GeluTanhKernel};
 
+/// Launch a CubeCL kernel with bounds checking in debug builds,
+/// unchecked in release builds for performance. Must be called inside `unsafe`.
+macro_rules! cube_launch {
+    ($kernel:ident :: < $($ty:ty),+ > ( $($args:expr),* $(,)? )) => {{
+        #[cfg(debug_assertions)]
+        { $kernel::launch::< $($ty),+ >( $($args),* ).unwrap() }
+        #[cfg(not(debug_assertions))]
+        { $kernel::launch_unchecked::< $($ty),+ >( $($args),* ).unwrap() }
+    }};
+}
+
 pub mod linear_fused;
 pub mod linear_fused_tile;
 pub mod ttt;

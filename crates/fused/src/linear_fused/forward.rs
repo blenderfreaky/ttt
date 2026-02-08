@@ -41,7 +41,7 @@ use crate::FusedTttConfig;
 ///
 /// Output:
 /// - output: [batch_size, num_heads, seq_len, head_dim]
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn fused_ttt_forward_kernel<F: Float>(
     // Inputs
     xq: &Tensor<F>,
@@ -362,7 +362,7 @@ pub fn launch_fused_ttt_forward<R: Runtime, F: Float + CubeElement>(
     let cube_dim = CubeDim::new_2d(head_dim, seq_len);
 
     unsafe {
-        fused_ttt_forward_kernel::launch::<F, R>(
+        cube_launch!(fused_ttt_forward_kernel::<F, R>(
             client,
             CubeCount::Static(batch_size, num_heads, 1),
             cube_dim,
@@ -382,7 +382,6 @@ pub fn launch_fused_ttt_forward<R: Runtime, F: Float + CubeElement>(
             TensorArg::from_raw_parts::<F>(bias.handle, bias.strides, bias.shape, 1),
             TensorArg::from_raw_parts::<F>(output.handle, output.strides, output.shape, 1),
             config,
-        )
-        .unwrap();
+        ));
     }
 }

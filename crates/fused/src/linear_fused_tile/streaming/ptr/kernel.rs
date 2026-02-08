@@ -200,7 +200,7 @@ fn copy_tensor_to_array<F: Float>(
 /// Essentially we're just hoping that hipcc will be smart enough
 /// to optimize away the Array -> Tensor copies,
 /// as we can't easily trick CubeCL any other way.
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 #[allow(unused_assignments, reason = "False positive on `status`")]
 pub fn fused_ttt_streaming_ptr_kernel<P: ParamsTrait>(
     // Pointer table: addresses of input tensors [PTR_TABLE_SIZE]

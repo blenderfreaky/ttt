@@ -41,7 +41,7 @@ pub struct GradOutputs<F: Float> {
 ///
 /// Each CUBE handles one (batch, head) pair.
 /// Thread layout: (head_dim, seq_len)
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn fused_ttt_backward_kernel<F: Float>(
     inputs: &ForwardInputs<F>,
     grad_output: &Tensor<F>,
@@ -596,7 +596,7 @@ pub fn launch_fused_ttt_backward<R: Runtime, F: Float + CubeElement>(
     let cube_dim = CubeDim::new_2d(head_dim, seq_len);
 
     unsafe {
-        fused_ttt_backward_kernel::launch::<F, R>(
+        cube_launch!(fused_ttt_backward_kernel::<F, R>(
             client,
             CubeCount::Static(batch_size, num_heads, 1),
             cube_dim,
@@ -668,7 +668,6 @@ pub fn launch_fused_ttt_backward<R: Runtime, F: Float + CubeElement>(
                 ),
             ),
             config,
-        )
-        .unwrap();
+        ));
     }
 }

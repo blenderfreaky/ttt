@@ -144,9 +144,14 @@ macro_rules! tile_dispatch_arm {
     ($kernel:ident, $client:expr, $cube_count:expr, $t:literal, $CS:ty, $F:ty, $CSR:ty, $FR:ty, [$($rest:tt)*]) => {{
         // EVal from tensor type (inferred), EAcc = f32 for accumulation precision
         type P<EVal> = Params<EVal, f32, $CS, $F, $CSR, $FR>;
-        $kernel::launch::<P<_>, _>(
+        #[cfg(debug_assertions)]
+        { $kernel::launch::<P<_>, _>(
             $client, $cube_count, CubeDim::new($client, $t), $($rest)*
-        ).unwrap()
+        ).unwrap() }
+        #[cfg(not(debug_assertions))]
+        { unsafe { $kernel::launch_unchecked::<P<_>, _>(
+            $client, $cube_count, CubeDim::new($client, $t), $($rest)*
+        ).unwrap() } }
     }};
 }
 

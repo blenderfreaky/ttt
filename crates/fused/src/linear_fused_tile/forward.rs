@@ -244,7 +244,7 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 /// 8. output = xq + layer_norm(z1_bar)
 /// 9. weight_out = weight - (last_eta_col * xk).T @ grad
 /// 10. bias_out = bias - sum_rows(last_eta_col * grad)
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,
@@ -308,7 +308,7 @@ pub fn fused_ttt_forward_kernel<P: ParamsTrait>(
 ///
 /// Input tensors xq, xk, xv should have shape [batch, heads, num_stages * mini_batch_len, head_dim]
 /// Output tensor should have the same shape.
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn fused_ttt_forward_kernel_multi<P: ParamsTrait>(
     inputs: &Inputs<P::EVal>,
     outputs: &mut Outputs<P::EVal>,

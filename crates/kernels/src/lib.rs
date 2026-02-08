@@ -27,6 +27,17 @@
     non_snake_case,
 )]
 
+/// Launch a CubeCL kernel with bounds checking in debug builds,
+/// unchecked in release builds for performance. Must be called inside `unsafe`.
+macro_rules! cube_launch {
+    ($kernel:ident :: < $($ty:ty),+ > ( $($args:expr),* $(,)? )) => {{
+        #[cfg(debug_assertions)]
+        { $kernel::launch::< $($ty),+ >( $($args),* ).unwrap() }
+        #[cfg(not(debug_assertions))]
+        { $kernel::launch_unchecked::< $($ty),+ >( $($args),* ).unwrap() }
+    }};
+}
+
 pub mod bundle;
 pub mod gelu;
 mod gelu_tanh;

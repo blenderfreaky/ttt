@@ -95,7 +95,7 @@ pub struct D2dStreamingBuffers<F: Float> {
 ///
 /// Weight and bias are kept in shared memory between stages.
 /// Each cube handles one head and iterates through all batches internally.
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn fused_ttt_d2d_streaming_kernel<P: ParamsTrait>(
     // Input/output streaming buffers
     inputs: &Inputs<P::EVal>,

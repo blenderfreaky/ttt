@@ -7,7 +7,7 @@ use thundercube::{
     unary_ops::{gelu, gelu_bwd, gelu_bwd_bwd},
 };
 
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn gelu_tanh_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut Tensor<Line<F>>) {
     let idx = ABSOLUTE_POS;
 
@@ -18,7 +18,7 @@ pub fn gelu_tanh_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut Tensor<L
 
 /// Computes gelu_bwd(x) - the derivative of gelu at x.
 /// Used directly in TTT MLP forward pass for gradient computation.
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn gelu_bwd_forward_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut Tensor<Line<F>>) {
     let idx = ABSOLUTE_POS;
 
@@ -27,7 +27,7 @@ pub fn gelu_bwd_forward_kernel<F: Float>(input: &Tensor<Line<F>>, output: &mut T
     }
 }
 
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn gelu_tanh_backward_kernel<F: Float>(
     input: &Tensor<Line<F>>,
     grad_output: &Tensor<Line<F>>,
@@ -40,7 +40,7 @@ pub fn gelu_tanh_backward_kernel<F: Float>(
     }
 }
 
-#[cube(launch)]
+#[cube(launch, launch_unchecked)]
 pub fn gelu_tanh_backward_backward_kernel<F: Float>(
     input: &Tensor<Line<F>>,
     grad_output: &Tensor<Line<F>>,
@@ -63,14 +63,13 @@ pub fn launch_gelu_tanh<R: CubeRuntime, F: Float + CubeElement>(
     let cube_count = (num_elements as u32).div_ceil(cube_dim.num_elems());
 
     unsafe {
-        gelu_tanh_kernel::launch::<F, R>(
+        cube_launch!(gelu_tanh_kernel::<F, R>(
             client,
             CubeCount::Static(cube_count, 1, 1),
             cube_dim,
             TensorArg::from_raw_parts::<F>(input.handle, input.strides, input.shape, LINE_SIZE),
             TensorArg::from_raw_parts::<F>(output.handle, output.strides, output.shape, LINE_SIZE),
-        )
-        .unwrap();
+        ));
     }
 }
 
@@ -84,14 +83,13 @@ pub fn launch_gelu_bwd_forward<R: CubeRuntime, F: Float + CubeElement>(
     let cube_count = (num_elements as u32).div_ceil(cube_dim.num_elems());
 
     unsafe {
-        gelu_bwd_forward_kernel::launch::<F, R>(
+        cube_launch!(gelu_bwd_forward_kernel::<F, R>(
             client,
             CubeCount::Static(cube_count, 1, 1),
             cube_dim,
             TensorArg::from_raw_parts::<F>(input.handle, input.strides, input.shape, LINE_SIZE),
             TensorArg::from_raw_parts::<F>(output.handle, output.strides, output.shape, LINE_SIZE),
-        )
-        .unwrap();
+        ));
     }
 }
 
@@ -107,7 +105,7 @@ pub fn launch_gelu_tanh_backward<R: CubeRuntime, F: Float + CubeElement>(
     let cube_count = (num_elements as u32).div_ceil(cube_dim.num_elems());
 
     unsafe {
-        gelu_tanh_backward_kernel::launch::<F, R>(
+        cube_launch!(gelu_tanh_backward_kernel::<F, R>(
             client,
             CubeCount::Static(cube_count, 1, 1),
             cube_dim,
@@ -124,8 +122,7 @@ pub fn launch_gelu_tanh_backward<R: CubeRuntime, F: Float + CubeElement>(
                 grad_input.shape,
                 LINE_SIZE,
             ),
-        )
-        .unwrap();
+        ));
     }
 }
 
@@ -141,7 +138,7 @@ pub fn launch_gelu_tanh_backward_backward<R: CubeRuntime, F: Float + CubeElement
     let cube_count = (num_elements as u32).div_ceil(cube_dim.num_elems());
 
     unsafe {
-        gelu_tanh_backward_backward_kernel::launch::<F, R>(
+        cube_launch!(gelu_tanh_backward_backward_kernel::<F, R>(
             client,
             CubeCount::Static(cube_count, 1, 1),
             cube_dim,
@@ -158,7 +155,6 @@ pub fn launch_gelu_tanh_backward_backward<R: CubeRuntime, F: Float + CubeElement
                 grad_input.shape,
                 LINE_SIZE,
             ),
-        )
-        .unwrap();
+        ));
     }
 }
