@@ -212,8 +212,7 @@ pub fn build_attn_matrix<P: ParamsTrait>(
         cube::mma_AtB(&mut attn_reg, q_smem, k_smem);
     }
 
-    sync_cube();
-
+    // MMA only reads q_smem/k_smem; store_rt_to_st writes to output (different tile)
     cube::store_rt_to_st(&attn_reg, output);
 
     sync_cube();
@@ -247,8 +246,7 @@ pub fn build_eta_attn_fused<P: ParamsTrait>(
     attn_reg.zero();
     cube::mma_AtB(&mut attn_reg, q_smem, k_smem);
 
-    sync_cube();
-
+    // MMA only reads q_smem/k_smem; subsequent ops are register-only until store to output
     // Compute eta values and multiply with attn in registers
     let tiles_per_row = P::CS::VALUE / P::CS_Reg::VALUE;
     let tile_row = (UNIT_POS as usize) / tiles_per_row;

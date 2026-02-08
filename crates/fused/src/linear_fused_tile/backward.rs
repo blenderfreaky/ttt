@@ -224,8 +224,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     z1_reg.zero();
     cube::mma_AtB(&mut z1_reg, k_smem, weight_stage);
 
-    sync_cube();
-
     // z1 += bias_stage
     z1_reg.add_row(&bias_reg);
 
@@ -233,16 +231,12 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut grad_l_smem = P::st_cs_f();
     cube::store_rt_to_st(&z1_reg, &mut grad_l_smem);
 
-    sync_cube();
-
     // Compute target = xv - xk (using tile_b for xk, tile_e as temp for xv)
     cube::load_st_direct(&recomp.xv, &mut tile_e, stage_offset, 0, 0);
 
     sync_cube();
 
     tile_e.sub(tile_b); // tile_e = target = xv - xk
-
-    sync_cube();
 
     // Normalize z1 -> x_hat (in place in grad_l_smem), get std
     let _std_fused_initial = normalize_to_x_hat::<P::EVal, P::EAcc, P::CS, P::F>(
@@ -299,8 +293,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     eta_grad_reg.zero();
     cube::mma_AB(&mut eta_grad_reg, &cs_cs_a, &grad_l_smem);
 
-    sync_cube();
-
     // Step 3: Build (eta * attn) fused
     build_eta_attn_fused::<P>(
         &q_smem,
@@ -316,14 +308,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     eta_attn_grad_reg.zero();
     cube::mma_AB(&mut eta_attn_grad_reg, &cs_cs_a, &grad_l_smem);
 
-    sync_cube();
-
     // z1_bar = xq @ W_stage
     let mut z1_bar_reg = P::rt_cs_f();
     z1_bar_reg.zero();
     cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_stage);
-
-    sync_cube();
 
     // z1_bar += bias_stage
     z1_bar_reg.add_row(&bias_reg);
@@ -415,8 +403,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     dW_reg.zero();
     cube::mma_AB(&mut dW_reg, &q_smem, &tile_grad_z1_bar);
 
-    sync_cube();
-
     cube::store_rt_to_st(&dW_reg, weight_stage);
 
     sync_cube();
@@ -472,8 +458,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     term_a_reg.zero();
     cube::mma_AB(&mut term_a_reg, &cs_cs_a, &tile_grad_z1_bar);
 
-    sync_cube();
-
     cube::store_rt_to_st(&term_a_reg, &mut tile_e);
 
     sync_cube();
@@ -486,8 +470,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut term_b_reg = P::rt_cs_f();
     term_b_reg.zero();
     cube::mma_AB(&mut term_b_reg, &cs_cs_b, &tile_grad_z1_bar);
-
-    sync_cube();
 
     cube::store_rt_to_st(&term_b_reg, tile_b);
 
@@ -535,8 +517,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     d_attn_t_reg.zero();
     cube::mma_ABt(&mut d_attn_t_reg, &grad_l_smem, &tile_grad_z1_bar);
 
-    sync_cube();
-
     cube::store_rt_to_st(&d_attn_t_reg, &mut cs_cs_b);
 
     sync_cube();
@@ -552,8 +532,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     d_xk_attn_reg.zero();
     cube::mma_AB(&mut d_xk_attn_reg, &cs_cs_b, xq_smem);
 
-    sync_cube();
-
     // Store first d_xk_attn contribution to combined output
     cube::store_rt_to_st(&d_xk_attn_reg, &mut tile_grad_xk_combined);
 
@@ -564,8 +542,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut grad_l_last_reg = P::rt_cs_f();
     grad_l_last_reg.zero();
     cube::mma_ABt(&mut grad_l_last_reg, &grad_l_smem, grad_W_last);
-
-    sync_cube();
 
     cube::store_rt_to_st(&grad_l_last_reg, tile_b);
 
@@ -646,8 +622,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     grad_xq_reg.zero();
     cube::mma_ABt(&mut grad_xq_reg, &tile_grad_z1_bar, weight_stage);
 
-    sync_cube();
-
     cube::store_rt_to_st(&grad_xq_reg, xq_smem);
 
     sync_cube();
@@ -662,8 +636,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut d_attn_reg = P::rt_cs_cs();
     d_attn_reg.zero();
     cube::mma_ABt(&mut d_attn_reg, &tile_grad_z1_bar, &grad_l_smem);
-
-    sync_cube();
 
     cube::store_rt_to_st(&d_attn_reg, &mut cs_cs_b);
 
@@ -800,8 +772,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut z1_recomp_reg = P::rt_cs_f();
     z1_recomp_reg.zero();
     cube::mma_AtB(&mut z1_recomp_reg, k_smem, weight_stage);
-
-    sync_cube();
 
     z1_recomp_reg.add_row(&bias_reg);
 
@@ -1065,8 +1035,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     grad_xk_reg.zero();
     cube::mma_ABt(&mut grad_xk_reg, grad_Z1, weight_stage);
 
-    sync_cube();
-
     cube::store_rt_to_st(&grad_xk_reg, &mut grad_l_smem);
 
     sync_cube();
@@ -1082,8 +1050,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut dW_s1_reg = P::rt_ff();
     dW_s1_reg.zero();
     cube::mma_AB(&mut dW_s1_reg, k_smem, grad_Z1);
-
-    sync_cube();
 
     // Load current global accumulator into weight_stage
     cube::load_st_direct(&grads.grad_weight, weight_stage, grad_weight_base, 0, 0);
@@ -1274,8 +1240,6 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     z1_reg.zero();
     cube::mma_AtB(&mut z1_reg, k_smem, weight_smem);
 
-    sync_cube();
-
     let threads_n = P::F::VALUE / P::F_Reg::VALUE;
     let thread_n = (UNIT_POS as usize) % threads_n;
     let mut bias_reg = P::rv_f();
@@ -1287,8 +1251,6 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     z1_reg.add_row(&bias_reg);
 
     cube::store_rt_to_st(&z1_reg, scratch_c);
-
-    sync_cube();
 
     // target = xv - xk
     scratch_b.sub(scratch_a);
@@ -1305,8 +1267,6 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
         buf,
         epsilon,
     );
-
-    sync_cube();
 
     let grad_l = scratch_c;
 
@@ -1335,8 +1295,6 @@ fn forward_simulate_weight_update<P: ParamsTrait>(
     let mut weight_update_reg = P::rt_ff();
     weight_update_reg.zero();
     cube::mma_AB(&mut weight_update_reg, k_smem, grad_l);
-
-    sync_cube();
 
     // W -= weight_update
     let mut weight_reg = P::rt_ff();

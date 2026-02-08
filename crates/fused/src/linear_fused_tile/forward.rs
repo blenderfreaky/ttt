@@ -78,8 +78,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     z1_reg.zero();
     cube::mma_AtB(&mut z1_reg, &k_smem, weight_smem);
 
-    sync_cube();
-
     // Add bias (need to broadcast from full bias_rv to the thread's portion, casting EVal -> EAcc)
     let threads_n = P::F::VALUE / P::F_Reg::VALUE;
     let thread_n = (UNIT_POS as usize) % threads_n;
@@ -92,8 +90,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     z1_reg.add_row(&bias_reg);
 
     cube::store_rt_to_st(&z1_reg, &mut z1_smem);
-
-    sync_cube();
 
     // Step 2: reconstruction_target = xv - xk
     v_direct_smem.sub(&k_direct_smem);
@@ -111,8 +107,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
         epsilon,
     );
 
-    sync_cube();
-
     // Step 4: eta_matrix = outer(token_eta, ttt_lr_eta).tril()
     build_eta_matrix::<P>(
         &inputs.token_eta,
@@ -126,8 +120,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut eta_grad_reg = P::rt_cs_f();
     eta_grad_reg.zero();
     cube::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
-
-    sync_cube();
 
     // Step 6: Build (eta * attn) fused directly into eta_matrix
     // eta_matrix[i,j] = token_eta[i] * ttt_lr_eta[j] * (q[i] · k[j])
@@ -145,14 +137,10 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     eta_attn_grad_reg.zero();
     cube::mma_AB(&mut eta_attn_grad_reg, &eta_matrix_smem, &z1_smem);
 
-    sync_cube();
-
     // z1_bar = xq @ W
     let mut z1_bar_reg = P::rt_cs_f();
     z1_bar_reg.zero();
     cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_smem);
-
-    sync_cube();
 
     // z1_bar -= (eta * attn) @ grad
     z1_bar_reg.sub(&eta_attn_grad_reg);
@@ -177,8 +165,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
         epsilon,
     );
 
-    sync_cube();
-
     // Load xq into k_direct_smem
     cube::load_st_direct(&inputs.xq, &mut k_direct_smem, stage_offset, 0, 0);
 
@@ -191,8 +177,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
 
     // Store output for this stage
     cube::store_st_direct(&temp_cs_f_smem, &mut outputs.output, stage_offset, 0, 0);
-
-    sync_cube();
 
     // === Steps 9-10: Weight and bias updates (in place) ===
     let last_token_eta_idx = P::CS::VALUE - 1;
@@ -221,15 +205,11 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     weight_update_reg.zero();
     cube::mma_AB(&mut weight_update_reg, &q_smem, &z1_smem);
 
-    sync_cube();
-
     // Update weight in place: weight -= weight_update
     let mut weight_reg = P::rt_ff();
     cube::load_rt_from_st(weight_smem, &mut weight_reg);
     weight_reg.sub(&weight_update_reg);
     cube::store_rt_to_st(&weight_reg, weight_smem);
-
-    sync_cube();
 
     // Bias update: bias -= last_eta^T @ grad
     temp_cs_f_smem.copy_from(&z1_smem);
