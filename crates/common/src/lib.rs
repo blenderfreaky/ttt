@@ -627,6 +627,12 @@ impl TrainParams {
             self.ttt.mlp_expansion_factor.to_string(),
             "--dtype".into(),
             self.ttt.dtype.to_string(),
+            "--adam-lr".into(),
+            self.ttt.adam_lr.to_string(),
+            "--adam-beta1".into(),
+            self.ttt.adam_beta1.to_string(),
+            "--adam-beta2".into(),
+            self.ttt.adam_beta2.to_string(),
             // Train config
             "--batch".into(),
             self.train.batch.to_string(),
