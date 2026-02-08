@@ -368,6 +368,18 @@ pub struct TTTConfig {
     #[serde(default = "default_checkpoint_interval")]
     #[cfg_attr(feature = "clap", arg(long, default_value = "1"))]
     pub checkpoint_interval: usize,
+    /// Inner Adam learning rate (only used by linear-adam layers).
+    #[serde(default = "default_adam_lr")]
+    #[cfg_attr(feature = "clap", arg(long, default_value = "0.001"))]
+    pub adam_lr: f32,
+    /// Inner Adam β₁ (only used by linear-adam layers).
+    #[serde(default = "default_adam_beta1")]
+    #[cfg_attr(feature = "clap", arg(long, default_value = "0.9"))]
+    pub adam_beta1: f32,
+    /// Inner Adam β₂ (only used by linear-adam layers).
+    #[serde(default = "default_adam_beta2")]
+    #[cfg_attr(feature = "clap", arg(long, default_value = "0.999"))]
+    pub adam_beta2: f32,
 }
 
 fn default_base_lr() -> f32 {
@@ -400,6 +412,15 @@ fn default_dtype() -> DType {
 fn default_checkpoint_interval() -> usize {
     1
 }
+fn default_adam_lr() -> f32 {
+    0.001
+}
+fn default_adam_beta1() -> f32 {
+    0.9
+}
+fn default_adam_beta2() -> f32 {
+    0.999
+}
 
 impl Default for TTTConfig {
     fn default() -> Self {
@@ -420,6 +441,9 @@ impl Default for TTTConfig {
             epsilon: default_epsilon(),
             dtype: default_dtype(),
             checkpoint_interval: default_checkpoint_interval(),
+            adam_lr: default_adam_lr(),
+            adam_beta1: default_adam_beta1(),
+            adam_beta2: default_adam_beta2(),
         }
     }
 }

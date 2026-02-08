@@ -182,7 +182,10 @@ impl<B: FusedTttBackend> TTT<B> {
                 let xk = permute_qk(xk);
                 let (offset, wrap) = match self.config.ttt.pos_encoding {
                     PosEncoding::RopeGlobal => (start_idx, None),
-                    _ => (start_idx % self.config.ttt.mini_batch_size, Some(self.config.ttt.mini_batch_size)),
+                    _ => (
+                        start_idx % self.config.ttt.mini_batch_size,
+                        Some(self.config.ttt.mini_batch_size),
+                    ),
                 };
                 let (xq, xk) = rot_enc.apply(xq, xk, offset, wrap);
                 (undo_permute_qk(xq), undo_permute_qk(xk))

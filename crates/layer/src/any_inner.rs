@@ -60,7 +60,12 @@ impl<B: FusedTttBackend> AnyInner<B> {
                 Self::Linear(TTTLinear::new(config, &cfg, device))
             }
             InnerModel::LinearAdam => {
-                let cfg = Arc::new(TTTLinearAdamConfig::default());
+                let cfg = Arc::new(
+                    TTTLinearAdamConfig::new()
+                        .with_lr(config.ttt.adam_lr)
+                        .with_beta1(config.ttt.adam_beta1)
+                        .with_beta2(config.ttt.adam_beta2),
+                );
                 Self::LinearAdam(TTTLinearAdam::new(config, &cfg, device))
             }
             InnerModel::Mlp => {
