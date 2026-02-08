@@ -201,147 +201,160 @@ function sweep_pass
     end
 end
 
-function run_sweep
-# Sweeps for all thesis figures.
-# Each sweep_pass corresponds to one or more figures in the thesis.
+function _sweep_all_figures --argument-names dtype
+# Runs all thesis figure sweeps for the given dtype.
+# Called twice by run_sweep: first f32 (primary), then bf16 (fallback for OOMs).
 
 # --- Ch. 7: Baseline implementation ---
 
 # @fig-naive-bench: naive burn vs references, linear, all model sizes
-sweep_pass "fig-naive-bench" \
+sweep_pass "fig-naive-bench-$dtype" \
     "jax,pytorch,burn,kernels" \
     "125m,350m,760m,1b" \
     "linear" \
     "2048" \
     "16" \
     "1" \
-    "float32"
+    "$dtype"
 
 # @fig-naive-bench-mlp: naive burn vs references, MLP, all model sizes
-sweep_pass "fig-naive-bench-mlp" \
+sweep_pass "fig-naive-bench-mlp-$dtype" \
     "jax,pytorch,burn,kernels" \
     "125m,350m,760m,1b" \
     "mlp" \
     "2048" \
     "16" \
     "1" \
-    "float32"
+    "$dtype"
 
 # --- Ch. 8: Optimization ---
 
 # @fig-fusion: kernel fusion speedup (naive vs fused)
-sweep_pass "fig-fusion" \
+sweep_pass "fig-fusion-$dtype" \
     "burn" \
     "125m" \
     "linear,fused" \
     "2048" \
     "16" \
     "1" \
-    "float32"
+    "$dtype"
 
 # @fig-mixed-precision: bf16 vs f32 across model sizes
-sweep_pass "fig-mixed-precision" \
+sweep_pass "fig-mixed-precision-$dtype" \
     "burn" \
     "125m,350m,760m,1b" \
     "fused-tile-multi" \
     "2048" \
     "16" \
     "1" \
-    "float32,bfloat16"
+    "$dtype"
 
 # @fig-bf16-saturation: bf16 vs f32 batch scaling (occupancy benefit)
-sweep_pass "fig-bf16-saturation" \
+sweep_pass "fig-bf16-saturation-$dtype" \
     "burn" \
     "125m" \
     "fused-tile-multi" \
     "2048" \
     "16" \
     "1,2,4,8,16" \
-    "float32,bfloat16"
+    "$dtype"
 
 # @fig-fused-tiled: fused vs tiled comparison
-sweep_pass "fig-fused-tiled" \
+sweep_pass "fig-fused-tiled-$dtype" \
     "burn" \
     "125m" \
     "fused,fused-tile" \
     "2048" \
     "16" \
     "1" \
-    "float32,bfloat16"
+    "$dtype"
 
 # @fig-saturation: batch scaling for fused vs tiled
-sweep_pass "fig-saturation-1" \
+sweep_pass "fig-saturation-1-$dtype" \
     "burn" \
     "125m" \
     "fused,fused-tile" \
     "2048" \
     "16" \
     "1" \
-    "float32"
-sweep_pass "fig-saturation-2" \
+    "$dtype"
+sweep_pass "fig-saturation-2-$dtype" \
     "burn" \
     "125m" \
     "fused-linear,fused-tile-linear" \
     "2048" \
     "16" \
     "2,4,8,16" \
-    "float32"
+    "$dtype"
 
 # @fig-staging: staged vs unstaged across sequence lengths
-sweep_pass "fig-staging" \
+sweep_pass "fig-staging-$dtype" \
     "burn" \
     "125m" \
     "fused-tile,fused-tile-multi" \
     "512,2048,4096,8192" \
     "16" \
     "1" \
-    "float32"
+    "$dtype"
 
 # @fig-final-benchmarks: final forward comparison, all impls
-sweep_pass "fig-final-fwd-ref" \
+sweep_pass "fig-final-fwd-ref-$dtype" \
     "jax,pytorch,kernels" \
     "125m,350m,760m,1b" \
     "linear" \
     "2048" \
     "16" \
     "1" \
-    "float32"
-sweep_pass "fig-final-fwd-burn" \
+    "$dtype"
+sweep_pass "fig-final-fwd-burn-$dtype" \
     "burn" \
     "125m,350m,760m,1b" \
     "fused-tile-multi" \
     "2048" \
     "16" \
     "1" \
-    "float32"
+    "$dtype"
 
 # @fig-final-benchmarks-bwd: final backward comparison
-sweep_pass "fig-final-bwd-ref" \
+sweep_pass "fig-final-bwd-ref-$dtype" \
     "jax,pytorch" \
     "125m,350m,760m,1b" \
     "linear" \
     "2048" \
     "16" \
     "1" \
-    "float32"
-sweep_pass "fig-final-bwd-burn" \
+    "$dtype"
+sweep_pass "fig-final-bwd-burn-$dtype" \
     "burn" \
     "125m,350m,760m,1b" \
     "fused-tile-multi" \
     "2048" \
     "16" \
     "1" \
-    "float32"
+    "$dtype"
 
 # @fig-mini-batch-scaling: throughput vs mini-batch size
-sweep_pass "fig-mini-batch-scaling" \
+sweep_pass "fig-mini-batch-scaling-$dtype" \
     "jax,pytorch,burn,kernels" \
     "125m" \
     "linear,fused-tile-multi" \
     "2048" \
     "8,16,32,64" \
     "1" \
-    "float32"
+    "$dtype"
+
+end
+
+function run_sweep
+# Sweeps for all thesis figures.
+# Phase 1: f32 (primary data for all figures)
+# Phase 2: bf16 (fallback for configs that OOM at f32)
+
+echo "=== PHASE 1: float32 ==="
+_sweep_all_figures float32
+
+echo "=== PHASE 2: bfloat16 (fallback) ==="
+_sweep_all_figures bfloat16
 
 echo "=== SWEEP COMPLETE ==="
 end
