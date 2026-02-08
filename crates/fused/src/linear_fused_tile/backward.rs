@@ -293,6 +293,11 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     eta_grad_reg.zero();
     cube::mma_AB(&mut eta_grad_reg, &cs_cs_a, &grad_l_smem);
 
+    // ILP: z1_bar = xq @ W_stage (independent of eta_attn, computed early to overlap with step 3)
+    let mut z1_bar_reg = P::rt_cs_f();
+    z1_bar_reg.zero();
+    cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_stage);
+
     // Step 3: Build (eta * attn) fused
     build_eta_attn_fused::<P>(
         &q_smem,
@@ -307,11 +312,6 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     let mut eta_attn_grad_reg = P::rt_cs_f();
     eta_attn_grad_reg.zero();
     cube::mma_AB(&mut eta_attn_grad_reg, &cs_cs_a, &grad_l_smem);
-
-    // z1_bar = xq @ W_stage
-    let mut z1_bar_reg = P::rt_cs_f();
-    z1_bar_reg.zero();
-    cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_stage);
 
     // z1_bar += bias_stage
     z1_bar_reg.add_row(&bias_reg);
@@ -458,11 +458,8 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     term_a_reg.zero();
     cube::mma_AB(&mut term_a_reg, &cs_cs_a, &tile_grad_z1_bar);
 
-    cube::store_rt_to_st(&term_a_reg, &mut tile_e);
-
-    sync_cube();
-
     // Term B: (η·attn)^T @ grad_z1_bar = (η^T · attn^T) @ grad_z1_bar
+    // MMA only reads cs_cs_a; mul reads+writes cs_cs_b — no conflict
     cs_cs_b.mul(&cs_cs_a);
 
     sync_cube();
@@ -471,13 +468,10 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     term_b_reg.zero();
     cube::mma_AB(&mut term_b_reg, &cs_cs_b, &tile_grad_z1_bar);
 
-    cube::store_rt_to_st(&term_b_reg, tile_b);
-
-    sync_cube();
-
-    // grad_grad_l = -(term_a + term_b) → tile_e
-    tile_e.add(tile_b);
-    tile_e.neg();
+    // Combine in registers: grad_grad_l = -(term_a + term_b)
+    term_a_reg.add(&term_b_reg);
+    term_a_reg.neg();
+    cube::store_rt_to_st(&term_a_reg, &mut tile_e);
 
     sync_cube();
 
@@ -491,13 +485,14 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     src12_reg.zero();
     cube::mma_AB(&mut src12_reg, tile_b, grad_W_last);
 
+    // Accumulate into tile_e via registers (avoids tile_b round-trip)
+    let mut tile_e_reg = P::rt_cs_f();
+    cube::load_rt_from_st(&tile_e, &mut tile_e_reg);
+    tile_e_reg.sub(&src12_reg);
+    cube::store_rt_to_st(&tile_e_reg, &mut tile_e);
+
+    // Sync ensures: (1) MMA tile_b reads complete, (2) tile_e store visible
     sync_cube();
-
-    cube::store_rt_to_st(&src12_reg, tile_b);
-
-    sync_cube();
-
-    tile_e.sub(tile_b);
 
     let grad_b_last_val = grad_L_b_last.cast::<P::EVal>();
     tile_b.set_row(&grad_b_last_val);
@@ -652,13 +647,11 @@ pub fn fused_ttt_backward_stage<P: ParamsTrait>(
     d_xq_attn_reg.zero();
     cube::mma_AB(&mut d_xq_attn_reg, &cs_cs_b, xk_smem);
 
-    sync_cube();
-
-    cube::store_rt_to_st(&d_xq_attn_reg, tile_b);
-
-    sync_cube();
-
-    xq_smem.add(tile_b);
+    // Accumulate into xq_smem via registers (avoids tile_b intermediate)
+    let mut xq_reg = P::rt_cs_f();
+    cube::load_rt_from_st(xq_smem, &mut xq_reg);
+    xq_reg.add(&d_xq_attn_reg);
+    cube::store_rt_to_st(&xq_reg, xq_smem);
 
     sync_cube();
 

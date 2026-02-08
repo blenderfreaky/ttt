@@ -121,6 +121,11 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     eta_grad_reg.zero();
     cube::mma_AB(&mut eta_grad_reg, &eta_matrix_smem, &z1_smem);
 
+    // ILP: z1_bar = xq @ W (independent of eta_attn, computed early to overlap with step 6)
+    let mut z1_bar_reg = P::rt_cs_f();
+    z1_bar_reg.zero();
+    cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_smem);
+
     // Step 6: Build (eta * attn) fused directly into eta_matrix
     // eta_matrix[i,j] = token_eta[i] * ttt_lr_eta[j] * (q[i] · k[j])
     build_eta_attn_fused::<P>(
@@ -136,11 +141,6 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     let mut eta_attn_grad_reg = P::rt_cs_f();
     eta_attn_grad_reg.zero();
     cube::mma_AB(&mut eta_attn_grad_reg, &eta_matrix_smem, &z1_smem);
-
-    // z1_bar = xq @ W
-    let mut z1_bar_reg = P::rt_cs_f();
-    z1_bar_reg.zero();
-    cube::mma_AtB(&mut z1_bar_reg, &q_smem, weight_smem);
 
     // z1_bar -= (eta * attn) @ grad
     z1_bar_reg.sub(&eta_attn_grad_reg);
@@ -190,20 +190,16 @@ pub fn fused_ttt_forward_stage<P: ParamsTrait>(
     cube::broadcast::load_rv_direct(&inputs.ttt_lr_eta, &mut last_eta_rv, ttt_lr_eta_idx);
     last_eta_rv.mul_scalar(last_token_eta_scalar);
 
-    // Reload k transposed for weight update
-    cube::load_st_transpose(&inputs.xk, &mut q_smem, stage_offset, 0, 0);
+    // k_smem already holds XK^T from initial load (line 70), never modified
+    // Scale in place for weight update (k_smem is dead after this)
+    k_smem.mul_row(&last_eta_rv);
 
     sync_cube();
 
-    // Scale columns of q_smem [F, CS] by last_eta: q_smem[f, k] *= last_eta[k]
-    q_smem.mul_row(&last_eta_rv);
-
-    sync_cube();
-
-    // Compute weight_update = scaled_xk^T @ grad = q_smem @ z1_smem = [F, CS] @ [CS, F] = [F, F]
+    // Compute weight_update = scaled_xk^T @ grad = k_smem @ z1_smem
     let mut weight_update_reg = P::rt_ff();
     weight_update_reg.zero();
-    cube::mma_AB(&mut weight_update_reg, &q_smem, &z1_smem);
+    cube::mma_AB(&mut weight_update_reg, &k_smem, &z1_smem);
 
     // Update weight in place: weight -= weight_update
     let mut weight_reg = P::rt_ff();
