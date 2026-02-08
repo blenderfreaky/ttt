@@ -27,14 +27,15 @@ if test "$argv[1]" = "--help"; or test "$argv[1]" = "-h"
     echo ""
     echo "With no options, runs the full progressive sweep."
     echo ""
-    echo "Implementations: jax, pytorch, burn, kernels"
+    echo "Implementations: jax, pytorch, burn, burn-local, kernels"
     echo "Model sizes:     125m, 350m, 760m, 1b (kernels: 1b only)"
     echo "TTT types:       linear, mlp (burn also: fused, fused-tile, fused-tile-multi)"
     echo "Dtypes:          float32, bfloat16 (burn only for bfloat16)"
     echo ""
     echo "Source this script to access run_bench for individual benchmarks:"
     echo "  source ./sweep.fish"
-    echo "  run_bench burn 125m linear 2048 16 1 fwd float32"
+    echo "  run_bench burn 125m linear 2048 16 1 fwd float32       # nix-built (reproducible)"
+    echo "  run_bench burn-local 125m linear 2048 16 1 fwd float32 # local ./target/release build"
     exit 0
 end
 
@@ -146,7 +147,11 @@ function run_bench
     # All implementations use the project root flake
     set -l project_root (realpath $_sweep_dir/..)
     if test "$impl" = burn
-        # Burn uses ttt-bench from persistent-ttt project
+        # Burn via nix build (reproducible)
+        nix build "$project_root#rocm7.ttt" --out-link "$project_root/.bench-result" 2>>$tmpfile
+        and timeout 300 nix develop "$project_root" --command "$project_root/.bench-result/bin/ttt-bench" $ARGS >$tmpfile 2>&1
+    else if test "$impl" = burn-local
+        # Burn via local cargo build (fast iteration)
         timeout 300 nix develop "$project_root" --command bash -c "cd $project_root/crates && ./target/release/ttt-bench $ARGS" >$tmpfile 2>&1
     else
         # JAX, PyTorch, kernels use Python benchmarks via bench-* devShells

@@ -9,3 +9,4 @@ sycl-test
 
 burn/profile_*/
 benches/results/
+.bench-result
